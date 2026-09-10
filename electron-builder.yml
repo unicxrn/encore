@@ -1,0 +1,209 @@
+# appId is a one-way decision: it becomes the macOS CFBundleIdentifier and the Windows
+# NSIS uninstall/AppUserModelId registry key, so changing it after a release strands
+# existing installs. It does NOT decide where user data lives — Electron derives that from
+# app.getName(), which reads `productName ?? name` from the package.json inside app.asar.
+appId: io.github.unicxrn.encore
+# Set here and deliberately NOT in package.json. electron-builder does not copy productName
+# into the packaged package.json, so app.getName() still returns "encore" (package.json
+# `name`) and userData stays at ~/.config/encore. Adding productName to package.json would
+# move it to ~/.config/Encore and orphan every existing catalog, settings file and art cache.
+# `test/electron-builder-files.test.ts` fails if it ever appears there.
+#
+# `desktopName: encore.desktop` IS in package.json, and is safe for a reason that had to be read
+# out of the shipped Electron binary rather than taken on trust. Electron's browser init does:
+#
+#   if (pkg.productName != null) app.name = pkg.productName
+#   else if (pkg.name != null) app.name = pkg.name
+#   if (pkg.desktopName) app.setDesktopName(pkg.desktopName)
+#   else app.setDesktopName(`${app.name}.desktop`)
+#
+# desktopName never reaches app.name, so it cannot move userData. It is also the value Electron
+# already computed — app.name is "encore", so the app_id was "encore.desktop" before this key
+# existed. What was wrong was the other end: with desktopName unset, app-builder-lib writes
+# StartupWMClass from productName, so the installed entry advertised "Encore" while the running
+# window identified as "encore" and desktop environments could not associate the two. Naming the
+# value explicitly makes app-builder-lib write the matching StartupWMClass; the runtime behaviour
+# is byte-for-byte what it already was.
+productName: Encore
+directories:
+  buildResources: build
+# There is deliberately NO top-level `files` key, and the identical exclusion list is repeated
+# in the `win`, `mac` and `linux` blocks instead. This looks like duplication that wants
+# factoring out. It is load-bearing, and `test/electron-builder-files.test.ts` fails if the
+# three lists drift apart or a top-level `files` key comes back.
+#
+# The reason is a silent, destructive interaction in app-builder-lib 26. A top-level `files`
+# array is normalised into a single FileSet object (`[{filter: [...]}]`) by doMergeConfigs, so
+# getFileMatchers pushes it as a *second* FileMatcher. With no platform-specific `files` that
+# second matcher is the only one, so getMainFileMatchers appends electron-builder's own defaults
+# (`**/*`, `!**/node_modules/**`, `!dist`, `!build`, `!**/{.git,...}`) to it and everything
+# behaves. Add a platform `files` array and the default matcher becomes non-empty, gets
+# unshifted to index 0, and takes the defaults — while the top-level list sits at index 1 with
+# only negations, where AppFileWalker's addAllPatternIfNeed prepends a bare `**/*` to it.
+#
+# The result is a second walk of the whole project directory filtered by nothing but those
+# negations. Measured, not theorised: app.asar went from 46 MB to 348 MB, and `asar list` showed
+# /dist, /.git, /src and /docs inside it. `.env` is on that exclusion list too, so the same bug
+# is a credential leak, not only a size regression.
+#
+# Each list is an ALLOW-LIST — `out`, `resources`, `package.json` — and not, as it was, a list of
+# things to leave out. The deny-list shipped 395 files it meant to exclude, measured by walking two
+# real app.asar headers: 355 of them stale git worktrees nested inside the project (3.00 MiB, 253 of
+# those under a nested `src/`), the rest documentation, tests, tool directories, `vitest.config.ts`
+# and a dependency's `.env`. 4164 files and 44.49 MiB became 3769 and 40.78 MiB.
+#
+# The mechanism, read out of app-builder-lib's FileMatcher.computeParsedPatterns: a pattern gets
+# a companion `<pattern>/**/*` only when it has no wildcard, so `!src/*` stays exactly one level
+# deep. It works on the top-level `src` by accident of the walk — AppFileWalker prunes any
+# directory that fails the filter, so `src/main` is rejected at depth 1 and the subtree below it
+# is never visited. A *nested* copy is a different relative path (`.worktrees/x/src/main`), matches
+# nothing, and walks straight in. Naming the offending directories would have fixed those and
+# nothing else.
+#
+# An allow-list has no such hole: a path ships only if it matches one of the three patterns above,
+# so anything that appears at the project root later — a new agent scratch directory, a coverage
+# report, a scratch directory, a downloaded fixture — is excluded by construction rather than a
+# rule. It also flips the failure mode from "ships something private" to "misses something needed",
+# which a launch catches immediately and a `git log` never does.
+#
+# `test/app-asar-contents.test.ts` checks a real archive when one has been built;
+# `test/electron-builder-files.test.ts` evaluates these patterns against a synthetic file list on
+# every run. Read the header of each for exactly what it does and does not prove.
+#
+# What is allowed, and why each entry is load-bearing:
+#   out          electron-vite's bundle. `main` in package.json points at ./out/main/index.js, and
+#                index.js reaches sideways to ../preload/index.js and ../renderer/index.html.
+#   resources    holds one file, icon.png. `import icon from '../../resources/icon.png?asset'`
+#                compiles to path.join(__dirname, '../../resources/icon.png'), which resolves
+#                inside the asar to /resources/icon.png. Dropping it breaks the window icon.
+#   package.json Electron reads `main` and `name` from the copy inside app.asar; `name` is what
+#                app.getName() returns and therefore what puts userData at ~/.config/encore.
+#                app-builder-lib appends it anyway when the list is not ignore-only, but it is
+#                written out so the list reads as the complete manifest it is.
+#
+# The negations that remain are NOT redundant with the allow-list. `files` is consumed twice:
+# getMainFileMatchers walks the project directory with the whole list, and getNodeModuleFileMatcher
+# builds a second matcher that keeps only the patterns starting with "!" and prepends `**/*`.
+# node_modules is copied by that second matcher, where the allow-list entries are dropped on the
+# floor — so a rule aimed at a dependency has to be a negation or it does nothing. The `.env`,
+# `.npmrc` and `.vscode` rules are `**/`-anchored for that reason: at the project root the
+# allow-list already excludes them, and inside node_modules the negation is the only thing that
+# does.
+#
+# Which of the old deny rules were pulling their weight was settled by diffing the node_modules
+# entries of two real archives rather than by reading. Exactly two rules mattered, in opposite
+# directions: `!**/.vscode/*` was excluding 8 files across chart-preview, scan-chart and
+# fluent-ffmpeg, so it is kept here (widened to `{,/**/*}` so it names the directory as well as its
+# contents); and `!{.env,.env.*,.npmrc,...}`, being root-anchored, was NOT excluding
+# `node_modules/bottleneck/.env`, which shipped in every build until the `**/` anchor was added.
+# Every other rule that was dropped — `!src/*`, the tsconfigs, svelte.config.mjs,
+# electron.vite.config.*, README.md, .eslintcache — changed nothing in either archive: root
+# anchors that the allow-list now subsumes.
+#
+# Every list below also drops two parts of better-sqlite3 that no install can use.
+#
+# `deps/` is the SQLite C amalgamation and its gyp glue — 10,257,577 bytes, measured in
+# app.asar.unpacked. It is build-time input for node-gyp, and `npmRebuild: false` means node-gyp
+# never runs: the app loads a prebuilt `.node`. Nothing under `lib/` reads it; the only references
+# to `deps/` anywhere in the package are its own npm `files` list and a `download` script.
+#
+# The prebuilds for platforms that are not the build target go too. better-sqlite3 ships eight
+# (darwin/linux/linuxmusl/win32 x arm64/x64, ~17 MB) and lib/binding.js resolves exactly one,
+# `prebuilds/<platform>-<arch>.node` for the machine it is running on, so the other seven are dead
+# weight on every install.
+#
+# Two things to know before editing those prebuild rules:
+#
+# 1. They are per-platform blocks, not a `${platform}` macro in one shared list. app-builder-lib's
+#    macroExpander resolves `${platform}` to process.platform — the HOST — so on a Windows build
+#    cross-compiled from Linux it would expand to "linux" and delete the very prebuild the app
+#    needs. (`${os}` is the target, but its values are mac/linux/win, which do not match the
+#    darwin/linux/win32 prebuild names.)
+# 2. Both arches of the target platform are kept, so these stay plain static strings. Being
+#    arch-precise would mean an extglob negation around `${arch}`, because electron-builder has
+#    no per-arch config block and the node_modules matcher silently ignores re-include patterns
+#    (getNodeModuleFileMatcher keeps only patterns starting with "!"). A mistake there yields a
+#    build that throws on the first Database() call, and nothing short of launching it would
+#    notice. The unused sibling arch costs ~2 MB; that trade is deliberate.
+#
+# No asarUnpack. The scaffold shipped `resources/**`, but resources/ holds one file — icon.png
+# — and its only reader is `new BrowserWindow({ icon })` on Linux, which goes through
+# nativeImage.createFromPath. That call reads inside an asar (measured against a packed test
+# archive on Electron 39: 512x512, isEmpty false), so the unpack bought nothing. better-sqlite3
+# is unaffected: electron-builder unpacks every *.node itself, with or without this key —
+# confirmed by rebuilding without it and finding all eight prebuilds still in app.asar.unpacked.
+win:
+  executableName: encore
+  files:
+    - 'out'
+    - 'resources'
+    - 'package.json'
+    - '!**/{.env,.env.*,.npmrc}'
+    - '!**/.vscode{,/**/*}'
+    - '!**/better-sqlite3/deps/**'
+    - '!**/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node'
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+# macOS is not a supported target — no macOS build has ever been produced or run. This block
+# is kept only so `npm run build:mac` does not fall back to electron-builder's defaults.
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    # The only usage description kept. The library folder is chosen once through a system
+    # dialog, but the scanner and the watcher reopen it on every later launch with no panel
+    # involved, so a library placed under Documents needs this string. Camera, microphone and
+    # Downloads were scaffold defaults: nothing in src/ opens a capture device, and downloads
+    # are written into the chosen library folder, never into ~/Downloads.
+    - NSDocumentsFolderUsageDescription: Encore reads and writes the Clone Hero song library folder you choose.
+  notarize: false
+  files:
+    - 'out'
+    - 'resources'
+    - 'package.json'
+    - '!**/{.env,.env.*,.npmrc}'
+    - '!**/.vscode{,/**/*}'
+    - '!**/better-sqlite3/deps/**'
+    - '!**/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node'
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  # A directory, not build/icon.png: electron-builder ships whatever single file it
+  # is given and lets the desktop environment downscale it. That would use the full
+  # perspective mark for a 16px taskbar entry, where the lanes turn to mush — the
+  # reduced variant in build/logo/encore-small.svg exists precisely to avoid that.
+  icon: build/icons
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: unicxrn <unicxrn@users.noreply.github.com>
+  # freedesktop main category. Encore is not a game — it processes multimedia that a game
+  # consumes: chart audio, album art, video backgrounds and synced lyrics. AudioVideo is the
+  # spec's category for "presenting, creating, or processing multimedia"; Music is a related
+  # additional category, which the spec permits alongside AudioVideo.
+  category: AudioVideo;Music
+  # Derives the installed .desktop filename from package.json's `desktopName` instead of from
+  # `executableName`. Both are "encore" today, so this changes no filename — it is here so that a
+  # later edit to `desktopName` cannot leave the installed entry named after something else, which
+  # is the state this milestone found and fixed. See the note on `desktopName` in package.json for
+  # why that key is safe to set and `productName` is not.
+  syncDesktopName: true
+  files:
+    - 'out'
+    - 'resources'
+    - 'package.json'
+    - '!**/{.env,.env.*,.npmrc}'
+    - '!**/.vscode{,/**/*}'
+    - '!**/better-sqlite3/deps/**'
+    # linuxmusl goes too. Electron's official binaries link against glibc, so an Electron
+    # process that could load a musl prebuild does not exist for this app to run in.
+    - '!**/better-sqlite3/prebuilds/{darwin,linuxmusl,win32}-*.node'
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+# No `publish` block on purpose. There is no update server and no electron-updater
+# dependency, so any value here would only generate a resources/app-update.yml that ships
+# inside the build pointing at a host that does not exist.

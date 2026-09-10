@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!--
+      V8 writes and then executes JIT pages, and chart-preview's binary-parser compiles its
+      parsers with `new Function` at runtime - the same reason the renderer CSP carries
+      'unsafe-eval'. Under the hardened runtime these two are what allow that.
+
+      Nothing else is requested. The app reads a user-chosen library folder, fetches over
+      HTTPS and spawns a yt-dlp sidecar; it never touches the camera or the microphone.
+      com.apple.security.cs.allow-dyld-environment-variables was scaffold default and is
+      removed - no code here sets a DYLD_* variable.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>

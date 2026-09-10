@@ -1,0 +1,240 @@
+/* M4 mockup design tokens: violet-cast near-black, purple accent family, hairlines. */
+:root {
+  --bg: #0b0a10;
+  --surface-1: #14121b;
+  --surface-2: #1a1725;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --text-1: #f2f2f4;
+  --text-2: #9b9ba6;
+  /* Contrast on the darkest and lightest app surfaces (measured, WCAG 2.1):
+       text-1  17.6:1 on --bg, 15.7:1 on --surface-2
+       text-2   7.2:1 on --bg,  6.4:1 on --surface-2
+       text-3   5.8:1 on --bg,  5.2:1 on --surface-2
+     text-3 was #5c5c66, which measures 3.0:1 on --bg and 2.7:1 on --surface-2,
+     under AA even for large text, and it carries the small mono labels (downloads panel,
+     sidebar versions, card headers) where legibility matters most. */
+  --text-3: #8a8a99;
+  --accent: #8b5cf6;
+  --accent-hi: #a855f7;
+  /* The accent as a colour for SMALL text. --accent measures 4.38:1 on --surface-1, where
+     the sidebar's status card draws its two links, and 4.16:1 on --surface-2, under AA for
+     anything below 18px. --accent-hi is 4.69:1 and 4.45:1 on the same two, a pass on one
+     surface and a fail on the other. #a78bfa is the same hue two steps lighter (WCAG 2.1,
+     computed against this palette):
+       7.2:1 on --bg, 6.8:1 on --surface-1, 6.5:1 on --surface-2
+     For text at caption and secondary sizes only; fills, borders and display-size type keep
+     --accent and --accent-hi, which is what makes it still read as the same violet. */
+  --accent-text: #a78bfa;
+  /* The primary-button fill, and the Home hero's ground. White text rides on it, so the
+     LIGHT end is the number that matters: measured across a rendered Download button the
+     white label fell to 4.21:1 at the right edge (4.5 is AA for text this size), and a pure
+     #a855f7 end stop is 3.96:1. #9333ea is the same hue one step down. White measures 5.38:1
+     on it and 5.70:1 on the #7c3aed start, so the label clears AA along the whole run. The
+     hero paints a 62%→18% black overlay on top of this, so the change is invisible there. */
+  --accent-grad: linear-gradient(135deg, #7c3aed, #9333ea);
+  --accent-dim: rgba(139, 92, 246, 0.14);
+  /* The keyboard focus ring. One colour, used by the one `:focus-visible` rule
+     below, so every control in the app is outlined the same way.
+
+     A light tint of the accent rather than the accent itself: `--accent`
+     (#8b5cf6) measures 4.66:1 against --bg and 4.16:1 against --surface-2
+     (recomputed; an earlier version of this note said 4.23 and 2.7, which
+     match nothing in this palette). That clears the 3:1 a non-text indicator
+     needs, but a ring dimmer than the text it surrounds is the one you look past.
+     #c4b5fd measures (WCAG 2.1, computed against this palette):
+       10.7:1 on --bg, 10.1:1 on --surface-1, 9.5:1 on --surface-2
+     The 2px offset below is what keeps those the numbers that matter: the ring
+     is always drawn on the surface BEHIND the control, never on the control's
+     own fill, which is why a focused accent button or the near-white primary
+     button in the Home hero still gets a ring you can see. */
+  --focus-ring: #c4b5fd;
+  --radius: 10px;
+  --font-ui: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* ── type scale ────────────────────────────────────────────────────────────
+     Seven steps, in px, replacing 216 hardcoded `font-size` declarations that
+     answered to nothing. What that set looked like before this existed:
+
+         10px ×74   11px ×46   12px ×29   11.5px ×20   10.5px ×18
+         13px ×11   12.5px ×7  9.5px ×1   14px and above ×8
+
+     More than half the app's text was 10 or 11px against a 13px body. Almost
+     every rule overrode the base size DOWNWARD, and the four half-pixel
+     values are what ad-hoc tuning leaves behind when there is no scale to land
+     on. 10px is a caption size; it was carrying song titles' metadata, the
+     status bar, sidebar versions and the whole difficulty matrix.
+
+     px, not rem. An Electron renderer's root is always 16px, and it does not
+     inherit the OS font-size preference the way a browser does, so `rem` here
+     would not buy the accessibility it buys on the web; it would be these same
+     numbers written as sixteenths. Users scale this app with Electron's zoom
+     factor, which multiplies px just as happily. And at dpr 1 (measured here)
+     whole px land on whole device pixels, which is the difference between the
+     old 11.5px and a stem that renders the same width twice.
+
+     The ratio is deliberately NOT constant: 1.08, 1.08, 1.14, 1.25, 1.30, 1.54
+     going up. A single ratio cannot serve both ends of this app. The dense end
+     needs steps close enough that a 32px list row can carry three distinct
+     levels (title / artist / metadata); the display end needs steps far enough
+     apart that a hero does not read as a slightly larger heading. At a uniform
+     1.125 the top of the scale reaches 24px and no hero is possible; at 1.5 the
+     bottom is 12/18/27 and a row has one usable level. So the steps tighten as
+     they descend, which is also how the eye works: a 1px difference is obvious
+     at 12px and invisible at 40px. */
+  --fs-caption: 12px; /* floor. Mono chips, difficulty codes, timestamps, micro-labels. */
+  --fs-secondary: 13px; /* artist, charter, supporting prose. The second line of anything. */
+  --fs-body: 14px; /* default. Nav, buttons, inputs, list titles, table cells. Matches `body`. */
+  --fs-emphasis: 16px; /* pulled out of the body: stat values, panel titles, a lead paragraph. */
+  --fs-heading: 20px; /* section and page headings (h1 in Settings, Welcome). */
+  --fs-display: 26px; /* the one title a screen is about: chart Detail's song name. */
+  --fs-hero: 40px; /* Home's wordmark only. */
+
+  /* ── leading ───────────────────────────────────────────────────────────────
+     Before this, every element in the app computed `line-height: normal`. The
+     count of explicit line-heights outside prose blocks was zero, verified in
+     the running app across three widths and three views. `normal` is ~1.15 for
+     Archivo, which is a display leading applied to 10px text, and it is a large
+     part of why the small text read as cramped rather than merely small.
+
+     Leading is inverse to size: small text needs proportionally MORE of it (the
+     eye has to find the next line across a longer relative measure), display
+     text needs less or the words stop being one object. Hence four values
+     rather than one, chosen by the job the text is doing, not by its size. */
+  --lh-flat: 1; /* text whose box height is set by something else: a chip, a fixed cell. */
+  --lh-tight: 1.25; /* single-line UI: row titles, buttons, nav, table cells. */
+  --lh-snug: 1.45; /* stacked labels and short wrapped strings of two or three lines. */
+  --lh-prose: 1.6; /* running copy: intros, empty states, hints, error bodies. */
+  --lh-display: 1.15; /* --fs-heading and up, where 1.45 would fall apart into stripes. */
+
+  /* ── tracking ──────────────────────────────────────────────────────────────
+     Small text set in capitals needs opening up; large text needs closing in.
+     `--ls-caps` replaces a split of 0.08em (32 uses) and 0.06em (16 uses) that
+     drew no distinction worth keeping: at 12px those differ by 0.24px. Note
+     the app's caps are literal in the markup ("70 CHARTS", "ENCORE") rather
+     than `text-transform`, so this is applied per rule and not inferable. */
+  --ls-caps: 0.08em; /* uppercase and mono micro-labels at --fs-caption. */
+  --ls-tight: -0.01em; /* --fs-heading and --fs-display. */
+  --ls-tighter: -0.02em; /* --fs-hero, where default tracking reads as gappy. */
+
+  /* Weights available: Archivo 400/500/600/700 and JetBrains Mono 400/500. See
+     the @fontsource imports in main.ts. Anything else is synthesised or clamped:
+     `font-weight: 800` was in use on Home's hero and measured pixel-identical to
+     700, i.e. it was never doing anything. Hierarchy in this app comes from size
+     AND weight AND colour (--text-1/2/3) together; a row title that is only
+     bigger than its artist line, at the same weight and colour, reads flat. */
+  --ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --t-fast: 150ms;
+  --t-med: 220ms;
+
+  /* ── stacking ──────────────────────────────────────────────────────────────
+     Four layers, named by what they are for. Before this there were four bare
+     numbers across four files (1, 40, 60, 9999) and one thing that needed a
+     layer and had none: the downloads panel painted above the view only
+     because it came later in the DOM. The order is the app's dismiss order in
+     reverse (App's Escape handler closes the sheet first, then a dialog, then
+     the panel), so what is on top is always what Escape will close next. */
+  --z-raised: 1; /* a control lifted off its own card: the checkbox over a grid cover. */
+  --z-popover: 20; /* the downloads panel, floating over the view from the player bar. */
+  --z-modal: 40; /* a blocking dialog with a backdrop: the Issues repair confirmation. */
+  --z-sheet: 60; /* the shortcut sheet, which may open over a dialog and closes first. */
+  --z-grain: 100; /* the film-grain overlay; above everything, and inert to the pointer. */
+}
+/* Scrollbars. Chromium's default is a light grey track and thumb, which on this palette is the
+   brightest thing on any scrolling screen. It showed on Home, every list, the Settings column
+   and the error report. `scrollbar-color` inherits, so once here covers every scroller; the
+   `::-webkit-scrollbar` rules Home's card row used to carry are superseded by it and gone.
+   The thumb is a hairline two steps up (0.16 against the 0.07 of `--hairline`): visible on
+   --bg and --surface-1 alike, and quiet enough not to read as a control. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  /* Was 13px, and virtually every rule in the app overrode it downward. It is the
+     default now in the real sense: the size a component gets when it says nothing. */
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  overflow: hidden;
+  user-select: none;
+}
+/* film grain overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  z-index: var(--z-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+/* Keyboard focus, everywhere, once.
+   `:focus-visible` and not `:focus`, so this appears for the keyboard and stays
+   out of the way of the mouse. That is what the components' own
+   `outline: none` rules were reaching for before this existed, and why removing
+   those was safe.
+   Kept in the global sheet rather than repeated per component: Svelte scopes
+   component styles, so twelve copies of this rule was the alternative, and the
+   one that drifts. A component that needs a different shape (an inset ring on a
+   full-viewport backdrop, a ring on the visible sibling of a visually-hidden
+   input) overrides the offset or the target locally, never the colour. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* An icon-only button: the ✕ on the downloads panel and the shortcut sheet.
+   Global for the same reason the focus ring is: two components, one shape, and
+   the shape is the point. The visible box is 28px; the `::after` reaches 8px
+   further on every side, so what the pointer has to land on is 44px without the
+   button looking like a 44px slab. Colour and hover match the other quiet
+   controls (text-3 resting, text-1 on hover, surface-2 behind). The button
+   still needs an `aria-label`, because the icon inside it is decorative. */
+.icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.icon-btn::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+.icon-btn:hover {
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+input,
+textarea,
+.selectable {
+  user-select: text;
+}

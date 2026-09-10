@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Encore</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- 'unsafe-eval' is required by binary-parser (parse-sng -> chart-preview), which
+         compiles its binary parsers with `new Function` at runtime; without it the chart
+         preview fails with a CSP violation. script-src still forbids all remote script
+         sources and no remote HTML ever loads. Drop it if upstream removes the codegen. -->
+    <!-- img-src remote hosts: enchor chart art (Browse), mzstatic album art and
+         i.ytimg.com video thumbnails (Asset Studio pickers). Images only. Neither
+         host gets connect-src widening. -->
+    <!-- encore-art: is the local album-art cache, a custom scheme the main process answers by
+         streaming JPEGs out of userData (src/main/art-protocol.ts). A custom scheme is not
+         covered by 'self', so without it listed here every local cover fails to load with
+         nothing but a console violation to show for it. -->
+    <!-- font-src needs data: because Vite inlines the small @fontsource subsets
+         (greek, cyrillic, vietnamese) as data: URIs. Without it they are blocked
+         by the default-src fallback and silently fall back to a system font.
+         Verified in Chromium against the production bundle. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: encore-art: https://files.enchor.us https://static.enchor.us https://*.mzstatic.com https://i.ytimg.com; connect-src 'self' https://api.enchor.us https://files.enchor.us https://static.enchor.us"
+    />
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
