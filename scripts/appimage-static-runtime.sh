@@ -50,3 +50,23 @@ dd if="$target" bs=1M iflag=skip_bytes,count_bytes skip="$offset" >> "$tmp" 2>/d
 chmod +x "$tmp"
 mv "$tmp" "$target"
 echo "swapped in the static runtime: $target"
+
+# electron-builder hashed the AppImage before this script replaced its first 944 KB, so
+# latest-linux.yml now describes a file that no longer exists. electron-updater verifies the
+# sha512 of what it downloads against that manifest and refuses a mismatch, so leaving it stale
+# means every Linux update fails a checksum on a file that is perfectly good.
+#
+# The stale .blockmap goes with it. It indexes the old bytes and only drives differential
+# downloads; dropping the file and its blockMapSize makes electron-updater fetch the whole
+# AppImage, which is correct if slower. Regenerating it would mean reimplementing
+# app-builder's block map, and a wrong one is worse than none.
+manifest="$(dirname "$target")/latest-linux.yml"
+if [ -f "$manifest" ]; then
+  rm -f "$target.blockmap"
+  "$(dirname "$0")/restamp-appimage-manifest.py" \
+    "$manifest" \
+    "$(basename "$target")" \
+    "$(stat -c%s "$target")" \
+    "$(openssl dgst -sha512 -binary "$target" | openssl base64 -A)"
+  echo "restamped $(basename "$manifest") for the swapped runtime"
+fi
