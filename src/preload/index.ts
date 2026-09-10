@@ -17,6 +17,7 @@ import type { LyricLinesResult } from '../main/catalog/lyric-lines'
 import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
 import type { VideoSearchResult } from '../main/sidecars/ytdlp'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
+import type { AppUpdateStatus } from '../shared/app-update'
 
 type Unsubscribe = () => void
 
@@ -182,10 +183,27 @@ const api = {
   updatesLast: (): Promise<ChartVerdict[]> => ipcRenderer.invoke(IPC.updatesLast),
   // Stops the running sweep. The sweep's own promise rejects with the abort.
   updatesCancel: (): Promise<void> => ipcRenderer.invoke(IPC.updatesCancel),
+  // Updating Encore itself, which is not what the three calls above do: those ask Chorus about
+  // chart versions. `appUpdateStatus` is a read of what main already knows and costs no network,
+  // so a panel can mount on it and see the startup check's answer.
+  appUpdateStatus: (): Promise<AppUpdateStatus> => ipcRenderer.invoke(IPC.appUpdateStatus),
+  // Asks GitHub. Resolves with the finished status rather than rejecting, because a failed check
+  // is one of the states the row draws. On a snap, or a build run from source, it resolves
+  // straight back with the status saying why, without a request.
+  appUpdateCheck: (): Promise<AppUpdateStatus> => ipcRenderer.invoke(IPC.appUpdateCheck),
+  // Downloads the release the last check found; resolves once it is staged on disk, with
+  // progress arriving on onAppUpdate meanwhile. Refused, by resolving unchanged, unless a check
+  // found something to download.
+  appUpdateDownload: (): Promise<AppUpdateStatus> => ipcRenderer.invoke(IPC.appUpdateDownload),
+  // Quits Encore and applies the staged update. Resolves with false when nothing is staged; when
+  // something is, the app is closing and the promise has nowhere to resolve to. On the deb this
+  // is the point the system asks for a password.
+  appUpdateInstall: (): Promise<boolean> => ipcRenderer.invoke(IPC.appUpdateInstall),
   onDownloadUpdate: subscribe(IPC.evDownloadUpdate),
   onScanProgress: subscribe(IPC.evScanProgress),
   onAssetProgress: subscribe(IPC.evAssetProgress),
-  onUpdateProgress: subscribe(IPC.evUpdateProgress)
+  onUpdateProgress: subscribe(IPC.evUpdateProgress),
+  onAppUpdate: subscribe(IPC.evAppUpdate)
 }
 
 export type EncoreApi = typeof api

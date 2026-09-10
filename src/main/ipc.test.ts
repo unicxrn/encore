@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { AppUpdateStatus } from '../shared/app-update'
 import { IPC } from '../shared/ipc-contract'
 import type { ChartIssueRow } from './catalog/issues'
 import { registerIpc, IpcDeps } from './ipc'
@@ -15,6 +16,14 @@ function fakeIpc(): {
     invoke: async (channel: string, ...args: unknown[]): Promise<unknown> =>
       handlers.get(channel)!({ sender: { id: 1 } }, ...args)
   }
+}
+
+const APP_UPDATE_STATUS: AppUpdateStatus = {
+  currentVersion: '0.1.0',
+  target: 'appimage',
+  canApply: true,
+  note: 'Encore downloads the new AppImage and replaces this one when you restart.',
+  state: { kind: 'idle' }
 }
 
 const deps = (): IpcDeps => ({
@@ -98,7 +107,11 @@ const deps = (): IpcDeps => ({
     .mockReturnValue([
       { path: '/home/user/.clonehero/Songs', chartCount: 207, countCapped: false }
     ]),
-  saveTextFile: vi.fn().mockResolvedValue('/home/user/encore-issues.csv')
+  saveTextFile: vi.fn().mockResolvedValue('/home/user/encore-issues.csv'),
+  appUpdateStatus: vi.fn().mockReturnValue(APP_UPDATE_STATUS),
+  appUpdateCheck: vi.fn().mockResolvedValue(APP_UPDATE_STATUS),
+  appUpdateDownload: vi.fn().mockResolvedValue(APP_UPDATE_STATUS),
+  appUpdateInstall: vi.fn().mockReturnValue(false)
 })
 
 describe('registerIpc', () => {

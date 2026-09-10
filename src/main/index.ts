@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { autoUpdater } from 'electron-updater'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -29,6 +30,8 @@ import { backupStoreBytes, clearBackups, listBackups } from './issues/backup-sto
 import { cancelFix, fixableCodes, runFix, type VideoConverter } from './issues/fix'
 import { restoreBackup } from './issues/restore'
 import { registerIpc } from './ipc'
+import { AppUpdateService } from './app-update/service'
+import { detectUpdateTarget } from './app-update/target'
 import { UpdateService } from './updates/service'
 import { loadSettings, saveSettings } from './settings'
 import type { JobProgress } from './shared-types'
@@ -71,6 +74,26 @@ function ffmpegUnavailableReason(location: FfmpegLocation): string | null {
 function sweepStaleTmpDirs(libraryFolders: { path: string }[]): void {
   for (const folder of libraryFolders) {
     sweepTmpDir(join(folder.path, ENCORE_TMP_DIR))
+  }
+}
+
+/**
+ * The `package-type` marker electron-builder writes into a packaged app's resources directory,
+ * or null when there is none.
+ *
+ * Only its FpmTarget writes it, and only for the formats that target produces, so an AppImage and
+ * a snap both come back null. This is the same file electron-updater reads to decide between
+ * AppImageUpdater and DebUpdater; reading it here is what lets Settings say which of the two will
+ * run before anything is downloaded.
+ *
+ * Never throws. A missing file is the normal answer for two of the four targets Encore builds,
+ * and an unreadable one has to mean the same thing as a missing one: not deb.
+ */
+function readPackageTypeMarker(): string | null {
+  try {
+    return readFileSync(join(process.resourcesPath, 'package-type'), 'utf8').trim()
+  } catch {
+    return null
   }
 }
 
@@ -171,7 +194,7 @@ function sweepArtCache(db: CatalogDb, artDir: string, summary: ScanSummary): voi
   }
 }
 
-function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher } {
+function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher; appUpdates: AppUpdateService } {
   const settingsPath = join(app.getPath('userData'), 'settings.json')
   const db = openCatalog(join(app.getPath('userData'), 'catalog.db'))
   const artDir = artCacheDir()
@@ -356,6 +379,35 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher } {
         message: `${done} of ${total}`,
         status: done === total ? 'done' : 'running'
       })
+  })
+
+  /**
+   * Updating Encore itself.
+   *
+   * `autoUpdater` is a getter that constructs the right subclass on first access, so it is
+   * touched here rather than at import time: the choice reads `process.resourcesPath` and the
+   * app's own version, neither of which is settled before `whenReady`.
+   *
+   * Nothing about it is automatic despite the name. The service turns `autoDownload` and
+   * `autoInstallOnAppQuit` off in its constructor, so a check reports and stops. The target is
+   * probed once, here, because none of its inputs can change while the process runs.
+   */
+  const appUpdates = new AppUpdateService({
+    updater: autoUpdater,
+    target: detectUpdateTarget({
+      platform: process.platform,
+      packaged: app.isPackaged,
+      env: process.env,
+      readPackageType: readPackageTypeMarker
+    }),
+    currentVersion: app.getVersion(),
+    onState: (status) => send(IPC.evAppUpdate, status),
+    // The download's promise carries its outcome, but the percent between the two, and any error
+    // electron-updater emits without rejecting, arrive only on its emitter.
+    subscribe: ({ onProgress, onError }) => {
+      autoUpdater.on('download-progress', (p) => onProgress(p.percent))
+      autoUpdater.on('error', (err) => onError(err))
+    }
   })
 
   registerIpc(ipcMain, {
@@ -608,6 +660,13 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher } {
       }
     },
     clearFixBackups: () => clearBackups(fixBackupDir()),
+    // Encore's own releases. Every one of these is answered on any target: on a snap or a build
+    // run from source the status carries the reason instead of an offer, and the check is a
+    // no-op rather than a request that goes nowhere.
+    appUpdateStatus: () => appUpdates.status(),
+    appUpdateCheck: () => appUpdates.check(),
+    appUpdateDownload: () => appUpdates.download(),
+    appUpdateInstall: () => appUpdates.install(),
     // saveTextFile: the user explicitly chose the destination path via the
     // system dialog, so we write there directly. There is no library containment
     // guard here: this is the intentional user-chosen exception to the write policy.
@@ -625,7 +684,7 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher } {
     }
   })
 
-  return { db, watcher }
+  return { db, watcher, appUpdates }
 }
 
 function bootstrap(): void {
@@ -656,7 +715,7 @@ function bootstrap(): void {
     // failures for the covers on its first paint, and nothing retries them.
     registerArtProtocol(artCacheDir())
 
-    const { db, watcher } = wireIpc()
+    const { db, watcher, appUpdates } = wireIpc()
     // Start the library watcher with the current folder paths.
     const initialFolders = loadSettings(
       join(app.getPath('userData'), 'settings.json')
@@ -671,6 +730,18 @@ function bootstrap(): void {
     })
 
     createWindow()
+
+    // Startup check, deliberately after the window and deliberately unawaited. It is one HTTPS
+    // request to GitHub, and nothing on screen depends on its answer: the Settings panel reads
+    // the result from `appUpdateStatus` whenever it is opened, and the state arrives on
+    // evAppUpdate if a window is already listening. `check()` resolves rather than rejecting on
+    // every failure it knows about, so a machine that is offline at launch, or behind a captive
+    // portal, ends the check in the `error` state nobody is looking at, and the window came up
+    // at the same moment it always does. The `catch` is for the case the service itself throws,
+    // which would otherwise be an unhandled rejection in the main process.
+    void appUpdates.check().catch((err: unknown) => {
+      console.error('Update check failed:', err)
+    })
 
     app.on('activate', function () {
       // On macOS it's common to re-create a window in the app when the

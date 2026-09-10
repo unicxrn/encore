@@ -3,6 +3,13 @@
   import { settings, patchSettings } from '../stores/settings'
   import { openTour } from '../stores/tour'
   import { assetJobs } from '../stores/assets'
+  import {
+    appUpdate,
+    checkAppUpdate,
+    downloadAppUpdate,
+    installAppUpdate,
+    refreshAppUpdate
+  } from '../stores/app-update'
   import { encore } from '../stores/bridge'
   import { formatBytes } from '../../../../shared/format'
 
@@ -98,6 +105,52 @@
   const installFfmpeg = (): Promise<void> => runSidecarJob(encore().sidecarInstall('ffmpeg'))
   const updateFfmpeg = (): Promise<void> => runSidecarJob(encore().sidecarUpdate('ffmpeg'))
 
+  // ── Encore's own updates ───────────────────────────────────────────────────
+  /**
+   * The row that says whether a newer Encore exists, and the controls that act on it.
+   *
+   * Beside the sidecar rows on purpose: yt-dlp, ffmpeg and Encore are the three things this app
+   * fetches and installs, and a user looking for "how do I get the new version" is looking at the
+   * same part of the same screen.
+   *
+   * `status` is main's, not this component's. The check runs once at startup and its answer
+   * survives navigating away and back, so mounting reads it rather than starting a second one.
+   * A check the user asks for is the only thing here that touches the network.
+   */
+  const status = $derived($appUpdate)
+  const updateState = $derived($appUpdate?.state ?? { kind: 'idle' as const })
+  const updateBusy = $derived(updateState.kind === 'checking' || updateState.kind === 'downloading')
+
+  /**
+   * The mono line beside the row name, in the same register as the sidecars' NOT INSTALLED.
+   *
+   * Every state has a line, including the one before main has answered, which draws the same
+   * placeholder the two sidecar rows above it use. That state is neither up to date nor out of
+   * date, and a panel opened in the first moment of a session is genuinely in it.
+   */
+  const updateStatusLine = $derived.by(() => {
+    if (status === null) return '—'
+    const running = status.currentVersion === '' ? '' : `${status.currentVersion} · `
+    switch (updateState.kind) {
+      case 'checking':
+        return 'CHECKING…'
+      case 'current':
+        return `${status.currentVersion} · UP TO DATE`
+      case 'available':
+        return `${updateState.version} AVAILABLE`
+      case 'downloading':
+        return updateState.percent !== null ? `${updateState.percent}%` : 'DOWNLOADING…'
+      case 'ready':
+        return `${updateState.version} READY`
+      case 'error':
+        return `${running}CHECK FAILED`
+      default:
+        return status.currentVersion
+    }
+  })
+
+  const updateError = $derived(updateState.kind === 'error' ? updateState.message : null)
+
   // ── undo history ───────────────────────────────────────────────────────────
   /**
    * How much disk the undo store is using, and the one control that reclaims it.
@@ -155,6 +208,10 @@
   onMount(() => {
     void loadSidecarStatus()
     void loadBackups()
+    // A read of what main already concluded, not a second check. The startup one has usually
+    // finished by the time anyone opens Settings, and asking GitHub again on every visit to this
+    // tab would spend a request to be told the same thing.
+    void refreshAppUpdate()
   })
 </script>
 
@@ -305,6 +362,80 @@
       yt-dlp downloads video backgrounds. ffmpeg converts the ones Clone Hero cannot play on Linux
       to WebM. Encore checks its own copies against a pinned checksum before using them.
     </p>
+  </section>
+
+  <!-- Encore's own releases, beside the two tools it installs, because that is where someone
+       looking for "how do I get the new version" is already looking. The row is the same shape:
+       name, mono status, one button. What differs is that on some installs there is no button,
+       and the sentence below says why rather than leaving a dead control on screen. -->
+  <section aria-labelledby="settings-updates">
+    <h2 id="settings-updates">Updates</h2>
+    <div class="tool-row" role="group" aria-labelledby="tool-encore">
+      <span class="tool-name" id="tool-encore">Encore</span>
+      <span class="tool-status mono">{updateStatusLine}</span>
+      {#if status !== null && status.canApply}
+        {#if updateState.kind === 'available'}
+          <button
+            class="hairline"
+            aria-label="Download Encore {updateState.version}"
+            onclick={() => void downloadAppUpdate()}
+          >
+            Download
+          </button>
+        {:else if updateState.kind === 'ready'}
+          <!-- The label names what pressing it does. Nothing has changed on disk that the user
+               can see yet, and "Install" would imply it happens where they are standing. -->
+          <button
+            class="hairline"
+            aria-label="Restart Encore to finish the update"
+            onclick={() => void installAppUpdate()}
+          >
+            Restart
+          </button>
+        {:else if updateBusy}
+          <!-- In-flight guard, matching the sidecar rows: pressing again during a check would
+               join the same request, and during a download would be refused, so the button says
+               where it is instead of pretending to be pressable. The label names which of the two
+               is running, because the visible text is a percent or an ellipsis either way. -->
+          <button
+            class="hairline"
+            disabled
+            aria-label={updateState.kind === 'downloading'
+              ? `Downloading Encore ${updateState.version}`
+              : 'Checking for an Encore update'}
+          >
+            {updateState.kind === 'downloading' && updateState.percent !== null
+              ? `${updateState.percent}%`
+              : '…'}
+          </button>
+        {:else}
+          <button
+            class="hairline"
+            aria-label="Check for an Encore update"
+            onclick={() => void checkAppUpdate()}
+          >
+            Check
+          </button>
+        {/if}
+      {/if}
+    </div>
+
+    <!-- Same treatment as a failed sidecar install: the one report of it, and it interrupts. -->
+    {#if updateError}
+      <p class="tool-error mono" role="alert">ERROR: {updateError}</p>
+    {/if}
+
+    <!-- Always shown, on every target. On Windows and the AppImage it sets the expectation that
+         a restart is involved; on the deb it warns about the password prompt before the button is
+         pressed; on a snap it is the whole answer, and the reason there is no button above. -->
+    {#if status !== null}
+      <p class="hint">{status.note}</p>
+    {/if}
+    {#if updateState.kind === 'ready'}
+      <p class="hint">
+        The update is downloaded. Encore stays on this version until you restart it.
+      </p>
+    {/if}
   </section>
 
   <section>

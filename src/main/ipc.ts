@@ -18,6 +18,7 @@ import type { LibraryCandidate } from './catalog/detect-library'
 import type { ChartIssueRow } from './catalog/issues'
 import type { FixBackup } from './issues/backup-store'
 import type { FixableCode } from './issues/fix'
+import type { AppUpdateStatus } from '../shared/app-update'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import { UpdateCheckRequestSchema } from '../shared/updates'
 import type { SidecarName, SidecarStatus } from './sidecars/manager'
@@ -140,6 +141,23 @@ export interface IpcDeps {
   listFixBackups: () => { backups: FixBackup[]; totalBytes: number }
   restoreFixBackup: (id: string) => Promise<{ chartPath: string; rows: ChartIssueRow[] }>
   clearFixBackups: () => void
+  /**
+   * Updating Encore itself. Three steps, each one something the user pressed.
+   *
+   * `appUpdateStatus` is the read: it never touches the network, so a panel can mount on it.
+   * `appUpdateCheck` asks GitHub and resolves with the finished status; it does not reject, since
+   * a failed check is a state the row has to draw rather than an exception. `appUpdateDownload`
+   * fetches the release the last check found and resolves once it is staged, with progress
+   * arriving on evAppUpdate meanwhile.
+   *
+   * `appUpdateInstall` quits the app, so it resolves with false when there is nothing staged and
+   * otherwise does not resolve at all in a real build. On a target that cannot apply an update at
+   * all, all four are still answered: the status says why, and the check is a no-op.
+   */
+  appUpdateStatus: () => AppUpdateStatus
+  appUpdateCheck: () => Promise<AppUpdateStatus>
+  appUpdateDownload: () => Promise<AppUpdateStatus>
+  appUpdateInstall: () => boolean
   // Generic save dialog: shows a system save-file dialog and writes content
   // to the user-chosen path. Returns the path on success or null on cancel.
   // sender is passed so the dialog attaches to the correct window (same pattern as pickFolder).
@@ -342,6 +360,16 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   )
   // No payload: clearing is all or nothing, which is what the Settings panel offers.
   ipcMain.handle(IPC.backupsClear, () => deps.clearFixBackups())
+  // No payload on any of the four: which release channel this build belongs to, and how far a
+  // check has got, are main's to know. There is nothing here for the renderer to name, so there
+  // is nothing to validate, and a schema over `undefined` would be ceremony rather than a
+  // boundary. The three that act are ordered, not independent: a download is refused unless a
+  // check found something, and an install unless a download finished, both decided in the
+  // service rather than by whichever button happens to be on screen.
+  ipcMain.handle(IPC.appUpdateStatus, () => deps.appUpdateStatus())
+  ipcMain.handle(IPC.appUpdateCheck, () => deps.appUpdateCheck())
+  ipcMain.handle(IPC.appUpdateDownload, () => deps.appUpdateDownload())
+  ipcMain.handle(IPC.appUpdateInstall, () => deps.appUpdateInstall())
   ipcMain.handle(IPC.saveTextFile, (e, raw) => {
     const { defaultName, content } = SaveTextFileSchema.parse(raw)
     return deps.saveTextFile({ defaultName, content }, e.sender)

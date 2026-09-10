@@ -51,6 +51,16 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
     onDownloadUpdate: vi.fn(() => () => {}),
     onScanProgress: vi.fn(() => () => {}),
     onAssetProgress: vi.fn(() => () => {}),
+    // Subscribed for the life of the app, so that the startup check's result and any download
+    // percent are not missed while Settings is closed.
+    onAppUpdate: vi.fn(() => () => {}),
+    appUpdateStatus: vi.fn().mockResolvedValue({
+      currentVersion: '0.1.0',
+      target: 'unpackaged',
+      canApply: false,
+      note: 'This copy runs from source rather than from an installed build, so there is nothing for Encore to replace.',
+      state: { kind: 'idle' }
+    }),
     catalogQuery: vi.fn().mockResolvedValue([]),
     catalogCount: vi.fn().mockResolvedValue(0),
     sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),

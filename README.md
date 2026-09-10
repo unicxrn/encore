@@ -77,6 +77,19 @@ Encore keeps its catalogue, settings and cached art under your platform's app-da
 (`~/.config/encore` on Linux). Your chart library is only ever read from, except by the repairs and
 asset writes you ask for.
 
+### Updates
+
+Encore checks Releases once at startup and whenever you press **Check** in Settings, under
+Updates. It never downloads or installs anything on its own: a check tells you a version exists,
+and downloading and restarting are two more things you choose.
+
+- **Windows and the AppImage** update in place. Encore fetches the release and applies it when you
+  restart.
+- **The `.deb`** updates through `dpkg`, so your system asks for your password at the end. If your
+  package manager refuses the unsigned package, install the `.deb` from Releases yourself.
+- **The `.snap`** cannot be updated by Encore. The Snap Store owns that install; run
+  `snap refresh encore` to update it now. Settings says so rather than offering a button.
+
 ## Build from source
 
 ```bash

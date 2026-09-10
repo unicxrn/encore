@@ -20,6 +20,7 @@
   import { initDownloads } from './lib/stores/downloads'
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
+  import { initAppUpdate } from './lib/stores/app-update'
   import { globalQuery } from './lib/stores/global-search'
   import { togglePlay } from './lib/stores/preview-controller'
   import { matchShortcut, renderKeys, type ShortcutView } from './lib/shortcuts'
@@ -175,11 +176,16 @@
     const offDownloads = initDownloads()
     const offScan = initScan()
     const offAssets = initAssets()
+    // Subscribed here rather than in Settings, because the two states that arrive unasked (the
+    // startup check's result, and download progress) land while that tab is closed as often as
+    // not, and a subscription that only exists while the panel is mounted would miss them.
+    const offAppUpdate = initAppUpdate()
     window.addEventListener('keydown', onKeydown)
     return () => {
       offDownloads()
       offScan()
       offAssets()
+      offAppUpdate()
       window.removeEventListener('keydown', onKeydown)
     }
   })

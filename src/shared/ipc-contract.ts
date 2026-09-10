@@ -60,9 +60,21 @@ export const IPC = {
   updatesCheck: 'updates:check',
   updatesLast: 'updates:last',
   updatesCancel: 'updates:cancel',
+  // Updating Encore itself, which is a different thing from the three above: those ask Chorus
+  // about chart versions. These four are the app's own GitHub releases, and they are deliberately
+  // three separate steps rather than one. A check reports and stops, a download is the second
+  // press, and the restart that applies it is the third. `appUpdateStatus` replays where that got
+  // to, so a panel opened after the startup check shows its answer without asking GitHub again.
+  appUpdateStatus: 'app-update:status',
+  appUpdateCheck: 'app-update:check',
+  appUpdateDownload: 'app-update:download',
+  appUpdateInstall: 'app-update:install',
   // main -> renderer events
   evDownloadUpdate: 'ev:download-update',
   evScanProgress: 'ev:scan-progress',
   evAssetProgress: 'ev:asset-progress',
-  evUpdateProgress: 'ev:update-progress'
+  evUpdateProgress: 'ev:update-progress',
+  // Every app-update state change, including the ones nothing invoked: the startup check's
+  // result, and the download progress that arrives between the invoke and its resolution.
+  evAppUpdate: 'ev:app-update'
 } as const

@@ -134,6 +134,24 @@ directories:
 # confirmed by rebuilding without it and finding all eight prebuilds still in app.asar.unpacked.
 win:
   executableName: encore
+  # Turns off electron-updater's check that the downloaded setup.exe is signed by the same
+  # publisher as the running app. Encore ships unsigned, and this key is what says so out loud.
+  #
+  # What it actually controls, read out of app-builder-lib rather than taken from the docs:
+  # `WinPackager.isForceCodeSigningVerification` is `verifyUpdateCodeSignature !== false`, and
+  # PublishManager only writes a `publisherName` into the packaged `app-update.yml` when that is
+  # true. NsisUpdater.verifySignature reads that field back and returns early when it is absent,
+  # so with no signing certificate configured the check is already skipped and this changes
+  # nothing about today's build.
+  #
+  # It is here for the build that is not today's. The certificate can arrive from the environment
+  # rather than from this file (electron-builder reads CSC_LINK and the Windows certificate
+  # store), and the moment one does, a publisher name is baked into app-update.yml and every
+  # subsequent update is rejected unless its installer carries a matching signature. That failure
+  # lands on users, on the update after the one that introduced it, as an opaque error. Naming the
+  # value here makes signing a deliberate decision instead of a property of whichever machine ran
+  # the build.
+  verifyUpdateCodeSignature: false
   files:
     - 'out'
     - 'resources'
@@ -204,6 +222,27 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-# No `publish` block on purpose. There is no update server and no electron-updater
-# dependency, so any value here would only generate a resources/app-update.yml that ships
-# inside the build pointing at a host that does not exist.
+# Where the app looks for its own updates. GitHub releases of this repository: no server to run,
+# no host to keep alive, and the artifacts are already published there.
+#
+# This block is what generates `resources/app-update.yml` inside every build, and the `latest.yml`
+# / `latest-linux.yml` manifests beside the artifacts in `dist/`. electron-updater reads the first
+# to know where to ask and the second to know what is there, so removing this block does not
+# merely stop publishing: it makes every installed copy unable to check.
+#
+# Not every target it produces can act on the answer, and the app says which is which rather than
+# offering a control that cannot work (see `src/shared/app-update.ts`):
+#
+#   nsis      Downloads the setup executable and runs it on restart.
+#   AppImage  Downloads the new image and replaces the running one on restart.
+#   deb       Downloaded, then handed to dpkg (falling back to apt) through pkexec or sudo, which
+#             needs root and prompts for a password. electron-updater picks that path from the
+#             `package-type` marker its FpmTarget writes into the package; apt can still refuse a
+#             local unsigned .deb, which is why Settings warns before the button is pressed.
+#   snap      Cannot be updated this way at all. The snap store owns the install, and
+#             electron-updater disables itself when SNAP is set. Settings says so and offers no
+#             button.
+publish:
+  provider: github
+  owner: unicxrn
+  repo: encore
