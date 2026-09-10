@@ -12,7 +12,7 @@ Search and download new ones without leaving the app.
 [![Electron](https://img.shields.io/badge/Electron-39-2b2e3a?style=flat-square)](https://electronjs.org)
 [![Svelte](https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square)](https://svelte.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square)](https://typescriptlang.org)
-[![License](https://img.shields.io/badge/License-MIT-8b5cf6?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0--or--later-8b5cf6?style=flat-square)](LICENSE)
 
 </div>
 
