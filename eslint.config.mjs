@@ -24,5 +24,14 @@ export default defineConfig(
       'svelte/no-unused-svelte-ignore': 'off'
     }
   },
+  // The release tooling in `scripts/` is plain JavaScript, run straight by node with no build
+  // step of its own, so there is no syntax in the file for a return type to be written in. The
+  // rule is a TypeScript rule and has nothing to check here.
+  {
+    files: ['scripts/**/*.{js,mjs,cjs}'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
   eslintConfigPrettier
 )

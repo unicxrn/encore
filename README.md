@@ -160,6 +160,38 @@ A few conventions that make review quick:
 
 Commits are plain prose in the imperative: what changed and why it had to.
 
+### Cutting a release
+
+`CHANGELOG.md` is the source, and everything else is a copy of it. It is written by hand in
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) style, the renderer bundles it with a
+`?raw` import (`src/renderer/src/lib/changelog.ts`), and the GitHub release body is generated out
+of it. That direction, and not the other, because the changelog is the one of the two that ships
+inside the build: a release body typed into the browser afterwards can never get back into a build
+that already exists. What that buys is an app that can show what changed with no network, and a
+release page that says the same thing it does.
+
+1. Write the entry, under a `## [x.y.z] - yyyy-mm-dd` heading at the top of `CHANGELOG.md`, with
+   the tag link at the foot of the file. Bullets, `###` sections, and backticks for file names.
+   No other markdown: the panel renders backticks and text, and `src/shared/changelog.test.ts`
+   fails on anything else.
+2. Bump `version` in `package.json` to match. `test/release-notes.test.ts` fails if the newest
+   changelog entry is not the version about to be built, so a release with no notes cannot be cut
+   by accident.
+3. Run the five gates, then build the installers.
+4. Generate the notes and publish:
+
+   ```bash
+   node scripts/release-notes.mjs 0.2.0 > notes.md
+   gh release create v0.2.0 --title "Encore 0.2.0" --notes-file notes.md dist/encore-*
+   ```
+
+   The script prints the changelog entry followed by the download paragraph, which is packaging
+   rather than history and so lives in the script rather than in the changelog.
+
+Users meet the entry in two places: Settings, under Updates, has a button for it at any time, and
+the first launch after an update opens it once on its own. `lastSeenVersion` in settings is what
+makes that once rather than every launch.
+
 ## Licence
 
 [GPL-3.0-or-later](LICENSE).
