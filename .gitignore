@@ -16,3 +16,6 @@ out
 # Local, per-machine list of strings that must never reach a built artifact.
 # See scripts/check-artifact-identity.sh.
 .identity-forbidden
+
+# Local working notes and the build history, kept out of the public repo.
+notes
