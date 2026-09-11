@@ -10,6 +10,33 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
+## [0.2.0] - 2026-09-11
+
+### Added
+
+- Installed: a filter bar and a sort. Filter by artist, album, genre, charter, year range, song
+  length range, and whether Encore has recorded a play. Sort by title, artist, length or year in
+  either direction. Sorting runs in the database, so it orders the whole library rather than the
+  page on screen. Rows now show album, genre and year beside the artist.
+- Encore reads Clone Hero's own score file and records what you have played. A chart with no
+  recorded play can be filtered for. Encore counts plays only from when it started watching, so a
+  chart played before that counts as unrecorded, and the filter says so.
+- What's new: the changelog is bundled into the build and readable from Settings at any time. It
+  opens on the first launch after an update, and can be read before downloading one.
+
+### Changed
+
+- Every repair now asserts Clone Hero's own chart checksum as well as the one scan-chart derives,
+  and both are recomputed from disk rather than read from the catalog. The guarantee that a repair
+  cannot break multiplayer was previously checked against a model of the game's hash. It is now
+  checked against a digest the game itself was observed to write.
+
+### Fixed
+
+- The Linux update manifest described the AppImage as it was before the static runtime was swapped
+  in, so its recorded size and hash belonged to a file nobody would download. Every Linux update
+  would have failed its checksum on a file that was perfectly good.
+
 ## [0.1.0] - 2026-09-10
 
 The first release.
