@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { readable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from '../../shared/settings-defaults'
+import { APP_VERSION } from '../../shared/constants'
 import { ChartRecordSchema, type Settings } from '../../shared/schemas'
 import App from './App.svelte'
 import { settings, settingsLoaded } from './lib/stores/settings'
@@ -34,8 +35,20 @@ vi.mock('./lib/stores/latest-charts', () => ({
   loadLatestCharts: (): Promise<void> => Promise.resolve()
 }))
 
-/** The settings a returning user has: no folder yet, but the tour already seen. */
-const seenSettings = (): Settings => ({ ...defaultSettings(), tourSeen: true })
+/**
+ * The settings a returning user has: no folder yet, but the tour already seen and the running
+ * version already recorded.
+ *
+ * `lastSeenVersion` for the same reason as `tourSeen`: leaving it empty on a user who HAS seen the
+ * tour is the one combination that means "upgraded from a build before the field existed", and
+ * App opens the what's new panel on it. That is correct behaviour and it is tested where it
+ * belongs (stores/whats-new.test.ts); here it would be a modal holding every shortcut below.
+ */
+const seenSettings = (): Settings => ({
+  ...defaultSettings(),
+  tourSeen: true,
+  lastSeenVersion: APP_VERSION
+})
 
 function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnType<typeof vi.fn>> {
   const api = {

@@ -90,6 +90,11 @@ and downloading and restarting are two more things you choose.
 - **The `.snap`** cannot be updated by Encore. The Snap Store owns that install; run
   `snap refresh encore` to update it now. Settings says so rather than offering a button.
 
+The changelog is built into the app. Settings, under Updates, opens it at any time, and the first
+launch after an update opens it once to show what changed. When a check finds a newer release,
+Encore links to that release's notes rather than guessing at them: a build ships the changelog it
+was built from and cannot describe one published later.
+
 ## Build from source
 
 ```bash

@@ -25,7 +25,14 @@ export const SETTINGS_DEFAULTS = {
    * False here also covers a settings.json from before the field existed, so anyone upgrading
    * sees the tour once.
    */
-  tourSeen: false
+  tourSeen: false,
+  /**
+   * The version whose changelog entry has already been put in front of this user, which is what
+   * makes the "what's new" panel appear once after an update and not again. Empty means nothing
+   * has been recorded yet: a fresh install, or an upgrade from a build that predates this field.
+   * `whatsNewOnLaunch` in shared/changelog.ts is what tells those two apart.
+   */
+  lastSeenVersion: ''
 } as const
 
 /** A fresh Settings object; `libraryFolders` is a new array on every call. */

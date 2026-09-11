@@ -10,8 +10,10 @@
     installAppUpdate,
     refreshAppUpdate
   } from '../stores/app-update'
+  import { openOfferedWhatsNew, openWhatsNew } from '../stores/whats-new'
   import { encore } from '../stores/bridge'
   import { formatBytes } from '../../../../shared/format'
+  import { APP_VERSION } from '../../../../shared/constants'
 
   interface SidecarStatus {
     installed: boolean
@@ -375,6 +377,16 @@
       <span class="tool-status mono">{updateStatusLine}</span>
       {#if status !== null && status.canApply}
         {#if updateState.kind === 'available'}
+          <!-- Before Download, and in that order on purpose: reading what is in a release is the
+               step that comes first, and a user who has to press Download to find out what they
+               are getting has not been given a choice. -->
+          <button
+            class="hairline"
+            aria-label="What is new in Encore {updateState.version}"
+            onclick={() => openOfferedWhatsNew(updateState.version)}
+          >
+            What's new
+          </button>
           <button
             class="hairline"
             aria-label="Download Encore {updateState.version}"
@@ -436,6 +448,14 @@
         The update is downloaded. Encore stays on this version until you restart it.
       </p>
     {/if}
+
+    <!-- The changelog, whenever it is wanted. It also opens itself once on the first launch after
+         an update, which is the moment most people want it, so this is the way back to it rather
+         than the only way to it. The file is built into this copy of Encore, so it describes the
+         version named on the button and needs no network. -->
+    <button class="hairline sentence whats-new" onclick={() => openWhatsNew()}>
+      What's new in Encore {APP_VERSION}
+    </button>
   </section>
 
   <section>
@@ -662,6 +682,11 @@
      sentence, and reads as one in the UI face, the same as the tour's own Back. */
   .hairline.sentence {
     font-family: var(--font-ui);
+  }
+  /* Off the row above it and clear of the hint that follows the row, so it reads as a door out of
+     the section rather than a third control on the Encore line. */
+  .whats-new {
+    margin-top: 12px;
   }
   .hairline:hover:not(:disabled) {
     color: var(--text-1);

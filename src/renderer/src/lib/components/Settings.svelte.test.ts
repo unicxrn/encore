@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppUpdateStatus } from '../../../../shared/app-update'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import { appUpdate } from '../stores/app-update'
+import { closeWhatsNew, whatsNew } from '../stores/whats-new'
+import { APP_VERSION } from '../../../../shared/constants'
 import { finishTour, tourOpen } from '../stores/tour'
 import Settings from './Settings.svelte'
 
@@ -76,6 +78,7 @@ function backupFor(id: string): FixBackup {
 afterEach(() => {
   vi.unstubAllGlobals()
   appUpdate.set(null)
+  closeWhatsNew()
 })
 
 describe('Settings: undo history', () => {
@@ -302,5 +305,45 @@ describe('Settings: updating Encore', () => {
 
     expect(await screen.findByText(/administrator rights/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Check for an Encore update' })).toBeTruthy()
+  })
+})
+
+/**
+ * The two doors into the changelog.
+ *
+ * Settings does not draw the panel; App does. What these pin down is that both doors exist and
+ * that each asks for the right version, because the offered one is the case that can quietly go
+ * wrong: a button that opened the changelog on the RUNNING version while a user was deciding
+ * whether to download a different one would look right and answer the wrong question.
+ */
+describe('Settings: what is new', () => {
+  it('offers the changelog for the running build at any time', async () => {
+    renderWith(APPIMAGE_STATUS)
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: `What's new in Encore ${APP_VERSION}` })
+    )
+
+    expect(get(whatsNew)).toEqual({ version: APP_VERSION, offered: false })
+  })
+
+  it('offers the notes for a found release before the download, not after it', async () => {
+    renderWith({ ...APPIMAGE_STATUS, state: { kind: 'available', version: '0.2.0' } })
+
+    const read = await screen.findByRole('button', { name: 'What is new in Encore 0.2.0' })
+    const download = screen.getByRole('button', { name: 'Download Encore 0.2.0' })
+    // Reading comes first in the row, because it comes first in the decision.
+    expect(read.compareDocumentPosition(download) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await fireEvent.click(read)
+
+    // Flagged as offered: the panel needs to know this is a version the build cannot describe.
+    expect(get(whatsNew)).toEqual({ version: '0.2.0', offered: true })
+  })
+
+  it('does not offer a release button when there is no release to read about', async () => {
+    renderWith({ ...APPIMAGE_STATUS, state: { kind: 'current' } })
+    await screen.findByText('0.1.0 · UP TO DATE')
+    expect(screen.queryByRole('button', { name: /What is new in Encore/ })).toBeNull()
   })
 })

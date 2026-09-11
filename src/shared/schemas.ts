@@ -23,7 +23,8 @@ export const SettingsSchema = z.object({
   previewVolume: z.number().min(0).max(100).default(SETTINGS_DEFAULTS.previewVolume),
   // A schema field, not a loose key: this object strips anything it does not name on both the
   // IPC boundary and the save, so a flag written anywhere else would not survive to disk.
-  tourSeen: z.boolean().default(SETTINGS_DEFAULTS.tourSeen)
+  tourSeen: z.boolean().default(SETTINGS_DEFAULTS.tourSeen),
+  lastSeenVersion: z.string().default(SETTINGS_DEFAULTS.lastSeenVersion)
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export { defaultSettings } from './settings-defaults'

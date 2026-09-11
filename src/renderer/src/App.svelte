@@ -15,8 +15,10 @@
   import Tools from './lib/components/Tools.svelte'
   import Welcome from './lib/components/Welcome.svelte'
   import WelcomeTour from './lib/components/WelcomeTour.svelte'
+  import WhatsNew from './lib/components/WhatsNew.svelte'
   import { initSettings, needsWelcome, settingsLoaded } from './lib/stores/settings'
   import { finishTour, tourOpen } from './lib/stores/tour'
+  import { closeWhatsNew, initWhatsNew, whatsNew } from './lib/stores/whats-new'
   import { initDownloads } from './lib/stores/downloads'
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
@@ -118,6 +120,14 @@
       finishTour()
       return true
     }
+    // What's new sits on the tour's layer and never draws beside it (see the render below), so
+    // its place in the order is the tour's place. Closing it writes nothing, unlike the tour:
+    // when a launch decides to show it, the version is recorded then rather than on dismissal,
+    // so every way out of it costs the same.
+    if ($whatsNew !== null) {
+      closeWhatsNew()
+      return true
+    }
     // Any OTHER modal dialog on screen owns the keyboard, including Escape. The
     // Issues repair confirmation is one, and it has its own handler. Found
     // by role rather than by a flag because the dialogs belong to view
@@ -143,11 +153,15 @@
     // any time, so the sheet may open over it. It is exempted from the generic guard below for
     // that reason alone; the guard would otherwise see the tour's own dialog and stop the sheet.
     if ($tourOpen && id !== 'dismiss' && id !== 'show-shortcuts') return
+    // Modal on the same terms as the tour, and exempted from the generic dialog guard below for
+    // the same reason: ? has to keep opening the sheet over it.
+    if ($whatsNew !== null && id !== 'dismiss' && id !== 'show-shortcuts') return
     // Everything below `dismiss` in the ordering above applies to the view
     // underneath a modal dialog, so none of it may fire while one is open.
     if (
       id !== 'dismiss' &&
       !$tourOpen &&
+      $whatsNew === null &&
       document.querySelector('[role="dialog"][aria-modal="true"]') !== null
     ) {
       return
@@ -180,12 +194,17 @@
     // startup check's result, and download progress) land while that tab is closed as often as
     // not, and a subscription that only exists while the panel is mounted would miss them.
     const offAppUpdate = initAppUpdate()
+    // Decides, once the settings load resolves, whether this launch is the first on a new version
+    // and so owes the user the changelog. Here rather than in Settings for the obvious reason:
+    // nobody opens Settings to find out what an update changed.
+    const offWhatsNew = initWhatsNew()
     window.addEventListener('keydown', onKeydown)
     return () => {
       offDownloads()
       offScan()
       offAssets()
       offAppUpdate()
+      offWhatsNew()
       window.removeEventListener('keydown', onKeydown)
     }
   })
@@ -342,6 +361,13 @@
          picker. Rendered before the sheet, which stacks above it. -->
     {#if $tourOpen}
       <WelcomeTour onclose={finishTour} onopen={goTo} />
+    {:else if $whatsNew !== null}
+      <!-- Never beside the tour, which is why this is an {:else if} and not a second block. The
+           two cannot both be owed on one launch (a first run records the version and stays quiet,
+           see whatsNewOnLaunch), but the tour can be reopened from Settings at any time, and two
+           cards on one layer would stack on each other. The tour wins: it is the one the user
+           just asked for. -->
+      <WhatsNew version={$whatsNew.version} offered={$whatsNew.offered} onclose={closeWhatsNew} />
     {/if}
     <!-- Inside the app shell but outside the view boundary: the sheet documents
          the keys that navigate away from a broken screen, so it has to survive
