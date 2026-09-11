@@ -140,6 +140,26 @@ export const JobProgressSchema = z.object({
 })
 export type JobProgress = z.infer<typeof JobProgressSchema>
 
+/**
+ * The columns the Installed list can be ordered by.
+ *
+ * A closed set, not a column name: `queries.ts` maps each of these to a SQL expression from its
+ * own table, so nothing the user types ever reaches an ORDER BY clause. `title` is the record's
+ * `name` column under the word the UI uses for it.
+ */
+export const CatalogSortFieldSchema = z.enum([
+  'title',
+  'artist',
+  'album',
+  'charter',
+  'year',
+  'length'
+])
+export type CatalogSortField = z.infer<typeof CatalogSortFieldSchema>
+
+export const SortDirectionSchema = z.enum(['asc', 'desc'])
+export type SortDirection = z.infer<typeof SortDirectionSchema>
+
 export const CatalogFilterSchema = z.object({
   search: z.string().default(''),
   offset: z.number().int().min(0).default(0),
@@ -161,7 +181,57 @@ export const CatalogFilterSchema = z.object({
    * it. That is the right answer for the filter's purpose — it is in the "show me what I have not
    * got round to" pile — and it is also the only answer available.
    */
-  neverPlayed: z.boolean().optional()
+  neverPlayed: z.boolean().optional(),
+  /**
+   * Exact artist, case-insensitively. Exact rather than a substring because the value comes from
+   * a picker over the artists the catalog actually holds (see `catalog:facets`), so "Rush" must
+   * not also drag in "Rush Hour". Free-text matching across artist is what `search` already is.
+   */
+  artist: z.string().optional(),
+  /**
+   * Album, as a case-insensitive substring.
+   *
+   * The one text field among the metadata filters, and deliberately so: in a real 222-chart
+   * library album carries 154 distinct values, so a picker over it would be a list almost as
+   * long as the library itself and nearly every entry would select one chart. Substring is what
+   * makes it usable at that cardinality ("live" finds every live album).
+   */
+  album: z.string().optional(),
+  /** Exact genre, case-insensitively. A picker value, like `artist`. */
+  genre: z.string().optional(),
+  /** Exact charter, case-insensitively. A picker value, like `artist`. */
+  charter: z.string().optional(),
+  /**
+   * Inclusive release-year bounds. Either end alone is a valid half-open range.
+   *
+   * A range rather than one exact year because years cluster: picking 2003 answers a question
+   * almost nobody has, while "1980 to 1989" is the one people ask. Charts with no year never
+   * match either bound, which is right: a null year is unknown, not zero.
+   */
+  yearMin: z.number().int().optional(),
+  yearMax: z.number().int().optional(),
+  /**
+   * Inclusive song-length bounds, in milliseconds.
+   *
+   * A range and never a picker: length is continuous (217 distinct values across 220 charts that
+   * have one), so every picker entry would select exactly one chart. Charts with no stored length
+   * never match either bound.
+   */
+  lengthMinMs: z.number().int().min(0).optional(),
+  lengthMaxMs: z.number().int().min(0).optional(),
+  /**
+   * Which column orders the page, and which way.
+   *
+   * Omitted means the existing default and is not the same order in both query shapes: a search
+   * keeps FTS relevance ranking, and an unfiltered list stays alphabetical by title. Naming a
+   * sort overrides both, including relevance, because a user who asked for "longest first" meant
+   * it.
+   *
+   * This has to be applied in SQL rather than in the renderer: the list is paged (`limit` /
+   * `offset`), and sorting the hundred rows that came back is not sorting the library.
+   */
+  sort: CatalogSortFieldSchema.optional(),
+  direction: SortDirectionSchema.optional()
 })
 export type CatalogFilter = z.infer<typeof CatalogFilterSchema>
 
@@ -190,4 +260,23 @@ export interface DownloadInput {
   md5: string
   url: string
   folderName: string
+}
+
+/**
+ * The values the Installed view's pickers offer, read from the catalog rather than hardcoded.
+ *
+ * Only values some chart actually has, so a picker can never offer a choice that returns nothing.
+ * Nulls and blanks are dropped by the query, and each list is sorted for display: the three text
+ * lists case-insensitively ascending, `years` newest first, which is the order someone scanning
+ * for a decade wants.
+ *
+ * Album is deliberately absent. At 154 distinct values across 222 charts it is close to unique
+ * per chart, so a list of them is a list of the library; the album filter is a substring match
+ * instead, with no picker to populate.
+ */
+export interface CatalogFacets {
+  artists: string[]
+  genres: string[]
+  charters: string[]
+  years: number[]
 }

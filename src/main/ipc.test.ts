@@ -32,6 +32,7 @@ const deps = (): IpcDeps => ({
   queryCharts: vi.fn().mockReturnValue([]),
   countCharts: vi.fn().mockReturnValue(0),
   chartsExistByMeta: vi.fn().mockReturnValue([true]),
+  chartFacets: vi.fn().mockReturnValue({ artists: [], genres: [], charters: [], years: [] }),
   checkUpdates: vi.fn().mockResolvedValue({ verdicts: [], failed: 0, requests: 0 }),
   lastUpdates: vi.fn().mockReturnValue([]),
   cancelUpdateCheck: vi.fn(),
@@ -168,6 +169,42 @@ describe('registerIpc', () => {
     registerIpc(ipc as never, d)
     await ipc.invoke(IPC.catalogQuery, { search: 'foo' })
     expect(d.queryCharts).toHaveBeenCalledWith({ search: 'foo', offset: 0, limit: 100 })
+  })
+
+  it('passes the metadata filters and the sort through to the catalog', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.catalogQuery, {
+      search: '',
+      artist: 'Rush',
+      sort: 'year',
+      direction: 'desc'
+    })
+    expect(d.queryCharts).toHaveBeenCalledWith(
+      expect.objectContaining({ artist: 'Rush', sort: 'year', direction: 'desc' })
+    )
+  })
+
+  it('refuses a sort field the schema does not name', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.catalogQuery, { sort: 'path' })).rejects.toThrow()
+    expect(d.queryCharts).not.toHaveBeenCalled()
+  })
+
+  it('routes catalog:facets to deps', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.catalogFacets)).toEqual({
+      artists: [],
+      genres: [],
+      charters: [],
+      years: []
+    })
+    expect(d.chartFacets).toHaveBeenCalledTimes(1)
   })
 
   it('validates download requests', async () => {

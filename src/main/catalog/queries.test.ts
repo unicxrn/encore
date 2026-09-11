@@ -8,7 +8,8 @@ import {
   countCharts,
   deleteChartByPath,
   getChartByPath,
-  chartsExistByMeta
+  chartsExistByMeta,
+  chartFacets
 } from './queries'
 import { tmpDir } from '../../../test/helpers/tmp'
 
@@ -389,5 +390,368 @@ describe('neverPlayed filter', () => {
       '2026-09-11T10:00:00.0000000Z'
     )
     expect(names({ neverPlayed: true })).toEqual(['Parabola'])
+  })
+})
+
+/**
+ * The metadata filters the Installed view offers, and the sort beside them.
+ *
+ * The seed is shaped after the owner's own library rather than after what is convenient: album
+ * nearly unique per chart, artists and charters repeating a few times each, one chart with no
+ * year and one with no length, and a pair sharing a title so the paging tiebreaker has something
+ * to break.
+ */
+describe('metadata filters', () => {
+  let db: CatalogDb
+
+  const meta = (path: string, fields: Partial<ChartRecord>): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      chartType: 'folder',
+      folderHash: path,
+      modifiedTime: 1,
+      ...fields
+    })
+
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('meta-filter'), 'catalog.db'))
+    upsertChart(
+      db,
+      meta('/lib/yyz', {
+        name: 'YYZ',
+        artist: 'Rush',
+        album: 'Moving Pictures',
+        genre: 'Rock',
+        year: 1981,
+        charter: 'Skyline',
+        songLength: 265_000
+      })
+    )
+    upsertChart(
+      db,
+      meta('/lib/limelight', {
+        name: 'Limelight',
+        artist: 'Rush',
+        album: 'Moving Pictures',
+        genre: 'Rock',
+        year: 1981,
+        charter: 'Skyline',
+        songLength: 259_000
+      })
+    )
+    upsertChart(
+      db,
+      meta('/lib/painkiller', {
+        name: 'Painkiller',
+        artist: 'Judas Priest',
+        album: 'Painkiller (Live)',
+        genre: 'Metal',
+        year: 1990,
+        charter: 'Metalhead',
+        songLength: 366_000
+      })
+    )
+    upsertChart(
+      db,
+      meta('/lib/aces', {
+        name: 'Aces High',
+        artist: 'Iron Maiden',
+        album: 'Powerslave',
+        genre: 'Metal',
+        year: null,
+        charter: 'Metalhead',
+        songLength: null
+      })
+    )
+  })
+
+  const paths = (filter: Partial<CatalogFilter>): string[] =>
+    queryCharts(db, { search: '', offset: 0, limit: 100, ...filter }).map((c) => c.path)
+
+  const count = (filter: Partial<CatalogFilter>): number =>
+    countCharts(db, { search: '', offset: 0, limit: 100, ...filter })
+
+  it('matches an artist exactly, not as a prefix', () => {
+    expect(paths({ artist: 'Rush' }).sort()).toEqual(['/lib/limelight', '/lib/yyz'])
+    expect(count({ artist: 'Rush' })).toBe(2)
+    // "Rush" must not also drag in a band whose name merely starts with it.
+    upsertChart(db, meta('/lib/hour', { name: 'Overtime', artist: 'Rush Hour' }))
+    expect(paths({ artist: 'Rush' }).sort()).toEqual(['/lib/limelight', '/lib/yyz'])
+  })
+
+  it('matches artist, genre and charter case-insensitively', () => {
+    expect(paths({ artist: 'rUsH' })).toHaveLength(2)
+    expect(paths({ genre: 'METAL' })).toHaveLength(2)
+    expect(paths({ charter: 'metalhead' })).toHaveLength(2)
+  })
+
+  // The one text filter among them: album is close to unique per chart, so a picker is useless
+  // and an exact match would mean typing the album's full name.
+  it('matches an album as a substring', () => {
+    expect(paths({ album: 'moving' }).sort()).toEqual(['/lib/limelight', '/lib/yyz'])
+    expect(paths({ album: 'live' })).toEqual(['/lib/painkiller'])
+    expect(count({ album: 'live' })).toBe(1)
+  })
+
+  it('treats LIKE wildcards in an album as literal characters', () => {
+    // Unescaped, '%' would match every album and '_' would match any single character.
+    expect(paths({ album: '%' })).toEqual([])
+    expect(paths({ album: 'Powerslav_' })).toEqual([])
+    upsertChart(db, meta('/lib/pct', { name: '100%', artist: 'Nobody', album: '100% Live' }))
+    expect(paths({ album: '100%' })).toEqual(['/lib/pct'])
+  })
+
+  it('treats a blank filter value as no filter at all', () => {
+    // A picker reset to "any artist" posts an empty string; it must not ask for charts whose
+    // artist is literally "".
+    expect(paths({ artist: '', genre: '   ', charter: '', album: '' })).toHaveLength(4)
+  })
+
+  it('filters by a year range, with either end alone allowed', () => {
+    expect(paths({ yearMin: 1985 })).toEqual(['/lib/painkiller'])
+    expect(paths({ yearMax: 1985 }).sort()).toEqual(['/lib/limelight', '/lib/yyz'])
+    expect(paths({ yearMin: 1980, yearMax: 1990 }).sort()).toEqual([
+      '/lib/limelight',
+      '/lib/painkiller',
+      '/lib/yyz'
+    ])
+    expect(count({ yearMin: 1980, yearMax: 1990 })).toBe(3)
+  })
+
+  it('filters by a length range in milliseconds', () => {
+    expect(paths({ lengthMinMs: 300_000 })).toEqual(['/lib/painkiller'])
+    expect(paths({ lengthMaxMs: 260_000 })).toEqual(['/lib/limelight'])
+    expect(count({ lengthMinMs: 300_000 })).toBe(1)
+  })
+
+  // An unknown value cannot be shown to be inside the range asked for. Including it would put a
+  // chart of unknown length into "under five minutes".
+  it('drops charts with no year or no length once that range is bounded', () => {
+    expect(paths({ yearMin: 1900 })).not.toContain('/lib/aces')
+    expect(paths({ lengthMaxMs: 999_999_999 })).not.toContain('/lib/aces')
+    expect(paths({})).toContain('/lib/aces')
+  })
+
+  it('combines the metadata filters with each other and with the search', () => {
+    expect(paths({ artist: 'Rush', lengthMaxMs: 260_000 })).toEqual(['/lib/limelight'])
+    expect(paths({ search: 'painkiller', genre: 'Metal' })).toEqual(['/lib/painkiller'])
+    expect(paths({ search: 'painkiller', genre: 'Rock' })).toEqual([])
+    // The count has a cheaper FTS-only branch it must not take once a chart column is read.
+    expect(count({ search: 'painkiller', genre: 'Metal' })).toBe(1)
+    expect(count({ search: 'painkiller', genre: 'Rock' })).toBe(0)
+  })
+
+  it('combines with the missing-asset and never-played constraints', () => {
+    expect(paths({ artist: 'Rush', missing: ['video'] }).sort()).toEqual([
+      '/lib/limelight',
+      '/lib/yyz'
+    ])
+    expect(paths({ genre: 'Metal', neverPlayed: true }).sort()).toEqual([
+      '/lib/aces',
+      '/lib/painkiller'
+    ])
+  })
+})
+
+describe('sorting', () => {
+  let db: CatalogDb
+
+  const meta = (path: string, fields: Partial<ChartRecord>): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      chartType: 'folder',
+      folderHash: path,
+      modifiedTime: 1,
+      ...fields
+    })
+
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('sort'), 'catalog.db'))
+    upsertChart(
+      db,
+      meta('/lib/b', {
+        name: 'Beat It',
+        artist: 'Michael Jackson',
+        year: 1982,
+        songLength: 258_000
+      })
+    )
+    upsertChart(
+      db,
+      meta('/lib/a', { name: 'aces high', artist: 'Iron Maiden', year: 1984, songLength: 270_000 })
+    )
+    upsertChart(db, meta('/lib/c', { name: 'Coma', artist: 'Tool', year: null, songLength: null }))
+    upsertChart(
+      db,
+      meta('/lib/d', { name: 'Dogma', artist: 'Tool', year: 1993, songLength: 120_000 })
+    )
+  })
+
+  const names = (filter: Partial<CatalogFilter>): (string | null)[] =>
+    queryCharts(db, { search: '', offset: 0, limit: 100, ...filter }).map((c) => c.name)
+
+  it('sorts by title in both directions, ignoring case', () => {
+    // Lower-cased "aces high" sorts first only under a case-insensitive collation; byte order
+    // would put every capital ahead of it.
+    expect(names({ sort: 'title', direction: 'asc' })).toEqual([
+      'aces high',
+      'Beat It',
+      'Coma',
+      'Dogma'
+    ])
+    expect(names({ sort: 'title', direction: 'desc' })).toEqual([
+      'Dogma',
+      'Coma',
+      'Beat It',
+      'aces high'
+    ])
+  })
+
+  it('sorts by artist, by year and by length', () => {
+    expect(names({ sort: 'artist', direction: 'asc' })).toEqual([
+      'aces high',
+      'Beat It',
+      'Coma',
+      'Dogma'
+    ])
+    expect(names({ sort: 'year', direction: 'asc' }).slice(0, 3)).toEqual([
+      'Beat It',
+      'aces high',
+      'Dogma'
+    ])
+    expect(names({ sort: 'length', direction: 'desc' }).slice(0, 3)).toEqual([
+      'aces high',
+      'Beat It',
+      'Dogma'
+    ])
+  })
+
+  // SQLite sorts NULLs first ascending, so "oldest first" would otherwise open on the charts
+  // whose year nobody knows.
+  it('puts charts with no value last, whichever direction is asked for', () => {
+    expect(names({ sort: 'year', direction: 'asc' }).at(-1)).toBe('Coma')
+    expect(names({ sort: 'year', direction: 'desc' }).at(-1)).toBe('Coma')
+    expect(names({ sort: 'length', direction: 'asc' }).at(-1)).toBe('Coma')
+    expect(names({ sort: 'length', direction: 'desc' }).at(-1)).toBe('Coma')
+  })
+
+  it('defaults to ascending when no direction is given', () => {
+    expect(names({ sort: 'title' })).toEqual(names({ sort: 'title', direction: 'asc' }))
+  })
+
+  it('leaves the existing order alone when no sort is named', () => {
+    expect(names({})).toEqual(['aces high', 'Beat It', 'Coma', 'Dogma'])
+  })
+
+  /**
+   * The reason this has to be SQL and not a renderer-side sort of the rows on screen.
+   *
+   * The view pages at 100 and appends. Sorting a page sorts a hundred arbitrary charts; the
+   * assertion here is that page two continues page one rather than starting over, which is only
+   * true if the database did the ordering.
+   */
+  it('orders across pages, not within one', () => {
+    const page = (offset: number, limit: number): (string | null)[] =>
+      queryCharts(db, { search: '', offset, limit, sort: 'year', direction: 'desc' }).map(
+        (c) => c.name
+      )
+    const whole = page(0, 100)
+    expect([...page(0, 2), ...page(2, 2)]).toEqual(whole)
+    expect(whole[0]).toBe('Dogma')
+  })
+
+  /**
+   * Ties must not shuffle between pages.
+   *
+   * Without a unique tiebreaker SQLite may return tied rows in any order, and need not pick the
+   * same one twice, so a row can fall off the end of one page and reappear on the next. Every
+   * chart here sorts equal on the requested column, which is the worst case and not a rare one:
+   * a library sorted by artist is mostly ties.
+   */
+  it('pages tied rows without losing or repeating any', () => {
+    for (let i = 0; i < 12; i++) {
+      upsertChart(
+        db,
+        meta(`/lib/tie-${i}`, { name: `Tie ${i}`, artist: 'Same Artist', year: 2000 })
+      )
+    }
+    const filter = { search: '', sort: 'artist' as const, direction: 'asc' as const }
+    const whole = queryCharts(db, { ...filter, offset: 0, limit: 100 }).map((c) => c.path)
+    const paged = [0, 5, 10, 15].flatMap((offset) =>
+      queryCharts(db, { ...filter, offset, limit: 5 }).map((c) => c.path)
+    )
+    expect(paged).toEqual(whole)
+    expect(new Set(paged).size).toBe(whole.length)
+  })
+
+  it('sorts the search results too, overriding relevance rank', () => {
+    const sorted = queryCharts(db, {
+      search: 'tool',
+      offset: 0,
+      limit: 100,
+      sort: 'title',
+      direction: 'desc'
+    }).map((c) => c.name)
+    expect(sorted).toEqual(['Dogma', 'Coma'])
+  })
+
+  it('pages a sorted search across pages as well', () => {
+    const filter = { search: 'tool', sort: 'title' as const, direction: 'asc' as const }
+    const whole = queryCharts(db, { ...filter, offset: 0, limit: 100 }).map((c) => c.name)
+    const paged = [0, 1].flatMap((offset) =>
+      queryCharts(db, { ...filter, offset, limit: 1 }).map((c) => c.name)
+    )
+    expect(paged).toEqual(whole)
+  })
+})
+
+describe('chartFacets', () => {
+  let db: CatalogDb
+
+  const meta = (path: string, fields: Partial<ChartRecord>): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      chartType: 'folder',
+      folderHash: path,
+      modifiedTime: 1,
+      ...fields
+    })
+
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('facets'), 'catalog.db'))
+    upsertChart(
+      db,
+      meta('/lib/1', { artist: 'Rush', genre: 'Rock', charter: 'Skyline', year: 1981 })
+    )
+    upsertChart(
+      db,
+      meta('/lib/2', { artist: 'rush', genre: 'rock', charter: 'Skyline', year: 1981 })
+    )
+    upsertChart(db, meta('/lib/3', { artist: 'Iron Maiden', genre: '', charter: '  ', year: null }))
+    upsertChart(db, meta('/lib/4', { artist: null, genre: 'Metal', charter: null, year: 1990 }))
+  })
+
+  it('offers each value once, case-insensitively, and never a blank or a null', () => {
+    const facets = chartFacets(db)
+    expect(facets.artists).toEqual(['Iron Maiden', 'Rush'])
+    expect(facets.genres).toEqual(['Metal', 'Rock'])
+    expect(facets.charters).toEqual(['Skyline'])
+  })
+
+  it('lists years newest first', () => {
+    expect(chartFacets(db).years).toEqual([1990, 1981])
+  })
+
+  // Every option a picker shows has to return at least one row, which is what reading them off
+  // the catalog rather than off a fixed list buys.
+  it('offers only values some chart actually has', () => {
+    for (const artist of chartFacets(db).artists) {
+      expect(countCharts(db, { search: '', offset: 0, limit: 100, artist })).toBeGreaterThan(0)
+    }
+  })
+
+  it('answers an empty catalog with empty lists', () => {
+    const empty = openCatalog(join(tmpDir('facets-empty'), 'catalog.db'))
+    expect(chartFacets(empty)).toEqual({ artists: [], genres: [], charters: [], years: [] })
   })
 })

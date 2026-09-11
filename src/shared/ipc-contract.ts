@@ -11,6 +11,9 @@ export const IPC = {
   catalogScanCancel: 'catalog:scan-cancel',
   catalogRescanCharts: 'catalog:rescan-charts',
   catalogExistsByMeta: 'catalog:exists-by-meta',
+  // The distinct artists, genres, charters and years the catalog holds, for the Installed view's
+  // filter pickers. Read on mount and again after a scan, never per keystroke.
+  catalogFacets: 'catalog:facets',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
   downloadRetry: 'download:retry',

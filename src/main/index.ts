@@ -14,7 +14,13 @@ import { readChartFiles } from './catalog/chart-files'
 import { readLyricLines } from './catalog/lyric-lines'
 import { detectChartLibraries } from './catalog/detect-library'
 import { openCatalog, type CatalogDb } from './catalog/db'
-import { chartsExistByMeta, countCharts, getChartByPath, queryCharts } from './catalog/queries'
+import {
+  chartFacets,
+  chartsExistByMeta,
+  countCharts,
+  getChartByPath,
+  queryCharts
+} from './catalog/queries'
 import { ScanRunner } from './catalog/scan-runner'
 import { cancelLibraryScan, scanChart, scanLibrary, type ScanSummary } from './catalog/scanner'
 import { cancelIssueScan, scanIssues, lastIssueReport } from './catalog/issues'
@@ -456,6 +462,7 @@ function wireIpc(): {
     queryCharts: (f) => queryCharts(db, f),
     countCharts: (f) => countCharts(db, f),
     chartsExistByMeta: (keys) => chartsExistByMeta(db, keys),
+    chartFacets: () => chartFacets(db),
     startScan: () => runScan(),
     cancelScan: () => scanner.cancel(),
     // Targeted re-index after an asset write. The alternative, waiting for the watcher's

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-contract'
 import type {
+  CatalogFacets,
   CatalogFilter,
   ChartRecord,
   DownloadRequest,
@@ -54,6 +55,11 @@ const api = {
     ipcRenderer.invoke(IPC.catalogRescanCharts, paths),
   existsByMeta: (keys: { name: string; artist: string; charter: string }[]): Promise<boolean[]> =>
     ipcRenderer.invoke(IPC.catalogExistsByMeta, keys),
+  // The distinct artists, genres, charters and years the catalog holds, so the Installed view's
+  // pickers can only offer a value some chart actually has. Describes the whole catalog, not the
+  // current filter: narrowing the lists as filters are applied would take options away the moment
+  // they were used.
+  catalogFacets: (): Promise<CatalogFacets> => ipcRenderer.invoke(IPC.catalogFacets),
   downloadAdd: (r: DownloadRequest): Promise<void> => ipcRenderer.invoke(IPC.downloadAdd, r),
   downloadCancel: (md5: string): Promise<void> => ipcRenderer.invoke(IPC.downloadCancel, md5),
   downloadRetry: (md5: string): Promise<void> => ipcRenderer.invoke(IPC.downloadRetry, md5),

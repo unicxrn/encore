@@ -69,6 +69,49 @@ describe('CatalogFilterSchema', () => {
   it('rejects a limit above the maximum', () => {
     expect(() => CatalogFilterSchema.parse({ limit: 501 })).toThrow()
   })
+  // Additive: every metadata filter and the sort are optional, so an existing caller that knows
+  // nothing about them is unchanged by their arrival.
+  it('leaves the metadata filters and the sort out when they are not asked for', () => {
+    const parsed = CatalogFilterSchema.parse({ search: 'rush' })
+    expect(parsed).toEqual({ search: 'rush', offset: 0, limit: 100 })
+  })
+  it('carries the metadata filters, the ranges and the sort through', () => {
+    expect(
+      CatalogFilterSchema.parse({
+        artist: 'Rush',
+        album: 'Moving',
+        genre: 'Rock',
+        charter: 'Skyline',
+        yearMin: 1980,
+        yearMax: 1989,
+        lengthMinMs: 120_000,
+        lengthMaxMs: 360_000,
+        sort: 'length',
+        direction: 'desc'
+      })
+    ).toMatchObject({
+      artist: 'Rush',
+      album: 'Moving',
+      genre: 'Rock',
+      charter: 'Skyline',
+      yearMin: 1980,
+      yearMax: 1989,
+      lengthMinMs: 120_000,
+      lengthMaxMs: 360_000,
+      sort: 'length',
+      direction: 'desc'
+    })
+  })
+  // The sort names a column in a closed map inside the query layer; anything else would have to
+  // be spliced into an ORDER BY, so it has to be refused at the boundary.
+  it('rejects a sort field or direction it does not name', () => {
+    expect(() => CatalogFilterSchema.parse({ sort: 'path' })).toThrow()
+    expect(() => CatalogFilterSchema.parse({ sort: 'name DESC; DROP TABLE charts' })).toThrow()
+    expect(() => CatalogFilterSchema.parse({ direction: 'sideways' })).toThrow()
+  })
+  it('rejects a negative length bound', () => {
+    expect(() => CatalogFilterSchema.parse({ lengthMinMs: -1 })).toThrow()
+  })
 })
 
 describe('DownloadRequestSchema', () => {

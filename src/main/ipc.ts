@@ -2,6 +2,7 @@ import type { IpcMain } from 'electron'
 import { z } from 'zod'
 import { IPC } from '../shared/ipc-contract'
 import {
+  CatalogFacets,
   CatalogFilter,
   CatalogFilterSchema,
   ChartRecord,
@@ -36,6 +37,10 @@ export interface IpcDeps {
   queryCharts: (f: CatalogFilter) => ChartRecord[]
   countCharts: (f: CatalogFilter) => number
   chartsExistByMeta: (keys: { name: string; artist: string; charter: string }[]) => boolean[]
+  /** Distinct values for the Installed view's filter pickers. Takes no arguments by design:
+   * the lists describe the whole catalog, so narrowing them by the filter currently applied
+   * would take options away as soon as they were used. */
+  chartFacets: () => CatalogFacets
   startScan: () => void
   /**
    * Abort the running library scan, if there is one. Resolves as soon as the signal has been
@@ -300,6 +305,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   ipcMain.handle(IPC.catalogExistsByMeta, (_e, raw) =>
     deps.chartsExistByMeta(ExistsByMetaSchema.parse(raw))
   )
+  ipcMain.handle(IPC.catalogFacets, () => deps.chartFacets())
   ipcMain.handle(IPC.downloadAdd, (_e, raw) => deps.addDownload(DownloadRequestSchema.parse(raw)))
   ipcMain.handle(IPC.downloadCancel, (_e, raw) => deps.cancelDownload(z.string().parse(raw)))
   ipcMain.handle(IPC.downloadRetry, (_e, raw) => deps.retryDownload(z.string().parse(raw)))
