@@ -26,16 +26,26 @@ export type CatalogDb = Database.Database
  *    modifiers. Stored but lossy: maxNps keeps only instrument/difficulty/nps, and the schema
  *    drops upstream's `time`. Existing rows carry none of the new fields and must be re-parsed.
  *
+ * 7: cloneHeroChecksum is computed and stored. It is Clone Hero's own identity for a chart and
+ *    the only key that joins a recorded play to a catalog row, so every existing chart has to be
+ *    re-parsed to get one; the column alone would stay null forever otherwise.
+ *
  * Nothing enforces a bump: a scanner change that forgets one leaves the tests green and the
  * user's rows stale. It is convention, checked in review.
  *
  * This is deliberately separate from SCHEMA_VERSION: table shape and parse output change
  * for different reasons and on different schedules.
  */
-export const SCAN_VERSION = 6
+export const SCAN_VERSION = 7
 
-/** Shape of the `charts` table. Bump when a migration is added below. */
-const SCHEMA_VERSION = 4
+/**
+ * Shape of the catalog's tables. Bump when a migration is added below.
+ *
+ * Exported for the tests alone, which assert against it rather than against a literal: a bump
+ * used to mean editing four hard-coded 4s in db.test.ts, and the version this stamps is not
+ * itself the thing those tests are about.
+ */
+export const SCHEMA_VERSION = 5
 
 /** The columns `charts` currently has: the lookup that makes the ALTER migrations re-runnable. */
 function existingColumns(db: CatalogDb): Set<string> {
@@ -74,7 +84,8 @@ const ADDED_COLUMNS: { name: string; ddl: string }[] = [
   { name: 'hasForcedNotes', ddl: 'hasForcedNotes INTEGER NOT NULL DEFAULT 0' },
   { name: 'hasFlexLanes', ddl: 'hasFlexLanes INTEGER NOT NULL DEFAULT 0' },
   { name: 'chartHash', ddl: 'chartHash TEXT' },
-  { name: 'tempoMapHash', ddl: 'tempoMapHash TEXT' }
+  { name: 'tempoMapHash', ddl: 'tempoMapHash TEXT' },
+  { name: 'cloneHeroChecksum', ddl: 'cloneHeroChecksum TEXT' }
 ]
 
 /**
@@ -94,6 +105,10 @@ function migrate(db: CatalogDb): void {
   for (const { name, ddl } of ADDED_COLUMNS) {
     if (!columns.has(name)) db.exec(`ALTER TABLE charts ADD COLUMN ${ddl}`)
   }
+  // After the ALTERs, never in openCatalog's CREATE block: on a database written before v5 the
+  // column does not exist yet when that block runs, and CREATE INDEX would throw rather than
+  // being skipped by its IF NOT EXISTS. This is the lookup every play join makes.
+  db.exec('CREATE INDEX IF NOT EXISTS charts_checksum ON charts(cloneHeroChecksum)')
   const version = db.pragma('user_version', { simple: true }) as number
   if (version < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`)
 }
@@ -136,8 +151,38 @@ export function openCatalog(filePath: string): CatalogDb {
 			hasForcedNotes INTEGER NOT NULL DEFAULT 0,
 			hasFlexLanes INTEGER NOT NULL DEFAULT 0,
 			chartHash TEXT,
-			tempoMapHash TEXT
+			tempoMapHash TEXT,
+			cloneHeroChecksum TEXT
 		);
+		-- One row per play Clone Hero recorded, accumulated by watching its scorestats.json.
+		-- That file only ever holds the MOST RECENT play, so this table is the only history
+		-- there is: a play missed while Encore was not running is gone for good.
+		--
+		-- The checksum column is Clone Hero's own chart identity, stored lower-hex to match
+		-- charts.cloneHeroChecksum (the game writes upper). It is deliberately NOT a foreign key
+		-- to charts: a play of a chart the user has since deleted, or has not scanned yet, is
+		-- still a play, and losing it to a constraint would be worse than an orphan row.
+		--
+		-- UNIQUE(checksum, playedAt) is the "already recorded" rule. Clone Hero stamps
+		-- score_timestamp to sub-millisecond precision, so two plays of one chart cannot collide
+		-- while re-reading the same unchanged file always does. Writes use INSERT OR IGNORE.
+		CREATE TABLE IF NOT EXISTS plays (
+			id INTEGER PRIMARY KEY,
+			checksum TEXT NOT NULL,
+			playedAt TEXT NOT NULL,
+			songName TEXT, artistName TEXT, charterName TEXT,
+			gameVersion TEXT, gameMode TEXT,
+			playbackSpeed INTEGER,
+			bandScore INTEGER, bandStars INTEGER, playerCount INTEGER,
+			instrument TEXT, difficulty TEXT, profileName TEXT,
+			score INTEGER, notesHit INTEGER, totalNotes INTEGER, maxStreak INTEGER,
+			isFc INTEGER NOT NULL DEFAULT 0,
+			isPfc INTEGER NOT NULL DEFAULT 0,
+			stars INTEGER,
+			avgMultiplier REAL,
+			UNIQUE(checksum, playedAt)
+		);
+		CREATE INDEX IF NOT EXISTS plays_checksum ON plays(checksum);
 		CREATE VIRTUAL TABLE IF NOT EXISTS charts_fts USING fts5(
 			name, artist, album, charter, content='charts', content_rowid='id'
 		);

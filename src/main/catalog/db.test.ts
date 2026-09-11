@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createV1Catalog } from '../../../test/helpers/v1-catalog'
-import { openCatalog } from './db'
+import { openCatalog, SCHEMA_VERSION } from './db'
 import { tmpDir } from '../../../test/helpers/tmp'
 
 const tmpDb = (): string => join(tmpDir('db'), 'catalog.db')
@@ -60,7 +60,7 @@ describe('scanVersion migration', () => {
   it('creates a fresh database with the scanVersion column at the current user_version', () => {
     const db = openCatalog(tmpDb())
     expect(columnNames(db)).toContain('scanVersion')
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     db.close()
   })
 
@@ -69,7 +69,7 @@ describe('scanVersion migration', () => {
     makeV1Db(file)
     const db = openCatalog(file)
     expect(columnNames(db)).toContain('scanVersion')
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     const rows = db.prepare(`SELECT path, scanVersion FROM charts`).all()
     // The pre-existing row survives and lands below SCAN_VERSION, so it gets re-parsed.
     expect(rows).toEqual([{ path: '/lib/legacy.sng', scanVersion: 0 }])
@@ -99,7 +99,7 @@ describe('full chart data migration', () => {
     expect(cols).toContain('noteCounts')
     expect(cols).toContain('previewStartTime')
     expect(db.prepare('SELECT COUNT(*) AS n FROM charts').get()).toEqual({ n: 3 })
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     db.close()
   })
 
@@ -133,10 +133,12 @@ describe('full chart data migration', () => {
     const file = tmpDb()
     openCatalog(file).close()
     const ahead = new Database(file)
-    ahead.pragma('user_version = 4')
+    // Deliberately ahead of this build, not merely equal to it: the point is that migrate()
+    // never stamps its own version over a higher one.
+    ahead.pragma(`user_version = ${SCHEMA_VERSION + 1}`)
     ahead.close()
     const db = openCatalog(file)
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION + 1)
     db.close()
   })
 })

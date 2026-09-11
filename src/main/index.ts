@@ -19,6 +19,9 @@ import { ScanRunner } from './catalog/scan-runner'
 import { cancelLibraryScan, scanChart, scanLibrary, type ScanSummary } from './catalog/scanner'
 import { cancelIssueScan, scanIssues, lastIssueReport } from './catalog/issues'
 import { LibraryWatcher } from './catalog/watcher'
+import { scoreStatsPath } from './play/location'
+import { chartPlaySummaries, countPlays, playStats, recordPlay } from './play/store'
+import { PlayWatcher } from './play/watcher'
 import { runDownload } from './downloads/download'
 import { DownloadManager } from './downloads/manager'
 import { sweepTmpDir } from './downloads/sweep'
@@ -194,7 +197,12 @@ function sweepArtCache(db: CatalogDb, artDir: string, summary: ScanSummary): voi
   }
 }
 
-function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher; appUpdates: AppUpdateService } {
+function wireIpc(): {
+  db: CatalogDb
+  watcher: LibraryWatcher
+  plays: PlayWatcher
+  appUpdates: AppUpdateService
+} {
   const settingsPath = join(app.getPath('userData'), 'settings.json')
   const db = openCatalog(join(app.getPath('userData'), 'catalog.db'))
   const artDir = artCacheDir()
@@ -265,6 +273,25 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher; appUpdates: AppUpd
   manager.onUpdate((items) => send(IPC.evDownloadUpdate, items))
 
   const watcher = new LibraryWatcher({ onChange: runScan })
+
+  /**
+   * Clone Hero's play data, watched wherever this platform keeps it.
+   *
+   * The path is resolved once at startup rather than per read: the user does not move their
+   * Clone Hero install while Encore is open, and re-probing on every status call would put a
+   * disk hit behind a call the UI makes on mount. `homedir()` and `process.platform` enter here
+   * and nowhere else, the same arrangement detectChartLibraries uses, so the resolver stays
+   * testable across platforms this machine is not.
+   *
+   * Nothing about this can fail loudly. A machine with no Clone Hero — which is most of them —
+   * resolves a path that does not exist, watches nothing, and reports `available: false`. That
+   * is a state the UI draws, not an error anyone has to see.
+   */
+  const plays = new PlayWatcher({
+    path: scoreStatsPath(homedir(), process.platform, existsSync, app.getPath('documents')),
+    record: (play) => recordPlay(db, play),
+    onPlay: () => send(IPC.evPlayRecorded, undefined)
+  })
 
   // Named because two things need it: the sidecar manager installs into it, and locateFfmpeg
   // looks in it for the managed copy after PATH has been tried.
@@ -667,6 +694,21 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher; appUpdates: AppUpd
     appUpdateCheck: () => appUpdates.check(),
     appUpdateDownload: () => appUpdates.download(),
     appUpdateInstall: () => appUpdates.install(),
+    // Clone Hero's play data. The status merges what the watcher knows (where it is looking, and
+    // what its last read found) with what the table holds, because "available" has to mean
+    // "there is something to show" rather than "a file exists": a scorestats.json holding one
+    // play we already recorded reads fine and still leaves nothing new to draw.
+    playStatus: () => {
+      const playCount = countPlays(db)
+      return {
+        available: playCount > 0,
+        reason: plays.reason,
+        path: plays.watchedPath,
+        playCount
+      }
+    },
+    playSummaries: (checksums) => chartPlaySummaries(db, checksums),
+    playStats: () => playStats(db),
     // saveTextFile: the user explicitly chose the destination path via the
     // system dialog, so we write there directly. There is no library containment
     // guard here: this is the intentional user-chosen exception to the write policy.
@@ -684,7 +726,7 @@ function wireIpc(): { db: CatalogDb; watcher: LibraryWatcher; appUpdates: AppUpd
     }
   })
 
-  return { db, watcher, appUpdates }
+  return { db, watcher, plays, appUpdates }
 }
 
 function bootstrap(): void {
@@ -715,7 +757,7 @@ function bootstrap(): void {
     // failures for the covers on its first paint, and nothing retries them.
     registerArtProtocol(artCacheDir())
 
-    const { db, watcher, appUpdates } = wireIpc()
+    const { db, watcher, plays, appUpdates } = wireIpc()
     // Start the library watcher with the current folder paths.
     const initialFolders = loadSettings(
       join(app.getPath('userData'), 'settings.json')
@@ -723,10 +765,19 @@ function bootstrap(): void {
     watcher.start(initialFolders).catch((err: unknown) => {
       console.error('LibraryWatcher start failed:', err)
     })
+    // Unawaited, and with no error path to speak of, unlike the library watcher above. `start`
+    // reads the score file once and then watches its directory, and it resolves rather than
+    // rejecting on every case it can meet: no Clone Hero installed, no score yet, a platform
+    // whose location is unknown. The catch is only for the watcher itself throwing, which would
+    // otherwise be an unhandled rejection in main.
+    void plays.start().catch((err: unknown) => {
+      console.error('PlayWatcher start failed:', err)
+    })
     // Close on clean exit so WAL checkpoints back into the main db file.
     app.on('will-quit', () => {
       db.close()
       void watcher.stop()
+      void plays.stop()
     })
 
     createWindow()

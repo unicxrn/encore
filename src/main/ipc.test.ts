@@ -111,7 +111,39 @@ const deps = (): IpcDeps => ({
   appUpdateStatus: vi.fn().mockReturnValue(APP_UPDATE_STATUS),
   appUpdateCheck: vi.fn().mockResolvedValue(APP_UPDATE_STATUS),
   appUpdateDownload: vi.fn().mockResolvedValue(APP_UPDATE_STATUS),
-  appUpdateInstall: vi.fn().mockReturnValue(false)
+  appUpdateInstall: vi.fn().mockReturnValue(false),
+  playStatus: vi.fn().mockReturnValue({
+    available: true,
+    reason: 'ok',
+    path: '/home/u/.clonehero/scorestats.json',
+    playCount: 3
+  }),
+  playSummaries: vi.fn().mockReturnValue([
+    {
+      checksum: 'e54e9a0521444e81bd1fed4f3f3a3201',
+      timesPlayed: 2,
+      bestScore: 40122,
+      bestStars: 2,
+      bestAccuracy: 0.52,
+      everFc: false,
+      lastPlayedAt: '2026-09-10T22:23:37.1089500Z'
+    }
+  ]),
+  playStats: vi.fn().mockReturnValue({
+    totalPlays: 3,
+    chartsPlayed: 2,
+    fcCount: 0,
+    pfcCount: 0,
+    notesHit: 100,
+    totalNotes: 200,
+    bestScore: 40122,
+    longestStreak: 12,
+    firstPlayedAt: '2026-09-01T00:00:00.0000000Z',
+    lastPlayedAt: '2026-09-10T22:23:37.1089500Z',
+    byInstrument: [{ key: 'Guitar', plays: 3 }],
+    byDifficulty: [{ key: 'Expert', plays: 3 }],
+    topCharts: []
+  })
 })
 
 describe('registerIpc', () => {
@@ -879,6 +911,47 @@ describe('registerIpc', () => {
       { path: '/home/user/.clonehero/Songs', chartCount: 207, countCapped: false }
     ])
     expect(d.detectLibraries).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes the three play reads to deps', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.playStatus)).toMatchObject({ available: true, reason: 'ok' })
+    expect(await ipc.invoke(IPC.playStats)).toMatchObject({ totalPlays: 3 })
+    await ipc.invoke(IPC.playSummaries, ['e54e9a0521444e81bd1fed4f3f3a3201'])
+    expect(d.playSummaries).toHaveBeenCalledWith(['e54e9a0521444e81bd1fed4f3f3a3201'])
+  })
+
+  it('validates checksums at the play:summaries boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    // Not hex, wrong length, wrong type, and not a list at all. Each reaches an IN clause
+    // otherwise, and the checksum shape is the one thing the table's key depends on.
+    await expect(ipc.invoke(IPC.playSummaries, ['nope'])).rejects.toThrow()
+    await expect(
+      ipc.invoke(IPC.playSummaries, ['E54E9A0521444E81BD1FED4F3F3A3201'])
+    ).rejects.toThrow()
+    await expect(ipc.invoke(IPC.playSummaries, [123])).rejects.toThrow()
+    await expect(
+      ipc.invoke(IPC.playSummaries, 'e54e9a0521444e81bd1fed4f3f3a3201')
+    ).rejects.toThrow()
+    expect(d.playSummaries).not.toHaveBeenCalled()
+    // An empty list is legal: a page with no charts on it asks for nothing.
+    await ipc.invoke(IPC.playSummaries, [])
+    expect(d.playSummaries).toHaveBeenCalledWith([])
+  })
+
+  it('caps how many checksums one play:summaries call may name', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const one = 'e54e9a0521444e81bd1fed4f3f3a3201'
+    await ipc.invoke(IPC.playSummaries, new Array(500).fill(one))
+    expect(d.playSummaries).toHaveBeenCalledTimes(1)
+    await expect(ipc.invoke(IPC.playSummaries, new Array(501).fill(one))).rejects.toThrow()
+    expect(d.playSummaries).toHaveBeenCalledTimes(1)
   })
 
   it('rejects dialog:save-text when content exceeds 10 MB', async () => {

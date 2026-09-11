@@ -18,6 +18,7 @@ import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
 import type { VideoSearchResult } from '../main/sidecars/ytdlp'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import type { AppUpdateStatus } from '../shared/app-update'
+import type { ChartPlaySummary, PlayDataStatus, PlayStats } from '../shared/play'
 
 type Unsubscribe = () => void
 
@@ -199,11 +200,25 @@ const api = {
   // something is, the app is closing and the promise has nowhere to resolve to. On the deb this
   // is the point the system asks for a password.
   appUpdateInstall: (): Promise<boolean> => ipcRenderer.invoke(IPC.appUpdateInstall),
+  // Clone Hero's own play data. `playStatus` is the gate: ask it before drawing anything, since
+  // `available: false` is the ordinary answer for a user with no Clone Hero on this machine and
+  // is a state to render rather than an error.
+  playStatus: (): Promise<PlayDataStatus> => ipcRenderer.invoke(IPC.playStatus),
+  // Summaries for the charts named by Clone Hero checksum (`cloneHeroChecksum` on ChartRecord).
+  // A checksum with no play is omitted from the result rather than returned as zeroes, so the
+  // result can be shorter than the input and is matched up by checksum.
+  playSummaries: (checksums: string[]): Promise<ChartPlaySummary[]> =>
+    ipcRenderer.invoke(IPC.playSummaries, checksums),
+  // Every aggregate a stats view needs, in one call.
+  playStats: (): Promise<PlayStats> => ipcRenderer.invoke(IPC.playStats),
   onDownloadUpdate: subscribe(IPC.evDownloadUpdate),
   onScanProgress: subscribe(IPC.evScanProgress),
   onAssetProgress: subscribe(IPC.evAssetProgress),
   onUpdateProgress: subscribe(IPC.evUpdateProgress),
-  onAppUpdate: subscribe(IPC.evAppUpdate)
+  onAppUpdate: subscribe(IPC.evAppUpdate),
+  // Fires when a NEW play is recorded, never for the repeated reads of an unchanged file. Carries
+  // no payload: re-read whichever of the three calls above you are drawing.
+  onPlayRecorded: subscribe(IPC.evPlayRecorded)
 }
 
 export type EncoreApi = typeof api

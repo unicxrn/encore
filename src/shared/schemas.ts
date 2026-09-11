@@ -109,6 +109,18 @@ export const ChartRecordSchema = z.object({
    * own: a constant-tempo chart shares its map with every other constant-tempo chart.
    */
   tempoMapHash: z.string().nullable().default(null),
+  /**
+   * Clone Hero's own identity for this chart: MD5 over the bytes of `notes.mid`/`notes.chart`
+   * alone, lower-hex. This is the value the game writes as `checksum` into scorestats.json, and
+   * the only key that joins a recorded play to this row.
+   *
+   * Distinct from both hashes above and not derivable from either: `chartHash` is scan-chart's
+   * base64 SHA-256 over the chart file plus seven song.ini keys. See main/catalog/chart-checksum.ts
+   * for the derivation and the install it was verified against.
+   *
+   * Null for a chart with no readable chart file, which simply never matches a play.
+   */
+  cloneHeroChecksum: z.string().nullable().default(null),
   folderHash: z.string(),
   modifiedTime: z.number(),
   // Parsing-logic version that produced this row (see SCAN_VERSION in main/catalog/db.ts).
@@ -135,7 +147,20 @@ export const CatalogFilterSchema = z.object({
   // a chart matches only when EVERY listed asset is missing. 'any' matches when at least one
   // is, which is how Asset Studio asks for "charts that still need work".
   missing: z.array(z.enum(['video', 'background', 'albumArt', 'lyrics'])).optional(),
-  missingMode: z.enum(['all', 'any']).optional()
+  missingMode: z.enum(['all', 'any']).optional(),
+  /**
+   * When true, keep only charts with no recorded play.
+   *
+   * "No recorded play" is not "never played": the play history only covers the time Encore has
+   * been watching Clone Hero's scorestats.json (see shared/play.ts), so a chart the user wore out
+   * last year and has not touched since Encore was installed matches this. A UI offering it
+   * should say so.
+   *
+   * A chart whose `cloneHeroChecksum` is null matches too, since nothing can ever join a play to
+   * it. That is the right answer for the filter's purpose — it is in the "show me what I have not
+   * got round to" pile — and it is also the only answer available.
+   */
+  neverPlayed: z.boolean().optional()
 })
 export type CatalogFilter = z.infer<typeof CatalogFilterSchema>
 

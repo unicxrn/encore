@@ -57,7 +57,8 @@ const COLUMNS = [
   'previewStartTime',
   'proDrums',
   'chartHash',
-  'tempoMapHash'
+  'tempoMapHash',
+  'cloneHeroChecksum'
 ] as const satisfies readonly (keyof ChartRecord)[]
 
 /**
@@ -185,18 +186,51 @@ function missingClause(filter: CatalogFilter, prefix = ''): string {
     : conditions.map((c) => ` AND ${c}`).join('')
 }
 
+/**
+ * `AND` the chart has no play recorded against it (empty string when the filter does not ask).
+ *
+ * A chart with no `cloneHeroChecksum` matches, and must: nothing can ever join a play to it, so
+ * excluding it would hide it from both halves of a played/unplayed split. The NOT EXISTS handles
+ * the other side; written as a correlated subquery rather than a LEFT JOIN so it composes with
+ * both query shapes below without changing either one's column list or its `charts.*` select.
+ *
+ * See CatalogFilterSchema on what "never played" can and cannot mean here: the play table only
+ * covers the time Encore has been watching, not the user's whole history with the game.
+ */
+function neverPlayedClause(filter: CatalogFilter, prefix = ''): string {
+  if (!filter.neverPlayed) return ''
+  return ` AND (${prefix}cloneHeroChecksum IS NULL OR NOT EXISTS (
+		SELECT 1 FROM plays WHERE plays.checksum = ${prefix}cloneHeroChecksum))`
+}
+
+/** Every non-search constraint, in the order they are ANDed onto a WHERE that already has a term. */
+function constraintClause(filter: CatalogFilter, prefix = ''): string {
+  return missingClause(filter, prefix) + neverPlayedClause(filter, prefix)
+}
+
+/**
+ * Whether an FTS query has to join `charts` to answer this filter.
+ *
+ * The FTS table carries only the four indexed text columns, so any constraint reading a real
+ * chart column needs the join. Adding a constraint without adding it here costs a SQL error on
+ * the search path only, which is exactly the path the cheaper count was written to avoid.
+ */
+function needsChartsJoin(filter: CatalogFilter): boolean {
+  return Boolean(filter.missing?.length) || Boolean(filter.neverPlayed)
+}
+
 export function queryCharts(db: CatalogDb, filter: CatalogFilter): ChartRecord[] {
   const fts = ftsQuery(filter.search)
   const rows = fts
     ? db
         .prepare(
           `SELECT charts.* FROM charts_fts JOIN charts ON charts.id = charts_fts.rowid
-				 WHERE charts_fts MATCH ?${missingClause(filter, 'charts.')} ORDER BY rank LIMIT ? OFFSET ?`
+				 WHERE charts_fts MATCH ?${constraintClause(filter, 'charts.')} ORDER BY rank LIMIT ? OFFSET ?`
         )
         .all(fts, filter.limit, filter.offset)
     : db
         .prepare(
-          `SELECT * FROM charts WHERE 1 = 1${missingClause(filter)}
+          `SELECT * FROM charts WHERE 1 = 1${constraintClause(filter)}
 				 ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?`
         )
         .all(filter.limit, filter.offset)
@@ -209,13 +243,13 @@ export function countCharts(db: CatalogDb, filter: CatalogFilter): number {
   const row = fts
     ? db
         .prepare(
-          filter.missing?.length
+          needsChartsJoin(filter)
             ? `SELECT count(*) AS n FROM charts_fts JOIN charts ON charts.id = charts_fts.rowid
-						 WHERE charts_fts MATCH ?${missingClause(filter, 'charts.')}`
+						 WHERE charts_fts MATCH ?${constraintClause(filter, 'charts.')}`
             : `SELECT count(*) AS n FROM charts_fts WHERE charts_fts MATCH ?`
         )
         .get(fts)
-    : db.prepare(`SELECT count(*) AS n FROM charts WHERE 1 = 1${missingClause(filter)}`).get()
+    : db.prepare(`SELECT count(*) AS n FROM charts WHERE 1 = 1${constraintClause(filter)}`).get()
   return (row as { n: number }).n
 }
 

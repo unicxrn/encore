@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
   cpSync,
@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { makeFixtureSng, makeHeaderMetadataSng, makeSng } from '../../../test/helpers/make-sng'
+import { makePng } from '../../../test/helpers/make-png'
 import { createV1Catalog } from '../../../test/helpers/v1-catalog'
 import { ChartRecordSchema, JobProgress } from '../../shared/schemas'
 import { openCatalog, SCAN_VERSION } from './db'
@@ -745,5 +746,91 @@ describe('cancelLibraryScan', () => {
     // The slot must have been released, or every scan from here on is born aborted.
     const summary = await scanLibrary(db, [FIXTURE], () => {}, art())
     expect(summary).toEqual({ found: 1, failed: 0 })
+  })
+})
+
+/**
+ * Clone Hero's checksum reaching the catalog, by both chart routes.
+ *
+ * `chart-checksum.test.ts` proves the derivation is the one the game uses. These prove the scan
+ * actually stores it, which is what a play has to join against, and that it survives the things
+ * that routinely change a chart without changing its identity.
+ */
+describe('cloneHeroChecksum in the catalog', () => {
+  const chartText =
+    '[Song]\n{\n  Resolution = 192\n}\n[SyncTrack]\n{\n  0 = TS 4\n  0 = B 120000\n}\n[ExpertSingle]\n{\n  192 = N 0 0\n}\n'
+  const expected = createHash('md5').update(chartText).digest('hex')
+
+  it('stores the md5 of a folder chart’s chart file', async () => {
+    const root = tmpDir('ck-folder')
+    mkdirSync(join(root, 'Song'), { recursive: true })
+    writeFileSync(join(root, 'Song/notes.chart'), chartText)
+    writeFileSync(join(root, 'Song/song.ini'), '[song]\nname = Song\n')
+    const db = openCatalog(join(tmpDir('ck-folder-db'), 'catalog.db'))
+    await scanLibrary(db, [root], () => {}, art())
+    expect(getChartByPath(db, join(root, 'Song'))?.cloneHeroChecksum).toBe(expected)
+  })
+
+  it('stores the md5 of the DECODED chart file inside a .sng', async () => {
+    // A .sng masks its entries, so the archive's own bytes hash to something else entirely.
+    // Clone Hero hashes what it reads out, which is what the selective read produces.
+    const root = tmpDir('ck-sng')
+    const archive = makeSng(
+      [{ fileName: 'notes.chart', data: new TextEncoder().encode(chartText) }],
+      {
+        name: 'Song'
+      }
+    )
+    writeFileSync(join(root, 'song.sng'), archive)
+    const db = openCatalog(join(tmpDir('ck-sng-db'), 'catalog.db'))
+    await scanLibrary(db, [root], () => {}, art())
+    const chart = getChartByPath(db, join(root, 'song.sng'))
+    expect(chart?.cloneHeroChecksum).toBe(expected)
+    expect(createHash('md5').update(archive).digest('hex')).not.toBe(expected)
+  })
+
+  it('gives a folder chart and a .sng of the same chart the same checksum', async () => {
+    // The same chart in either packaging is one chart to Clone Hero, so a play recorded before
+    // the user converted their library must still match afterwards.
+    const root = tmpDir('ck-both')
+    mkdirSync(join(root, 'Folder Song'), { recursive: true })
+    writeFileSync(join(root, 'Folder Song/notes.chart'), chartText)
+    writeFileSync(
+      join(root, 'packed.sng'),
+      makeSng([{ fileName: 'notes.chart', data: new TextEncoder().encode(chartText) }], {
+        name: 'Song'
+      })
+    )
+    const db = openCatalog(join(tmpDir('ck-both-db'), 'catalog.db'))
+    await scanLibrary(db, [root], () => {}, art())
+    expect(getChartByPath(db, join(root, 'Folder Song'))?.cloneHeroChecksum).toBe(
+      getChartByPath(db, join(root, 'packed.sng'))?.cloneHeroChecksum
+    )
+  })
+
+  it('is unmoved by adding album art to a folder chart', async () => {
+    const root = tmpDir('ck-art')
+    mkdirSync(join(root, 'Song'), { recursive: true })
+    writeFileSync(join(root, 'Song/notes.chart'), chartText)
+    const db = openCatalog(join(tmpDir('ck-art-db'), 'catalog.db'))
+    await scanLibrary(db, [root], () => {}, art())
+    const before = getChartByPath(db, join(root, 'Song'))?.cloneHeroChecksum
+
+    writeFileSync(join(root, 'Song/album.png'), makePng(8, 8))
+    await scanLibrary(db, [root], () => {}, art())
+    const after = getChartByPath(db, join(root, 'Song'))
+    expect(after?.hasAlbumArt).toBe(true)
+    // scan-chart's whole-folder md5 WOULD move here, which is exactly why that value is not
+    // the one stored: every play recorded before the artwork would stop matching.
+    expect(after?.cloneHeroChecksum).toBe(before)
+  })
+
+  it('is null for a chart with no readable chart file rather than the md5 of nothing', async () => {
+    const root = tmpDir('ck-empty')
+    mkdirSync(join(root, 'Song'), { recursive: true })
+    writeFileSync(join(root, 'Song/notes.chart'), '')
+    const db = openCatalog(join(tmpDir('ck-empty-db'), 'catalog.db'))
+    await scanLibrary(db, [root], () => {}, art())
+    expect(getChartByPath(db, join(root, 'Song'))?.cloneHeroChecksum).toBeNull()
   })
 })

@@ -7,6 +7,7 @@ import { ENCORE_TMP_DIR } from '../../shared/constants'
 import { ChartRecordSchema, type JobProgress } from '../../shared/schemas'
 import { isParsedByScanChart, readSngEntriesForScan } from '../downloads/sng-read-selective'
 import { writeAlbumArt } from './art-cache'
+import { cloneHeroChecksum } from './chart-checksum'
 import { SCAN_VERSION, type CatalogDb } from './db'
 import { ALBUM_ART_RE, VIDEO_RE } from './media-re'
 import { deleteChartByPath, getChartFreshness, upsertChart, type ChartFreshness } from './queries'
@@ -383,6 +384,9 @@ export async function scanChart(
         chartType: 'folder',
         ...scannedFields(scanned),
         ...mediaFlags(readdirSync(chart.path)),
+        // Costs nothing: readFolder has already read the chart file's bytes, because
+        // scan-chart parses it. See chart-checksum.ts for why this is not either hash above.
+        cloneHeroChecksum: cloneHeroChecksum(files),
         albumArtMd5: cachedArtMd5(scanned, art),
         folderHash: hash,
         modifiedTime: Date.now(),
@@ -410,6 +414,10 @@ export async function scanChart(
       chartType: 'sng',
       ...scannedFields(scanned),
       ...mediaFlags(entries.map((e) => e.fileName)),
+      // The selective read decrypts the chart file because scan-chart parses it, and those
+      // decoded bytes are what Clone Hero hashes — not the archive on disk. This is the case the
+      // checksum was verified against; see chart-checksum.ts.
+      cloneHeroChecksum: cloneHeroChecksum(entries),
       albumArtMd5: cachedArtMd5(scanned, art),
       folderHash: String(s.mtimeMs),
       modifiedTime: Date.now(),

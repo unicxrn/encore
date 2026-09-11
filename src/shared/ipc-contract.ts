@@ -53,6 +53,15 @@ export const IPC = {
   backupsRestore: 'backups:restore',
   backupsClear: 'backups:clear',
   saveTextFile: 'dialog:save-text',
+  // Clone Hero's own play data, accumulated by watching the file the game rewrites after every
+  // song. `playStatus` is the gate every consumer asks first: for most users there is no Clone
+  // Hero install on this machine and the honest answer is "nothing to show", which is a state to
+  // draw rather than an error (see shared/play.ts). `playSummaries` is the per-chart read a
+  // Library row or detail panel makes, batched because the caller is a whole page of rows.
+  // `playStats` is the one-call aggregate a stats view needs.
+  playStatus: 'play:status',
+  playSummaries: 'play:summaries',
+  playStats: 'play:stats',
   // Asks Chorus whether it holds a different version of the given charts (all of them when the
   // list is empty). Never runs on its own: each request costs API budget against a 50-per-minute
   // limit, so it is always something the user asked for. updatesLast replays the session's
@@ -76,5 +85,10 @@ export const IPC = {
   evUpdateProgress: 'ev:update-progress',
   // Every app-update state change, including the ones nothing invoked: the startup check's
   // result, and the download progress that arrives between the invoke and its resolution.
-  evAppUpdate: 'ev:app-update'
+  evAppUpdate: 'ev:app-update',
+  // A play was just recorded. Carries nothing: the recipient re-reads whichever of the three
+  // reads above it is drawing, and a payload would be a fourth shape of the same data to keep in
+  // step. Fires only for a play that was NEW, never for the re-reads of an unchanged file that
+  // make up almost every filesystem event the play watcher sees.
+  evPlayRecorded: 'ev:play-recorded'
 } as const

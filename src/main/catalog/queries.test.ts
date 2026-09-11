@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { ChartRecord, ChartRecordSchema } from '../../shared/schemas'
+import { CatalogFilter, ChartRecord, ChartRecordSchema } from '../../shared/schemas'
 import { openCatalog, CatalogDb } from './db'
 import {
   upsertChart,
@@ -316,5 +316,78 @@ describe('chartsExistByMeta', () => {
   })
   it('returns an empty array for empty input', () => {
     expect(chartsExistByMeta(db, [])).toEqual([])
+  })
+})
+
+describe('neverPlayed filter', () => {
+  let db: CatalogDb
+  const PLAYED = 'e54e9a0521444e81bd1fed4f3f3a3201'
+  const UNPLAYED = 'aac70b7c7bfc0092a8f7f05a59db5676'
+
+  const withChecksum = (path: string, name: string, checksum: string | null): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      chartType: 'folder',
+      name,
+      artist: 'Tool',
+      cloneHeroChecksum: checksum,
+      folderHash: 'h1',
+      modifiedTime: 1
+    })
+
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('np'), 'catalog.db'))
+    upsertChart(db, withChecksum('/lib/played', 'Lateralus', PLAYED))
+    upsertChart(db, withChecksum('/lib/unplayed', 'Schism', UNPLAYED))
+    // A chart with no readable chart file, so nothing can ever join a play to it.
+    upsertChart(db, withChecksum('/lib/nochecksum', 'Parabola', null))
+    db.prepare(`INSERT INTO plays (checksum, playedAt) VALUES (?, ?)`).run(
+      PLAYED,
+      '2026-09-10T22:23:37.1089500Z'
+    )
+  })
+
+  const names = (filter: Partial<CatalogFilter>): string[] =>
+    queryCharts(db, { search: '', offset: 0, limit: 100, ...filter })
+      .map((c) => c.name!)
+      .sort()
+
+  it('is inert when not asked for', () => {
+    expect(names({})).toEqual(['Lateralus', 'Parabola', 'Schism'])
+    expect(countCharts(db, { search: '', offset: 0, limit: 100 })).toBe(3)
+  })
+
+  it('keeps only charts with no recorded play', () => {
+    expect(names({ neverPlayed: true })).toEqual(['Parabola', 'Schism'])
+    expect(countCharts(db, { search: '', offset: 0, limit: 100, neverPlayed: true })).toBe(2)
+  })
+
+  it('counts a chart with no checksum as never played', () => {
+    // It cannot be joined to a play by any means, so it belongs in the "not got round to" pile.
+    // Excluding it would hide it from both halves of a played/unplayed split.
+    expect(names({ neverPlayed: true })).toContain('Parabola')
+  })
+
+  it('applies on the search path too, where the FTS table needs the charts join', () => {
+    // The count has a cheaper FTS-only branch it must NOT take once this constraint is asked
+    // for: that branch cannot see a chart column and would fail or over-count.
+    expect(names({ search: 'Lateralus', neverPlayed: true })).toEqual([])
+    expect(names({ search: 'Schism', neverPlayed: true })).toEqual(['Schism'])
+    expect(countCharts(db, { search: 'Schism', offset: 0, limit: 100, neverPlayed: true })).toBe(1)
+    expect(countCharts(db, { search: 'Lateralus', offset: 0, limit: 100, neverPlayed: true })).toBe(
+      0
+    )
+  })
+
+  it('combines with the missing-asset constraints', () => {
+    expect(names({ neverPlayed: true, missing: ['video'] })).toEqual(['Parabola', 'Schism'])
+  })
+
+  it('stops matching once a play for that chart is recorded', () => {
+    db.prepare(`INSERT INTO plays (checksum, playedAt) VALUES (?, ?)`).run(
+      UNPLAYED,
+      '2026-09-11T10:00:00.0000000Z'
+    )
+    expect(names({ neverPlayed: true })).toEqual(['Parabola'])
   })
 })

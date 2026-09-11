@@ -19,6 +19,12 @@ import type { ChartIssueRow } from './catalog/issues'
 import type { FixBackup } from './issues/backup-store'
 import type { FixableCode } from './issues/fix'
 import type { AppUpdateStatus } from '../shared/app-update'
+import {
+  PlaySummaryRequestSchema,
+  type ChartPlaySummary,
+  type PlayDataStatus,
+  type PlayStats
+} from '../shared/play'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import { UpdateCheckRequestSchema } from '../shared/updates'
 import type { SidecarName, SidecarStatus } from './sidecars/manager'
@@ -165,6 +171,23 @@ export interface IpcDeps {
     req: { defaultName: string; content: string },
     sender: unknown
   ) => Promise<string | null>
+  /**
+   * Clone Hero's own play data. All three are synchronous reads of a small local table, so none
+   * of them returns a promise and none can fail in a way the caller has to handle.
+   *
+   * `playStatus` is the gate: it answers "is there anything here at all", and its `available:
+   * false` is an ordinary state for most users rather than an error (see shared/play.ts). A
+   * consumer that skips it and calls the other two on a machine with no Clone Hero gets an empty
+   * array and a zeroed stats object, which is correct but indistinguishable from "installed and
+   * never played" — hence the gate.
+   *
+   * `playSummaries` takes checksums rather than chart paths: the checksum is what the play table
+   * is keyed by, it is on every ChartRecord already, and taking paths would make this a second
+   * place that has to know how a chart is identified.
+   */
+  playStatus: () => PlayDataStatus
+  playSummaries: (checksums: string[]) => ChartPlaySummary[]
+  playStats: () => PlayStats
 }
 
 const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
@@ -370,6 +393,16 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   ipcMain.handle(IPC.appUpdateCheck, () => deps.appUpdateCheck())
   ipcMain.handle(IPC.appUpdateDownload, () => deps.appUpdateDownload())
   ipcMain.handle(IPC.appUpdateInstall, () => deps.appUpdateInstall())
+  // No payload on the status or the aggregate: which file is watched and what is in the table
+  // are main's to know, and there is nothing here for the renderer to name.
+  ipcMain.handle(IPC.playStatus, () => deps.playStatus())
+  // The only one of the three that takes anything. Each entry is checked to be a 32-character
+  // hex digest and the list is capped at PLAY_SUMMARY_MAX, so a hostile or buggy caller cannot
+  // turn one page render into an unbounded IN clause.
+  ipcMain.handle(IPC.playSummaries, (_e, raw) =>
+    deps.playSummaries(PlaySummaryRequestSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.playStats, () => deps.playStats())
   ipcMain.handle(IPC.saveTextFile, (e, raw) => {
     const { defaultName, content } = SaveTextFileSchema.parse(raw)
     return deps.saveTextFile({ defaultName, content }, e.sender)
