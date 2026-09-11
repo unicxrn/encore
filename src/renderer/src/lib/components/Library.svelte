@@ -1,13 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { get } from 'svelte/store'
   import { SvelteSet } from 'svelte/reactivity'
-  import type { ChartRecord } from '../../../../shared/schemas'
+  import type {
+    CatalogFacets,
+    CatalogSortField,
+    ChartRecord,
+    SortDirection
+  } from '../../../../shared/schemas'
   import { artUrl } from '../../../../shared/art'
   import { msToTime, instrumentDiff, fallbackChartName } from '../../../../shared/format'
   import { cancelScan, scanProgress, startScan } from '../stores/scan'
   import { encore } from '../stores/bridge'
   import { settings } from '../stores/settings'
   import { refreshVerdicts, verdicts } from '../stores/updates'
+  import {
+    activeFilterCount,
+    clearedFilters,
+    libraryFilter,
+    toCatalogFilter,
+    type LibraryFilterState
+  } from '../stores/library-filter'
   import { libraryGap } from '../empty-state'
   import type { ChartTarget } from './Home.svelte'
 
@@ -27,10 +40,64 @@
    * instead of one per keystroke.
    */
   let libraryTotal = $state(0)
-  let query = $state('')
   let timer: ReturnType<typeof setTimeout> | null = null
 
   const PAGE = 100
+
+  /**
+   * The values the pickers offer, read from the catalog on mount and after every scan.
+   *
+   * Empty until the first answer arrives, and empty for good if the call fails: the pickers then
+   * offer only their "any" option, which leaves the view exactly as capable as it was before
+   * this bar existed. Best effort, like the version badges, because a filter bar that cannot be
+   * populated must not take the list down with it.
+   */
+  let facets = $state<CatalogFacets>({ artists: [], genres: [], charters: [], years: [] })
+
+  /**
+   * The sorts on offer, each with the words for its two directions.
+   *
+   * The direction pair is named per field rather than as one "ascending / descending" toggle:
+   * "ascending" on a length column is a claim the user has to decode, and "shortest first" is
+   * not. Explore's layout toggle makes the same argument for two labelled buttons over one
+   * button whose label names either the state you are in or the one you are going to.
+   */
+  const SORTS: {
+    value: CatalogSortField
+    label: string
+    asc: string
+    desc: string
+  }[] = [
+    { value: 'title', label: 'Title', asc: 'A to Z', desc: 'Z to A' },
+    { value: 'artist', label: 'Artist', asc: 'A to Z', desc: 'Z to A' },
+    { value: 'album', label: 'Album', asc: 'A to Z', desc: 'Z to A' },
+    { value: 'charter', label: 'Charter', asc: 'A to Z', desc: 'Z to A' },
+    { value: 'year', label: 'Year', asc: 'Oldest first', desc: 'Newest first' },
+    { value: 'length', label: 'Length', asc: 'Shortest first', desc: 'Longest first' }
+  ]
+
+  /**
+   * A picker's options, with whatever it is currently set to guaranteed to be among them.
+   *
+   * Two moments need this. On a remount the restored value is set before the facets have been
+   * fetched, and a select whose value matches no option falls back to showing its first one, so
+   * the bar would read "any artist" while filtering by Rush. And a rescan can retire a value the
+   * filter is still set to, which would do the same thing permanently. Keeping the value visible
+   * means the control always says what the list is actually narrowed by.
+   */
+  function withCurrent(values: string[], current: string): string[] {
+    return current && !values.includes(current) ? [current, ...values] : values
+  }
+
+  function withCurrentYear(values: number[], current: string): string[] {
+    return withCurrent(
+      values.map((year) => String(year)),
+      current
+    )
+  }
+
+  const currentSort = $derived(SORTS.find((s) => s.value === $libraryFilter.sort) ?? null)
+  const activeFilters = $derived(activeFilterCount($libraryFilter))
 
   // The art protocol answers 404 when a row's md5 has no cached file (cache cleared, or a
   // sweep raced the catalog row) and 400 when the md5 is malformed; both arrive here as a
@@ -62,6 +129,18 @@
       .filter((cell) => cell.text !== '')
   }
 
+  /**
+   * The row's second line: artist, album and genre, in that order, separated by a middle dot.
+   *
+   * All three are filterable, and a filter on something the row does not show is a filter on
+   * something the user cannot see. They share one line because the row is fixed at two: a third
+   * would make every row taller, and the density of this list is the reason it is usable at two
+   * hundred charts. Empty fields drop out with their separator rather than leaving a gap.
+   */
+  function metaLine(chart: ChartRecord): string {
+    return [chart.artist, chart.album, chart.genre].filter(Boolean).join(' \u00b7 ')
+  }
+
   function coverFor(chart: ChartRecord): string | null {
     return chart.albumArtMd5 && !artFailed.has(chart.albumArtMd5) ? artUrl(chart.albumArtMd5) : null
   }
@@ -77,7 +156,9 @@
 
   async function load(append = false): Promise<void> {
     const offset = append ? charts.length : 0
-    const filter = { search: query, offset, limit: PAGE }
+    // Read straight from the store rather than from a copy: the sort has to reach the query,
+    // because the list is paged and the page the database picks depends on the order it is in.
+    const filter = toCatalogFilter(get(libraryFilter), { offset, limit: PAGE })
     try {
       const [rows, count] = await Promise.all([
         encore().catalogQuery(filter),
@@ -95,10 +176,38 @@
     libraryTotal = await encore().catalogCount({ search: '', offset: 0, limit: PAGE })
   }
 
-  function onSearch(value: string): void {
-    query = value
+  async function loadFacets(): Promise<void> {
+    try {
+      facets = await encore().catalogFacets()
+    } catch {
+      // Best effort: the pickers keep whatever they had, which on a cold start is nothing but
+      // their "any" option. Nothing here is allowed to empty the list.
+    }
+  }
+
+  /**
+   * Apply a change to the filter bar and re-query.
+   *
+   * `debounce` is for the typed controls only. A picker or a toggle is one decision the user has
+   * already made, so waiting 200ms to act on it is just lag; a text box is mid-sentence on every
+   * keystroke. Any change resets the list to page one, which `load()` does by ignoring the rows
+   * already on screen when it is not appending.
+   */
+  function setFilter(patch: Partial<LibraryFilterState>, debounce = false): void {
+    libraryFilter.update((prev) => ({ ...prev, ...patch }))
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void load(), 200)
+    if (debounce) timer = setTimeout(() => void load(), 200)
+    else void load()
+  }
+
+  function clearFilters(): void {
+    libraryFilter.update(clearedFilters)
+    if (timer) clearTimeout(timer)
+    void load()
+  }
+
+  function setDirection(direction: SortDirection): void {
+    setFilter({ direction })
   }
 
   // A scan that has stopped is the only thing that changes the catalog under this view.
@@ -111,6 +220,9 @@
     if (status === 'done' || status === 'canceled') {
       void load()
       void loadLibraryTotal()
+      // A scan is the only thing that can add an artist or a genre the pickers have never
+      // offered, so this is the one place they need refreshing.
+      void loadFacets()
     }
   })
 
@@ -131,6 +243,7 @@
   onMount(() => {
     void load()
     void loadLibraryTotal()
+    void loadFacets()
     // Replayed from main's memory, never checked from here: see stores/updates.ts. On mount is
     // enough, since App recreates this view on every navigation and a check runs from Detail,
     // which is a navigation away.
@@ -143,8 +256,23 @@
 
 <div class="library">
   <div class="bar">
-    <input placeholder="Filter library…" oninput={(e) => onSearch(e.currentTarget.value)} />
-    <span class="count">{total.toLocaleString()} CHARTS</span>
+    <input
+      placeholder="Filter library…"
+      aria-label="Filter library by title, artist, album or charter"
+      value={$libraryFilter.search}
+      oninput={(e) => setFilter({ search: e.currentTarget.value }, true)}
+    />
+    <!-- Matched against the whole catalog, not matched alone: "12 charts" reads as a small
+         library until you notice the filters, and the number the user is checking against is
+         the one they started with. Only while something is narrowing the list, so an unfiltered
+         library does not carry a ratio of itself to itself. -->
+    <span class="count">
+      {#if activeFilters > 0}
+        {total.toLocaleString()} OF {libraryTotal.toLocaleString()} CHARTS
+      {:else}
+        {total.toLocaleString()} CHARTS
+      {/if}
+    </span>
     <button
       class="scan"
       disabled={$scanProgress?.status === 'running'}
@@ -163,6 +291,161 @@
       <button class="cancel" onclick={() => void cancelScan()}>Cancel</button>
     {/if}
   </div>
+  <!-- Every picker is a native <select> holding only values the catalog actually has, so no
+       choice can ever return nothing and Chromium's own type-to-jump handles a long list.
+       Album is the exception and is typed: at 154 distinct albums across 222 charts it is
+       close to unique per chart, so a dropdown of them is a dropdown of the library. -->
+  <div class="filters">
+    <select
+      class="chip"
+      aria-label="Filter by artist"
+      value={$libraryFilter.artist}
+      onchange={(e) => setFilter({ artist: e.currentTarget.value })}
+    >
+      <option value="">Any artist</option>
+      {#each withCurrent(facets.artists, $libraryFilter.artist) as artist (artist)}
+        <option value={artist}>{artist}</option>
+      {/each}
+    </select>
+    <input
+      class="text-filter"
+      placeholder="Album"
+      aria-label="Filter by album"
+      value={$libraryFilter.album}
+      oninput={(e) => setFilter({ album: e.currentTarget.value }, true)}
+    />
+    <select
+      class="chip"
+      aria-label="Filter by genre"
+      value={$libraryFilter.genre}
+      onchange={(e) => setFilter({ genre: e.currentTarget.value })}
+    >
+      <option value="">Any genre</option>
+      {#each withCurrent(facets.genres, $libraryFilter.genre) as genre (genre)}
+        <option value={genre}>{genre}</option>
+      {/each}
+    </select>
+    <select
+      class="chip"
+      aria-label="Filter by charter"
+      value={$libraryFilter.charter}
+      onchange={(e) => setFilter({ charter: e.currentTarget.value })}
+    >
+      <option value="">Any charter</option>
+      {#each withCurrent(facets.charters, $libraryFilter.charter) as charter (charter)}
+        <option value={charter}>{charter}</option>
+      {/each}
+    </select>
+    <!-- Year is a range of pickers rather than one exact year: picking 1994 answers a question
+         almost nobody has, and "the eighties" is the one people ask. -->
+    <span class="range">
+      <span class="range-label">Year</span>
+      <select
+        class="chip narrow"
+        aria-label="Earliest year"
+        value={$libraryFilter.yearMin}
+        onchange={(e) => setFilter({ yearMin: e.currentTarget.value })}
+      >
+        <option value="">Any</option>
+        {#each withCurrentYear(facets.years, $libraryFilter.yearMin) as year (year)}
+          <option value={year}>{year}</option>
+        {/each}
+      </select>
+      <span class="range-to">to</span>
+      <select
+        class="chip narrow"
+        aria-label="Latest year"
+        value={$libraryFilter.yearMax}
+        onchange={(e) => setFilter({ yearMax: e.currentTarget.value })}
+      >
+        <option value="">Any</option>
+        {#each withCurrentYear(facets.years, $libraryFilter.yearMax) as year (year)}
+          <option value={year}>{year}</option>
+        {/each}
+      </select>
+    </span>
+    <!-- Length is typed, never picked: 217 distinct lengths across 220 charts means every
+         entry in a picker would select one chart. Minutes, because that is how anyone says it. -->
+    <span class="range">
+      <span class="range-label">Length</span>
+      <input
+        class="num"
+        type="number"
+        min="0"
+        inputmode="numeric"
+        placeholder="0"
+        aria-label="Shortest length, in minutes"
+        value={$libraryFilter.lengthMinMin}
+        oninput={(e) => setFilter({ lengthMinMin: e.currentTarget.value }, true)}
+      />
+      <span class="range-to">to</span>
+      <input
+        class="num"
+        type="number"
+        min="0"
+        inputmode="numeric"
+        placeholder="any"
+        aria-label="Longest length, in minutes"
+        value={$libraryFilter.lengthMaxMin}
+        oninput={(e) => setFilter({ lengthMaxMin: e.currentTarget.value }, true)}
+      />
+      <span class="range-to">min</span>
+    </span>
+    <!-- "No plays recorded", never "never played". Encore only knows about plays made while it
+         was watching Clone Hero, so a chart worn out last year and untouched since sits in here
+         too. The sentence below the bar says so whenever the filter is on; see shared/play.ts. -->
+    <button
+      class="toggle"
+      aria-pressed={$libraryFilter.neverPlayed}
+      onclick={() => setFilter({ neverPlayed: !$libraryFilter.neverPlayed })}
+    >
+      No plays recorded
+    </button>
+    {#if activeFilters > 0}
+      <button class="clear" onclick={() => clearFilters()}>
+        Clear filters ({activeFilters})
+      </button>
+    {/if}
+    <!-- At the far end, like Explore's layout toggle: a sort is a control about the list, not
+         another thing narrowing it, and Clear leaves it alone for the same reason. -->
+    <span class="sort">
+      <span class="range-label">Sort by</span>
+      <select
+        class="chip"
+        aria-label="Sort by"
+        value={$libraryFilter.sort}
+        onchange={(e) => setFilter({ sort: e.currentTarget.value as CatalogSortField | '' })}
+      >
+        <option value="">Default order</option>
+        {#each SORTS as option (option.value)}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
+      {#if currentSort}
+        <span class="dirs" role="group" aria-label="Sort direction">
+          <button
+            class="dir"
+            aria-pressed={$libraryFilter.direction === 'asc'}
+            onclick={() => setDirection('asc')}>{currentSort.asc}</button
+          >
+          <button
+            class="dir"
+            aria-pressed={$libraryFilter.direction === 'desc'}
+            onclick={() => setDirection('desc')}>{currentSort.desc}</button
+          >
+        </span>
+      {/if}
+    </span>
+  </div>
+  {#if $libraryFilter.neverPlayed}
+    <!-- The caveat the schema's own comment asks any UI offering this filter to state. It is
+         shown beside the list rather than hidden in a tooltip because a user reading a short
+         list has already drawn a conclusion by the time they would hover anything. -->
+    <p class="caveat">
+      Encore counts plays only from when it started watching Clone Hero, so a chart you played
+      before that is in this list too.
+    </p>
+  {/if}
   <!-- One line of scope, so Installed and Asset Studio don't read as the same list twice. -->
   <p class="intro">
     Every chart in your library, as Clone Hero sees it. To fill in missing art, video or lyrics, use
@@ -224,7 +507,7 @@
               </span>
             {/if}
           </span>
-          <span class="artist">{chart.artist ?? ''}</span>
+          <span class="meta">{metaLine(chart)}</span>
         </span>
         <span class="charter">{chart.charter ?? ''}</span>
         <!-- One grid child: the each block stays inside this span so the row's five columns
@@ -234,6 +517,11 @@
             <span class="d">{cell.letter}{cell.text}</span>
           {/each}
         </span>
+        <!-- Year and length sit together at the end, and both are sortable columns: the user
+             has to be able to see the thing they just ordered the list by. An empty cell for a
+             chart with no year, not a placeholder glyph: the length beside it already spends
+             one, and two in a row reads as an error. -->
+        <span class="year mono">{chart.year ?? ''}</span>
         <span class="len mono">{msToTime(chart.songLength)}</span>
       </button>
     {/each}
@@ -251,10 +539,10 @@
           That scan found no charts in your library folder. A chart is a folder holding notes.chart,
           notes.mid or song.ini, or a .sng file.
         {:else}
-          <!-- gap is null, so the catalog holds charts and the filter box is what emptied the
-               list. Deliberately does not quote the query: this branch is only reachable with
-               one typed in, and repeating it adds nothing the input above does not already show. -->
-          No charts match that filter. Clear it to see all {libraryTotal.toLocaleString()} charts.
+          <!-- gap is null, so the catalog holds charts and the filter bar is what emptied the
+               list. Deliberately does not quote the filters back: they are all still on screen
+               above, and Clear filters is the control this sentence is pointing at. -->
+          No charts match these filters. Clear them to see all {libraryTotal.toLocaleString()} charts.
         {/if}
       </p>
     {/if}
@@ -300,6 +588,141 @@
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  /* Wraps rather than scrolls or overflows. There are eleven controls here at the widest, and
+     the window has no minimum width worth designing against, so the row has to be allowed to
+     become two. NOT VERIFIED BY ANY TEST: jsdom computes no layout, so nothing below can tell
+     you where this bar breaks or whether it fits on one line at any given width. */
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px 10px;
+  }
+  /* Explore's filter chip, verbatim, including the drawn caret: `appearance: none` takes the
+     platform's own away, and a select with no caret does not read as one. */
+  .chip {
+    appearance: none;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-size: var(--fs-secondary);
+    font-family: var(--font-ui);
+    color: var(--text-2);
+    padding: 4px 24px 4px 11px;
+    cursor: pointer;
+    max-width: 200px;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none'%3E%3Cpath d='M2 3.5L5 6.5L8 3.5' stroke='%238a8a99' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+  .chip:hover,
+  .chip:focus {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  /* Wide enough for a four-digit year and the caret, and no wider. */
+  .chip.narrow {
+    padding-right: 22px;
+    padding-left: 9px;
+  }
+  /* A range is one control made of parts, so its parts are grouped and its label sits inside
+     the group. Two bare selects with nothing between them are two filters. */
+  .range,
+  .sort {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .range-label,
+  .range-to {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  /* The typed filters. Same box as the search input above, at the chip's height so the row
+     does not step up and down along its length. */
+  .text-filter,
+  .num {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 4px 11px;
+    color: var(--text-1);
+    font-size: var(--fs-secondary);
+    font-family: var(--font-ui);
+    transition: border-color var(--t-fast) var(--ease);
+  }
+  .text-filter {
+    flex: 0 1 150px;
+    min-width: 90px;
+  }
+  .num {
+    width: 62px;
+  }
+  .text-filter:focus,
+  .num:focus {
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  /* Explore's pressed-mode treatment: the lit one is the only lit thing in the row, which is
+     what makes "on" readable at a glance rather than by comparison. */
+  .toggle,
+  .dir,
+  .clear {
+    appearance: none;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-size: var(--fs-secondary);
+    font-family: var(--font-ui);
+    color: var(--text-2);
+    padding: 4px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+  .toggle:hover,
+  .dir:hover,
+  .clear:hover {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .toggle[aria-pressed='true'],
+  .dir[aria-pressed='true'] {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  /* The one control in the bar that undoes the others, so it is the one that is allowed to
+     stand out: accent text on the same quiet box. It appears only when there is something to
+     clear, which is also what makes its presence the signal that the list is narrowed. */
+  .clear {
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+  .dirs {
+    display: flex;
+    gap: 4px;
+  }
+  .sort {
+    margin-left: auto;
+  }
+  /* Same quiet card as the scan outcome lines, one step down: it qualifies a filter rather than
+     reporting on a job. */
+  .caveat {
+    margin: 0 16px 10px;
+    max-width: 72ch;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
     color: var(--text-3);
   }
   /* Primary action of this view: accent gradient, same treatment as Detail's
@@ -367,7 +790,7 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 32px 1fr 140px 110px 56px;
+    grid-template-columns: 32px 1fr 140px 110px 40px 56px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -448,7 +871,9 @@
     color: var(--accent-text);
     white-space: nowrap;
   }
-  .artist {
+  /* Artist, album and genre on one line. Kept to one line and one size: the row is two lines
+     tall and that is what holds it at its current height. */
+  .meta {
     font-size: var(--fs-secondary);
     line-height: var(--lh-tight);
     color: var(--text-2);
@@ -476,6 +901,7 @@
   .diffs .d + .d {
     margin-left: 8px;
   }
+  .year,
   .len {
     text-align: right;
   }

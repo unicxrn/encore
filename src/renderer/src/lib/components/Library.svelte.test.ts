@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import {
@@ -10,6 +10,7 @@ import {
 } from '../../../../shared/schemas'
 import type { ChartVerdict } from '../../../../shared/updates'
 import { scanProgress } from '../stores/scan'
+import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
 import { settings } from '../stores/settings'
 import { verdicts } from '../stores/updates'
 import Library from './Library.svelte'
@@ -80,6 +81,9 @@ afterEach(() => {
   // Same story: the verdict map is module-level so a failed replay can keep the last good one,
   // which is exactly what would let one test's badge show up in the next.
   verdicts.set(new Map())
+  // And the filter bar, which is module-scoped for the same reason Explore's search store is.
+  // Without this, a test that types in the filter box narrows every test after it.
+  libraryFilter.set({ ...EMPTY_LIBRARY_FILTER })
 })
 
 /** `onMount` fetches the list on a microtask, so the first paint has no rows in it. */
@@ -477,5 +481,330 @@ describe('Library: the version badge', () => {
 
     const row = await rowTitled('YYZ')
     expect(badgeOf(row)).toBeNull()
+  })
+})
+
+/**
+ * The filter bar, the sort beside it, and what the row has to show for them to mean anything.
+ *
+ * Every assertion here is about the filter that reaches the catalog, never about what the list
+ * came back with: the query is paged, so what these controls are worth depends entirely on the
+ * database being asked the right question. The ordering itself is proved in
+ * main/catalog/queries.test.ts, against a real SQLite catalog and across page boundaries.
+ *
+ * NOT COVERED, AND NOT COVERABLE HERE: jsdom computes no layout. Nothing below can tell you that
+ * the bar fits on one line, where it wraps, that the year column is wide enough for four digits,
+ * or that the row is still 48.8px tall. Those need the running app.
+ */
+describe('Library: the filter bar', () => {
+  const FACETS = {
+    artists: ['Iron Maiden', 'Rush'],
+    genres: ['Metal', 'Rock'],
+    charters: ['Metalhead', 'Skyline'],
+    years: [1990, 1981]
+  }
+
+  /**
+   * Renders the view and hands back every filter the catalog was queried with, in order.
+   *
+   * Both `catalogQuery` and `catalogCount` are asked the same question, so only the query's is
+   * recorded; `lastFilter` is what the controls under test actually produced.
+   */
+  function renderWithFilters(
+    rows: ChartRecord[] = [],
+    facets: typeof FACETS | null = FACETS
+  ): { filters: CatalogFilter[]; lastFilter: () => CatalogFilter } {
+    const filters: CatalogFilter[] = []
+    vi.stubGlobal('encore', {
+      catalogQuery: (f: CatalogFilter): Promise<ChartRecord[]> => {
+        filters.push(f)
+        return Promise.resolve(rows)
+      },
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      catalogFacets: (): Promise<typeof FACETS> =>
+        facets ? Promise.resolve(facets) : Promise.reject(new Error('ipc gone')),
+      updatesLast: () => Promise.resolve([])
+    })
+    render(Library, { onOpenChart: () => {} })
+    return { filters, lastFilter: () => filters[filters.length - 1] }
+  }
+
+  /** Waits until a filter matching `match` has been sent, and returns it. */
+  async function sentFilter(
+    filters: CatalogFilter[],
+    match: (f: CatalogFilter) => boolean
+  ): Promise<CatalogFilter> {
+    return waitFor(() => {
+      const hit = [...filters].reverse().find(match)
+      if (!hit) throw new Error(`no filter sent matching that predicate`)
+      return hit
+    })
+  }
+
+  const picker = (label: string): HTMLSelectElement =>
+    screen.getByLabelText(label) as HTMLSelectElement
+
+  it('offers only values the catalog holds, plus an "any" option', async () => {
+    renderWithFilters()
+    await waitFor(() =>
+      expect([...picker('Filter by artist').options].map((o) => o.textContent?.trim())).toEqual([
+        'Any artist',
+        'Iron Maiden',
+        'Rush'
+      ])
+    )
+    expect([...picker('Filter by genre').options].map((o) => o.value)).toEqual([
+      '',
+      'Metal',
+      'Rock'
+    ])
+    expect([...picker('Filter by charter').options].map((o) => o.value)).toEqual([
+      '',
+      'Metalhead',
+      'Skyline'
+    ])
+    // Newest first: someone scanning for a decade is reading down from the present.
+    expect([...picker('Earliest year').options].map((o) => o.value)).toEqual(['', '1990', '1981'])
+  })
+
+  // Album has no picker on purpose. At 154 distinct albums across 222 charts, a dropdown of them
+  // is a dropdown of the library.
+  it('gives album a text box rather than a picker', () => {
+    renderWithFilters()
+    expect(screen.getByLabelText('Filter by album').tagName).toBe('INPUT')
+    expect(screen.queryByLabelText('Any album')).toBeNull()
+  })
+
+  it('asks the catalog for the picked artist, genre and charter', async () => {
+    const { filters } = renderWithFilters()
+    await waitFor(() => expect(picker('Filter by artist').options).toHaveLength(3))
+
+    await fireEvent.change(picker('Filter by artist'), { target: { value: 'Rush' } })
+    expect((await sentFilter(filters, (f) => f.artist === 'Rush')).artist).toBe('Rush')
+
+    await fireEvent.change(picker('Filter by genre'), { target: { value: 'Rock' } })
+    const both = await sentFilter(filters, (f) => f.genre === 'Rock')
+    // The picks accumulate rather than replacing each other.
+    expect(both.artist).toBe('Rush')
+  })
+
+  it('sends the album as typed, and the length range in milliseconds', async () => {
+    const { filters } = renderWithFilters()
+    await fireEvent.input(screen.getByLabelText('Filter by album'), {
+      target: { value: 'Moving' }
+    })
+    expect((await sentFilter(filters, (f) => f.album === 'Moving')).album).toBe('Moving')
+
+    await fireEvent.input(screen.getByLabelText('Shortest length, in minutes'), {
+      target: { value: '3' }
+    })
+    await fireEvent.input(screen.getByLabelText('Longest length, in minutes'), {
+      target: { value: '6' }
+    })
+    const ranged = await sentFilter(filters, (f) => f.lengthMaxMs === 360_000)
+    expect(ranged.lengthMinMs).toBe(180_000)
+  })
+
+  it('sends a year range from the two pickers', async () => {
+    const { filters } = renderWithFilters()
+    await waitFor(() => expect(picker('Earliest year').options).toHaveLength(3))
+    await fireEvent.change(picker('Earliest year'), { target: { value: '1981' } })
+    await fireEvent.change(picker('Latest year'), { target: { value: '1990' } })
+    const ranged = await sentFilter(filters, (f) => f.yearMax === 1990)
+    expect(ranged.yearMin).toBe(1981)
+  })
+
+  it('sends a sort and a direction, which is what makes it a sort of the library', async () => {
+    const { filters } = renderWithFilters()
+    await fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'length' } })
+    const sorted = await sentFilter(filters, (f) => f.sort === 'length')
+    // Ascending until the user says otherwise, and the direction only travels with a sort.
+    expect(sorted.direction).toBe('asc')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Longest first' }))
+    expect((await sentFilter(filters, (f) => f.direction === 'desc')).sort).toBe('length')
+  })
+
+  it('names both directions in the words of the column being sorted', async () => {
+    renderWithFilters()
+    // No sort chosen means no direction to state, so the pair is not there to be pressed.
+    expect(screen.queryByRole('group', { name: 'Sort direction' })).toBeNull()
+
+    await fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'year' } })
+    expect(screen.getByRole('button', { name: 'Oldest first' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Newest first' })).toBeTruthy()
+
+    await fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'title' } })
+    expect(screen.getByRole('button', { name: 'A to Z' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Oldest first' })).toBeNull()
+  })
+
+  it('offers every sort the view claims to, in both directions', async () => {
+    renderWithFilters()
+    const options = [...(screen.getByLabelText('Sort by') as HTMLSelectElement).options].map(
+      (o) => o.value
+    )
+    expect(options).toEqual(['', 'title', 'artist', 'album', 'charter', 'year', 'length'])
+  })
+
+  it('offers nothing to clear until something is set, then clears all of it', async () => {
+    const { filters } = renderWithFilters()
+    expect(screen.queryByRole('button', { name: /clear filters/i })).toBeNull()
+
+    await fireEvent.input(screen.getByLabelText('Filter by album'), { target: { value: 'Live' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'No plays recorded' }))
+    const clear = await screen.findByRole('button', { name: /clear filters/i })
+    // The count says how much is about to be undone, so pressing it is not a guess.
+    expect(clear.textContent).toContain('2')
+
+    await fireEvent.click(clear)
+    const cleared = await sentFilter(filters, (f) => f.album === undefined && !f.neverPlayed)
+    expect(cleared.search).toBe('')
+    expect(screen.queryByRole('button', { name: /clear filters/i })).toBeNull()
+  })
+
+  // A sort hides nothing, so clearing the filters must not throw it away as well.
+  it('leaves the sort alone when the filters are cleared', async () => {
+    const { filters } = renderWithFilters()
+    await fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'year' } })
+    await fireEvent.input(screen.getByLabelText('Filter by album'), { target: { value: 'Live' } })
+    await fireEvent.click(await screen.findByRole('button', { name: /clear filters/i }))
+
+    const cleared = await sentFilter(filters, (f) => f.album === undefined && f.sort === 'year')
+    expect(cleared.sort).toBe('year')
+  })
+
+  it('counts the matches against the whole catalog once something is filtering', async () => {
+    vi.stubGlobal('encore', {
+      catalogQuery: (f: CatalogFilter): Promise<ChartRecord[]> =>
+        Promise.resolve(f.album ? [] : []),
+      catalogCount: (f: CatalogFilter): Promise<number> => Promise.resolve(f.album ? 3 : 222),
+      catalogFacets: () => Promise.resolve(FACETS),
+      updatesLast: () => Promise.resolve([])
+    })
+    render(Library, { onOpenChart: () => {} })
+    // Unfiltered, a ratio of the library to itself says nothing.
+    expect(await screen.findByText(/^222 CHARTS$/)).toBeTruthy()
+
+    await fireEvent.input(screen.getByLabelText('Filter by album'), { target: { value: 'Live' } })
+    expect(await screen.findByText(/3 OF 222 CHARTS/)).toBeTruthy()
+  })
+
+  /**
+   * The play history only covers the time Encore has been watching Clone Hero, which the schema's
+   * own comment asks any UI offering this filter to say out loud.
+   */
+  it('does not claim a chart was never played, only that no play was recorded', async () => {
+    renderWithFilters()
+    const toggle = screen.getByRole('button', { name: 'No plays recorded' })
+    expect(toggle.textContent).not.toMatch(/never/i)
+
+    // The caveat is not hidden in a tooltip: a user reading a short list has drawn a conclusion
+    // before they would hover anything.
+    expect(document.querySelector('.caveat')).toBeNull()
+    await fireEvent.click(toggle)
+    const caveat = await waitFor(() => {
+      const found = document.querySelector('.caveat')
+      if (!found) throw new Error('no caveat shown')
+      return found
+    })
+    expect(caveat.textContent).toMatch(/started watching/i)
+  })
+
+  it('asks for neverPlayed only while the toggle is pressed', async () => {
+    const { filters } = renderWithFilters()
+    const toggle = screen.getByRole('button', { name: 'No plays recorded' })
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.neverPlayed === true)
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.neverPlayed === undefined)
+  })
+
+  // Best effort, like the version badges: a bar that cannot be populated must not take the list
+  // down with it, and the typed filters still work without any facets at all.
+  it('still renders the list and the typed filters when the facets call fails', async () => {
+    const { filters } = renderWithFilters([chart({ path: '/library/YYZ', name: 'YYZ' })], null)
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    await waitFor(() => expect(picker('Filter by artist').options).toHaveLength(1))
+
+    await fireEvent.input(screen.getByLabelText('Filter by album'), { target: { value: 'Moving' } })
+    expect((await sentFilter(filters, (f) => f.album === 'Moving')).album).toBe('Moving')
+  })
+
+  /**
+   * Opening a chart destroys this view, the way every navigation does. Explore's search store
+   * solves exactly this and for the same reason; the filter bar is worth more than a query, since
+   * losing it costs the user the set of charts they had narrowed to with nothing saying why.
+   */
+  it('keeps the filters and the sort across a Detail round trip', async () => {
+    const first = renderWithFilters()
+    await waitFor(() => expect(picker('Filter by artist').options).toHaveLength(3))
+    await fireEvent.change(picker('Filter by artist'), { target: { value: 'Rush' } })
+    await fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'year' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Newest first' }))
+    await sentFilter(first.filters, (f) => f.direction === 'desc')
+
+    cleanup()
+    const second = renderWithFilters()
+
+    // The controls come back set, and immediately: the restored value is kept among the options
+    // even before the facets have been fetched, so the bar never reads "any artist" while the
+    // list is narrowed to one.
+    expect(picker('Filter by artist').value).toBe('Rush')
+    expect((screen.getByLabelText('Sort by') as HTMLSelectElement).value).toBe('year')
+    expect(screen.getByRole('button', { name: 'Newest first' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    // ...and the first query after the remount asks for them, rather than for the whole library.
+    const reload = await waitFor(() => {
+      if (!second.filters.length) throw new Error('no query yet')
+      return second.filters[0]
+    })
+    expect(reload).toMatchObject({ artist: 'Rush', sort: 'year', direction: 'desc', offset: 0 })
+  })
+})
+
+/**
+ * A filter on something the row does not show is a filter on something the user cannot see, and
+ * a sort by a column that is not on screen is a list in an order nobody can check.
+ */
+describe('Library: the filterable fields on a row', () => {
+  it('shows the artist, album and genre it filters on, and the year it sorts by', async () => {
+    renderLibrary([
+      chart({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        artist: 'Rush',
+        album: 'Moving Pictures',
+        genre: 'Rock',
+        year: 1981,
+        charter: 'Skyline',
+        songLength: 265_000
+      })
+    ])
+
+    const row = await rowTitled('YYZ')
+    const text = (row.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('Rush · Moving Pictures · Rock')
+    expect(text).toContain('1981')
+    expect(text).toContain('Skyline')
+    // 265 seconds. Length was already on the row before the sort existed; this pins it there.
+    expect(text).toContain('4:25')
+  })
+
+  it('drops an absent field and its separator instead of leaving a gap', async () => {
+    renderLibrary([
+      chart({ path: '/library/x', name: 'Unknown', artist: 'Rush', album: null, genre: null })
+    ])
+
+    const meta = (await rowTitled('Unknown')).querySelector('.meta')
+    expect(meta?.textContent?.trim()).toBe('Rush')
+  })
+
+  // The length cell beside it already spends a placeholder glyph; two in a row reads as an error.
+  it('leaves the year cell empty for a chart with no year', async () => {
+    renderLibrary([chart({ path: '/library/y', name: 'Undated', year: null })])
+
+    expect((await rowTitled('Undated')).querySelector('.year')?.textContent?.trim()).toBe('')
   })
 })
