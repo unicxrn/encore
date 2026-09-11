@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -20,7 +21,7 @@ import { rewriteSngPlan, writeSngAsset } from '../assets/sng-asset'
 import { readRepackPlan } from '../downloads/sng-repack'
 import { listBackups } from './backup-store'
 import { applyFix, type AlbumArtSquarer, type FixAction, type FixContext } from './fix'
-import { assertRestoreHash, restoreBackup } from './restore'
+import { assertRestoreChecksum, assertRestoreHash, restoreBackup } from './restore'
 
 /**
  * Undo, end to end: repair a chart, put it back, and prove the file that came back is the file
@@ -235,6 +236,7 @@ describe('undoing a badVideo conversion', () => {
     expect(rows.map((r) => r.code)).toContain('badVideo')
     const after = await scanChartIssues(fixture.chartPath, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
   })
 
   it("puts a .sng chart's original video back, byte for byte, through a repack", async () => {
@@ -255,6 +257,7 @@ describe('undoing a badVideo conversion', () => {
     expect(entries.get('song.ini')).toEqual(SONG_INI)
     const after = await scanChartIssues(fixture.chartPath, 'sng')
     expect(after.chartHash).toBe(before.chartHash)
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
   })
 
   it('restores the container the chart actually had, not video.mp4 by default', async () => {
@@ -704,7 +707,104 @@ describe("the backup's lifecycle around a fix", () => {
     // `assertRestoreHash`.
     const after = await scanChartIssues(fixture.chartPath, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
+    // Unmoved throughout, since the damage was to song.ini and not to the chart file.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
     expect(new Uint8Array(readFileSync(join(fixture.chartPath, 'song.ini')))).toEqual(SONG_INI)
+  })
+
+  /**
+   * The other damage, and the one Clone Hero's own checksum is the only witness to: a repair
+   * that rewrote the chart file itself.
+   *
+   * This is the case the manifest's `cloneHeroChecksum` exists for. The repair is caught and
+   * refused, the backup survives it, and the undo then has to move a number `applyFix` would
+   * never have let it move — which `assertRestoreChecksum` permits only because the manifest
+   * says this is the value the chart had before.
+   */
+  it('lets a repair that rewrote the chart file be undone, checksum and all', async () => {
+    const fixture = folderChart({ 'video.mp4': VIDEO })
+    const before = await scanChartIssues(fixture.chartPath, 'folder')
+    const damaging: FixAction = {
+      code: 'badVideo',
+      appliesTo: (row) => row.code === 'badVideo',
+      describe: () => 'stub',
+      backup: async (row) => ({
+        code: row.code,
+        actionCode: 'badVideo',
+        describe: 'stub',
+        files: [
+          {
+            fileName: 'notes.chart',
+            content: { kind: 'copyFile', path: join(row.chartPath, 'notes.chart') }
+          }
+        ]
+      }),
+      apply: async (row) => {
+        appendFileSync(join(row.chartPath, 'notes.chart'), '\n')
+      }
+    }
+
+    await expect(applyFix(badVideoRow(fixture.chartPath), fixture.ctx, [damaging])).rejects.toThrow(
+      /changed the checksum Clone Hero records/
+    )
+    const damaged = await scanChartIssues(fixture.chartPath, 'folder')
+    expect(damaged.cloneHeroChecksum).not.toBe(before.cloneHeroChecksum)
+
+    await undo(fixture)
+
+    const after = await scanChartIssues(fixture.chartPath, 'folder')
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.chartHash).toBe(before.chartHash)
+    expect(new Uint8Array(readFileSync(join(fixture.chartPath, 'notes.chart')))).toEqual(NOTES)
+  })
+
+  /**
+   * MUTATION: the restore's checksum assertion, provoked into firing on its own.
+   *
+   * Nothing a restore can do in the ordinary course moves Clone Hero's checksum without moving
+   * `chartHash` with it, so a test that only watched the outcome would pass with
+   * `assertRestoreChecksum` deleted. This makes the two disagree: the manifest keeps the correct
+   * `chartHash`, so the hash assertion is satisfied by the restore landing on it, and carries a
+   * checksum the chart has never had, which only the checksum assertion can see.
+   *
+   * The manifest is edited by hand here because there is no supported way to produce one; that
+   * is the point. Delete the call from `restoreBackup` and this test goes green.
+   */
+  it('MUTATION: refuses an undo whose manifest records a checksum the chart never had', async () => {
+    const fixture = folderChart({ 'video.mp4': VIDEO })
+    const damaging: FixAction = {
+      code: 'badVideo',
+      appliesTo: (row) => row.code === 'badVideo',
+      describe: () => 'stub',
+      backup: async (row) => ({
+        code: row.code,
+        actionCode: 'badVideo',
+        describe: 'stub',
+        files: [
+          {
+            fileName: 'notes.chart',
+            content: { kind: 'copyFile', path: join(row.chartPath, 'notes.chart') }
+          }
+        ]
+      }),
+      apply: async (row) => {
+        appendFileSync(join(row.chartPath, 'notes.chart'), '\n')
+      }
+    }
+    await expect(applyFix(badVideoRow(fixture.chartPath), fixture.ctx, [damaging])).rejects.toThrow(
+      /changed the checksum Clone Hero records/
+    )
+
+    const id = onlyBackupId(fixture.storeDir)
+    const manifest = join(fixture.storeDir, id, 'backup.json')
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { cloneHeroChecksum: string }
+    expect(parsed.cloneHeroChecksum).toMatch(/^[0-9a-f]{32}$/)
+    writeFileSync(
+      manifest,
+      JSON.stringify({ ...parsed, cloneHeroChecksum: 'f'.repeat(32) }, null, 2)
+    )
+
+    await expect(undo(fixture)).rejects.toThrow(/checksum Clone Hero records/)
   })
 
   it('spends the backup: a chart cannot be un-undone', async () => {
@@ -762,6 +862,9 @@ describe("the backup's lifecycle around a fix", () => {
     expect(backup.describe).toMatch(/Re-encode this chart's album art to 512x512/)
     expect(backup.sizeBytes).toBe(SMALL_ART.length)
     expect(backup.chartHash).not.toBeNull()
+    // Both identities are recorded, so an undo of a repair that moved either has something to
+    // land back on. See `assertRestoreChecksum` for why this one may also be absent entirely.
+    expect(backup.cloneHeroChecksum).not.toBeNull()
   })
 
   it("holds the chart's write lock across the whole restore", async () => {
@@ -815,5 +918,37 @@ describe('assertRestoreHash', () => {
   it('treats a chart that never had a hash as unchanged', () => {
     expect(() => assertRestoreHash('/lib/c', null, null, null)).not.toThrow()
     expect(() => assertRestoreHash('/lib/c', 'aaa', null, 'aaa')).toThrow(/none/)
+  })
+})
+
+describe('assertRestoreChecksum', () => {
+  it('accepts a restore that left the checksum alone', () => {
+    expect(() => assertRestoreChecksum('/lib/c', 'aaa', 'aaa', 'aaa')).not.toThrow()
+  })
+
+  it('accepts a restore that put a moved checksum back', () => {
+    expect(() => assertRestoreChecksum('/lib/c', 'bbb', 'aaa', 'aaa')).not.toThrow()
+  })
+
+  it('refuses a checksum the chart has never had, naming all three', () => {
+    expect(() => assertRestoreChecksum('/lib/c', 'bbb', 'ccc', 'aaa')).toThrow(
+      /\/lib\/c.*bbb.*aaa.*ccc/s
+    )
+  })
+
+  it('treats a chart that never had a chart file as unchanged', () => {
+    expect(() => assertRestoreChecksum('/lib/c', null, null, null)).not.toThrow()
+    expect(() => assertRestoreChecksum('/lib/c', 'aaa', null, 'aaa')).toThrow(/none/)
+  })
+
+  /**
+   * A manifest from before Encore recorded this. `undefined` is not `null`: the second target
+   * does not exist rather than being "no chart file", so the rule tightens to "it did not move".
+   */
+  it('gives a manifest with no recorded checksum the stricter rule', () => {
+    expect(() => assertRestoreChecksum('/lib/c', 'aaa', 'aaa', undefined)).not.toThrow()
+    expect(() => assertRestoreChecksum('/lib/c', 'bbb', 'aaa', undefined)).toThrow(/not recorded/)
+    // And `undefined` must not be read as a null the restore could land on.
+    expect(() => assertRestoreChecksum('/lib/c', 'bbb', null, undefined)).toThrow(/not recorded/)
   })
 })

@@ -1,14 +1,17 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makePng } from '../../../test/helpers/make-png'
 import { makeSng } from '../../../test/helpers/make-sng'
 import { pendingChartLockCount } from '../assets/write'
+import { cloneHeroChecksum } from '../catalog/chart-checksum'
 import { scanChartIssues, type ChartIssueRow } from '../catalog/issues'
 import { badVideoAction } from './actions/bad-video'
 import {
   applyFix,
   assertChartHashUnchanged,
+  assertCloneHeroChecksumUnchanged,
   cancelFix,
   describeFix,
   fixableCodes,
@@ -181,14 +184,22 @@ describe('applyFix', () => {
 /**
  * The invariant, and the tests that would fail if it were removed.
  *
- * Clone Hero matches charts between players by `getChartHash`
- * (node_modules/scan-chart/dist/index.js:2572): the chart file's bytes, plus seven ini keys, and
- * only when those differ from their defaults. A fix that changes it makes the user's chart
- * un-playable with anyone who has the original, which they would discover socially, weeks later.
+ * A repaired chart has to stay playable with everyone who has the original, and TWO numbers say
+ * so. `applyFix` asserts both:
  *
- * Two of these tests are mutations: actions that deliberately break the rule, asserting that
- * `applyFix` catches them. Without those, the passing cases below prove only that the fixes
- * happen not to change the hash, not that anything is checking.
+ * - the checksum Clone Hero itself writes into `scorestats.json` after a play, an MD5 over the
+ *   chart file's bytes (catalog/chart-checksum.ts), and
+ * - scan-chart's `getChartHash` (node_modules/scan-chart/dist/index.js:2572): those same bytes
+ *   plus seven ini keys, and only when those differ from their defaults.
+ *
+ * The two mutations below are what make this a test rather than a reading of an unchanging
+ * number. Each provokes a failure only ONE of the assertions can see, so deleting either from
+ * `applyFix` turns a test here red:
+ *
+ * - editing the chart file moves both, and the checksum assertion runs first, so it is the one
+ *   that reports; delete it and the message is the hash's instead.
+ * - editing `pro_drums` moves only the hash, because the chart file is untouched; delete the
+ *   hash assertion and nothing throws at all.
  */
 describe('the multiplayer hash invariant', () => {
   it("leaves a folder chart's hash byte-identical across a real fix", async () => {
@@ -200,6 +211,8 @@ describe('the multiplayer hash invariant', () => {
     const after = await scanChartIssues(chart, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it("leaves a .sng chart's hash byte-identical across a full repack", async () => {
@@ -211,10 +224,15 @@ describe('the multiplayer hash invariant', () => {
     const after = await scanChartIssues(chart, 'sng')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    // The repack rewrites the archive around the chart file; the DECODED entry is what this
+    // covers, and it is the thing that has to survive that.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
-  it('MUTATION: catches an action that also edits the chart file', async () => {
+  it("MUTATION: catches an action that also edits the chart file, in the game's own terms", async () => {
     const chart = folderChart()
+    const before = await scanChartIssues(chart, 'folder')
     const mutating = stubAction({
       apply: async (row) => {
         // One byte, in a comment-free chart file: the smallest edit that is still an edit.
@@ -223,14 +241,48 @@ describe('the multiplayer hash invariant', () => {
     })
 
     await expect(applyFix(badVideoRow(chart), ctxFor(chart), [mutating])).rejects.toThrow(
-      /changed the chart hash/
+      /changed the checksum Clone Hero records/
     )
     // The edit really happened: this test would pass vacuously if the action were a no-op.
     expect(readFileSync(join(chart, 'notes.chart')).length).toBe(NOTES.length + 1)
+    // And it really moved the number the game writes down, rather than only tripping a guard.
+    const after = await scanChartIssues(chart, 'folder')
+    expect(after.cloneHeroChecksum).not.toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
+  })
+
+  it('MUTATION: catches an action that edits the chart file inside a .sng', async () => {
+    const chart = sngChart()
+    const before = await scanChartIssues(chart, 'sng')
+    const mutating = stubAction({
+      // Rebuilt rather than patched in place: a `.sng` entry is XOR-masked by its own offset, so
+      // appending a byte to the archive would corrupt it rather than edit the chart.
+      apply: async (row) => {
+        writeFileSync(
+          row.chartPath,
+          makeSng(
+            [
+              { fileName: 'notes.chart', data: bytes(`${Buffer.from(NOTES).toString()}\n`) },
+              { fileName: 'song.ini', data: SONG_INI },
+              { fileName: 'video.mp4', data: VIDEO }
+            ],
+            { name: 'Fixture', artist: 'Tester', charter: 'Tester' }
+          )
+        )
+      }
+    })
+
+    await expect(applyFix(badVideoRow(chart), ctxFor(chart), [mutating])).rejects.toThrow(
+      /changed the checksum Clone Hero records/
+    )
+    const after = await scanChartIssues(chart, 'sng')
+    expect(after.cloneHeroChecksum).not.toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it('MUTATION: catches an action that changes one of the seven hashed ini keys', async () => {
     const chart = folderChart()
+    const before = await scanChartIssues(chart, 'folder')
     const mutating = stubAction({
       apply: async (row) => {
         // pro_drums is hashed; this is the failure mode Task 5's song.ini editing walks straight
@@ -245,6 +297,11 @@ describe('the multiplayer hash invariant', () => {
     await expect(applyFix(badVideoRow(chart), ctxFor(chart), [mutating])).rejects.toThrow(
       /changed the chart hash/
     )
+    // The discriminating half: Clone Hero's checksum did NOT move, because the chart file did
+    // not. This is the failure only `chartHash` can see, and the reason it stays.
+    const after = await scanChartIssues(chart, 'folder')
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.chartHash).not.toBe(before.chartHash)
   })
 
   it('allows an action that changes an ini key the hash does not cover', async () => {
@@ -275,6 +332,71 @@ describe('the multiplayer hash invariant', () => {
     expect(() => assertChartHashUnchanged('/lib/chart', null, null)).not.toThrow()
     expect(() => assertChartHashUnchanged('/lib/chart', 'aaa', null)).toThrow(/none/)
     expect(() => assertChartHashUnchanged('/lib/chart', null, 'aaa')).toThrow(/none/)
+  })
+
+  /**
+   * The unknown-checksum decision, pinned.
+   *
+   * There is no "we do not know this chart's checksum" state to tolerate, because the value is
+   * never read off a catalog row: `scanChartIssues` recomputes it from the bytes the re-scan has
+   * just decoded, so an unscanned chart, a stale row and a row from before the column existed
+   * are all irrelevant. The one null left is "this chart has no parseable notes.mid/.chart",
+   * which is tolerated on both sides and refused on one, exactly as the hash's null is.
+   */
+  it('tolerates a chart with no chart file, but not one that gained or lost one', () => {
+    expect(() => assertCloneHeroChecksumUnchanged('/lib/chart', null, null)).not.toThrow()
+    expect(() => assertCloneHeroChecksumUnchanged('/lib/chart', 'aaa', null)).toThrow(/none/)
+    expect(() => assertCloneHeroChecksumUnchanged('/lib/chart', null, 'aaa')).toThrow(/none/)
+  })
+
+  it("names the chart and both checksums when Clone Hero's own number moves", () => {
+    expect(() => assertCloneHeroChecksumUnchanged('/lib/chart.sng', 'aaa', 'bbb')).toThrow(
+      /\/lib\/chart\.sng.*aaa.*bbb/s
+    )
+  })
+
+  /**
+   * A chart with no chart file is repaired rather than refused, which is the other half of the
+   * decision above and the half that would be obnoxious to get wrong: a folder holding a stray
+   * `desktop.ini` and no notes has a real problem Encore can fix, and a guard that blocked it
+   * for having no identity to preserve would be protecting nothing.
+   */
+  it('repairs a chart that has no chart file at all', async () => {
+    const chart = join(scratch(), 'Tester - No Notes')
+    mkdirSync(chart, { recursive: true })
+    writeFileSync(join(chart, 'song.ini'), SONG_INI)
+    writeFileSync(join(chart, 'video.mp4'), VIDEO)
+
+    const before = await scanChartIssues(chart, 'folder')
+    expect(before.cloneHeroChecksum).toBeNull()
+    expect(before.chartHash).toBeNull()
+
+    await expect(applyFix(badVideoRow(chart), ctxFor(chart))).resolves.toBeDefined()
+    expect(existsSync(join(chart, 'video.webm'))).toBe(true)
+  })
+
+  /**
+   * The guard and the play-join must be the same number, or the thing verified against Clone
+   * Hero is not the thing a repair is held to.
+   *
+   * `catalog/scanner.ts` computes the column from the entries a library scan produced;
+   * `scanChartIssues` computes it from the entries a repair's re-scan produced. Two readers, two
+   * code paths, one value — including across the folder/`.sng` divide, where the `.sng` side has
+   * to decode an XOR-masked archive entry to get there.
+   */
+  it('computes the same checksum a library scan stores, for both chart shapes', async () => {
+    const folder = folderChart()
+    const packed = sngChart()
+
+    const fromFolder = await scanChartIssues(folder, 'folder')
+    const fromSng = await scanChartIssues(packed, 'sng')
+
+    // Both fixtures hold the same notes.chart bytes, so both must land on its md5.
+    const expected = createHash('md5').update(NOTES).digest('hex')
+    expect(fromFolder.cloneHeroChecksum).toBe(expected)
+    expect(fromSng.cloneHeroChecksum).toBe(expected)
+    // And on the value the production scanner puts in the catalog, off its own entry list.
+    expect(cloneHeroChecksum([{ fileName: 'notes.chart', data: NOTES }])).toBe(expected)
   })
 })
 

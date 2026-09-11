@@ -34,8 +34,10 @@ import { withChartLock } from './write'
  * about. A repair promises to leave the multiplayer hash alone and is checked on it. Two of these
  * writers never touch hashed content, and the third, lyrics, rewrites the chart file on purpose, so
  * the hash moving is the feature rather than a failure. What is asserted instead is the restore's
- * rule (`assertRestoreHash`): an undo lands on the hash the chart had a moment ago or on the one
- * recorded here, and for lyrics only the second is possible.
+ * rule (`assertRestoreHash` and `assertRestoreChecksum`): an undo lands on the identity the chart
+ * had a moment ago or on the one recorded here, and for lyrics only the second is possible — for
+ * both numbers, since injecting lyrics rewrites the chart file and so moves Clone Hero's checksum
+ * too.
  */
 
 /** The noun the undo list shows for each writer. The copy pass owns words; these are the nouns. */
@@ -92,7 +94,7 @@ export async function writeWithUndo<T>(
             {
               chartPath: chart.chartPath,
               chartType: chart.chartType,
-              chartHash: await chartHashBeforeWrite(chart)
+              ...(await chartIdentityBeforeWrite(chart))
             },
             {
               code: kind,
@@ -134,21 +136,28 @@ export async function writeWithUndo<T>(
 }
 
 /**
- * The chart's multiplayer hash as it stands, or null when scan-chart cannot produce one.
+ * Both of the chart's identities as they stand: scan-chart's `chartHash` and the checksum Clone
+ * Hero itself records. Either is null when the scan cannot produce one.
  *
- * A scan that throws is recorded as "no hash" rather than failing the write. A chart whose
- * chart file scan-chart cannot read has no gameplay identity to preserve, and it could take a
- * cover or a background before this existed, so a backup must not be the thing that stops it.
- * The restore's rule then reduces to "the hash did not move", which is still the right rule for
- * a write that touched nothing hashed. Lyrics parses the chart text itself and fails on its own
+ * A scan that throws is recorded as "neither" rather than failing the write. A chart whose chart
+ * file scan-chart cannot read has no gameplay identity to preserve, and it could take a cover or
+ * a background before this existed, so a backup must not be the thing that stops it. The
+ * restore's rule then reduces to "neither moved", which is still the right rule for a write that
+ * touched nothing either one covers. Lyrics parses the chart text itself and fails on its own
  * terms.
+ *
+ * The two are read from ONE scan rather than two, so they always describe the same reading of
+ * the chart, which is the same reason `scanChartIssues` returns them together.
  */
-async function chartHashBeforeWrite(chart: UndoableChart): Promise<string | null> {
+async function chartIdentityBeforeWrite(
+  chart: UndoableChart
+): Promise<{ chartHash: string | null; cloneHeroChecksum: string | null }> {
   try {
-    return (await scanChartIssues(chart.chartPath, chart.chartType)).chartHash
+    const scan = await scanChartIssues(chart.chartPath, chart.chartType)
+    return { chartHash: scan.chartHash, cloneHeroChecksum: scan.cloneHeroChecksum }
   } catch (err) {
     console.warn(`Could not hash ${chart.chartPath} before writing to it:`, err)
-    return null
+    return { chartHash: null, cloneHeroChecksum: null }
   }
 }
 

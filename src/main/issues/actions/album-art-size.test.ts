@@ -145,6 +145,9 @@ describe('albumArtSize on a folder chart', () => {
     const after = await scanChartIssues(chart, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it('re-encodes the cover scan-chart reads, not whichever it finds first', async () => {
@@ -201,6 +204,9 @@ describe('albumArtSize on a .sng chart', () => {
     const rescan = await scanChartIssues(chart, 'sng')
     expect(rescan.chartHash).toBe(before.chartHash)
     expect(rescan.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(rescan.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(rescan.cloneHeroChecksum).not.toBeNull()
   })
 
   it('replaces the entry rather than adding a second one', async () => {

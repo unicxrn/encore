@@ -183,6 +183,9 @@ describe('stray .ini removal on a folder chart', () => {
     const after = await scanChartIssues(chart, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it('MUTATION: deleting the file scan-chart reads really does move the hash', async () => {
@@ -251,6 +254,9 @@ describe('stray .ini removal on a folder chart', () => {
     const after = await scanChartIssues(chart, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it('refuses a multipleIniFiles row on a chart that now has only one', async () => {
@@ -278,6 +284,9 @@ describe('stray .ini removal on a .sng chart', () => {
     const rescan = await scanChartIssues(chart, 'sng')
     expect(rescan.chartHash).toBe(before.chartHash)
     expect(rescan.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(rescan.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(rescan.cloneHeroChecksum).not.toBeNull()
   })
 
   it('never targets the song.ini the reader synthesised, because it is not a file', async () => {

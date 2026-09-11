@@ -62,7 +62,7 @@ async function commitOne(
 ): Promise<FixBackup> {
   const pending = await beginBackup(
     storeDir,
-    { chartPath, chartType: 'folder', chartHash: 'abc123' },
+    { chartPath, chartType: 'folder', chartHash: 'abc123', cloneHeroChecksum: null },
     plan(over)
   )
   return await pending.commit()
@@ -102,7 +102,7 @@ describe('beginBackup', () => {
 
     const pending = await beginBackup(
       store,
-      { chartPath: chart, chartType: 'folder', chartHash: 'abc123' },
+      { chartPath: chart, chartType: 'folder', chartHash: 'abc123', cloneHeroChecksum: null },
       plan()
     )
 
@@ -131,7 +131,7 @@ describe('beginBackup', () => {
 
     const pending = await beginBackup(
       store,
-      { chartPath: root, chartType: 'folder', chartHash: null },
+      { chartPath: root, chartType: 'folder', chartHash: null, cloneHeroChecksum: null },
       plan({
         files: [
           { fileName: 'video.mp4', content: { kind: 'copyFile', path: loose } },
@@ -155,7 +155,7 @@ describe('beginBackup', () => {
     await expect(
       beginBackup(
         store,
-        { chartPath: chart, chartType: 'folder', chartHash: null },
+        { chartPath: chart, chartType: 'folder', chartHash: null, cloneHeroChecksum: null },
         plan({
           files: [{ fileName: 'gone.png', content: { kind: 'copyFile', path: '/nope/gone' } }]
         })
@@ -176,7 +176,7 @@ describe('beginBackup', () => {
     await expect(
       beginBackup(
         store,
-        { chartPath: archive, chartType: 'sng', chartHash: null },
+        { chartPath: archive, chartType: 'sng', chartHash: null, cloneHeroChecksum: null },
         plan({
           files: [{ fileName: 'video.mp4', content: { kind: 'sngEntry', sngPath: archive } }]
         })
@@ -189,7 +189,7 @@ describe('beginBackup', () => {
     const chart = folderChart()
     const pending = await beginBackup(
       store,
-      { chartPath: chart, chartType: 'folder', chartHash: null },
+      { chartPath: chart, chartType: 'folder', chartHash: null, cloneHeroChecksum: null },
       plan()
     )
 
@@ -285,7 +285,7 @@ describe('listing, sizing and clearing the store', () => {
     // What `downloadArt` records: the cover it superseded, and the name it created.
     const pending = await beginBackup(
       store,
-      { chartPath: chart, chartType: 'folder', chartHash: 'abc123' },
+      { chartPath: chart, chartType: 'folder', chartHash: 'abc123', cloneHeroChecksum: null },
       {
         code: 'art',
         actionCode: 'art',

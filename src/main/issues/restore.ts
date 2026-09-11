@@ -26,7 +26,8 @@ import { hasIniExtension, iniFileScanChartReads, readChartIniFiles } from './cha
  * There is deliberately no second write path here. The bytes go back through `writeChartFile`'s own
  * machinery: `withChartLock`, `writeChartAssetFromFile` for a folder chart, and `rewriteSngPlan`
  * (and so `repackSng` + `verifyRepack` + the atomic rename) for a `.sng`. The result is re-scanned
- * and refused unless the chart's `chartHash` is one of exactly two values. Not one: `applyFix` may
+ * and refused unless each of the chart's two identities — scan-chart's `chartHash` and the
+ * checksum Clone Hero records — is one of exactly two values. Not one: `applyFix` may
  * only leave the hash alone, but an undo of a repair that DID move it has to be allowed to move it
  * back, and that is the case the undo matters most for. `assertRestoreHash` spells out both. An
  * undo that could break multiplayer would be a worse bug than the irreversibility it exists to
@@ -277,8 +278,10 @@ function assertStagingSpace(chartPath: string, incomingBytes: number): void {
  *    same reason `applyFix` reads its hash there: a check against a chart another writer has
  *    already changed blames this restore for their edit.
  * 4. Write, through the ordinary chart writers.
- * 5. Re-scan and refuse unless the chart's identity is one of the two `assertRestoreHash`
- *    accepts: unchanged, or back to what it was before the repair.
+ * 5. Re-scan and refuse unless BOTH of the chart's identities are one of the two values their
+ *    assertions accept: unchanged, or back to what it was before the repair. `assertRestoreHash`
+ *    covers scan-chart's `chartHash`; `assertRestoreChecksum` covers the checksum Clone Hero
+ *    itself records.
  *
  * On success the backup is deleted: the chart is back to where it started, so the bytes have done
  * their job, and the guard they carry no longer describes the chart anyway.
@@ -336,6 +339,12 @@ export async function restoreBackup(ctx: RestoreContext, id: string): Promise<Re
 
     const after = await scanChartIssues(chartPath, chartType)
     assertRestoreHash(chartPath, before.chartHash, after.chartHash, backup.chartHash)
+    assertRestoreChecksum(
+      chartPath,
+      before.cloneHeroChecksum,
+      after.cloneHeroChecksum,
+      backup.cloneHeroChecksum
+    )
     return after.rows
   })
 
@@ -515,6 +524,37 @@ export function assertRestoreHash(
       `had (it was ${before ?? 'none'} a moment ago and ${backedUp ?? 'none'} before the fix, ` +
       `and is now ${after ?? 'none'}). The chart has NOT been put back. This is a bug in Encore, ` +
       `not something you did.`
+  )
+}
+
+/**
+ * The same two-outcome rule, against the number Clone Hero writes down rather than scan-chart's.
+ *
+ * `assertRestoreHash` says why two outcomes are correct rather than one, and the reasoning is
+ * identical here. What is different is the third state `backedUp` can be in.
+ *
+ * A manifest written before M17 carries no checksum at all, which arrives as `undefined`. That
+ * is NOT the same as `null`: `null` means the chart genuinely had no chart file before the
+ * repair and is a legitimate value to land back on, while `undefined` means Encore never wrote
+ * the number down. So an old manifest gets the stricter rule, "the checksum did not move", and
+ * that is the right rule for it: those repairs were already refused unless `chartHash` held
+ * still, `getChartHash` hashes the chart file's bytes, and a chart file that did not move cannot
+ * have moved this. There is nothing for such a restore to put back.
+ */
+export function assertRestoreChecksum(
+  chartPath: string,
+  before: string | null,
+  after: string | null,
+  backedUp: string | null | undefined
+): void {
+  if (after === before) return
+  if (backedUp !== undefined && after === backedUp) return
+  throw new Error(
+    `Undo aborted: restoring changed the checksum Clone Hero records for ${chartPath} to ` +
+      `something it has never had (it was ${before ?? 'none'} a moment ago and ` +
+      `${backedUp === undefined ? 'not recorded' : (backedUp ?? 'none')} before the fix, and is ` +
+      `now ${after ?? 'none'}). The chart has NOT been put back. This is a bug in Encore, not ` +
+      `something you did.`
   )
 }
 

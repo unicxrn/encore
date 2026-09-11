@@ -193,6 +193,19 @@ export interface FixBackup {
    * has to land back on, and the only proof that it did.
    */
   chartHash: string | null
+  /**
+   * The checksum Clone Hero itself records for the chart, BEFORE the repair.
+   *
+   * Kept for the same reason `chartHash` is, and used by the same rule: a restore may land on
+   * the value the chart has now or on this one, and nothing else (`assertRestoreChecksum`).
+   *
+   * Optional, and it has to be: every manifest written before M17 lacks the field, and a
+   * validator that demanded it would strand every undo already sitting in the user's store. The
+   * three states are distinguished deliberately at the call site — a string is a recorded value,
+   * `null` is "this chart had no chart file", and `undefined` is "written before Encore recorded
+   * this", which the restore treats as no second target rather than as a null one.
+   */
+  cloneHeroChecksum?: string | null
   files: BackupFile[]
   /** Names the repair CREATED, which the restore removes. Empty for an in-place replacement. */
   remove: string[]
@@ -361,7 +374,12 @@ export async function hashFile(path: string): Promise<string> {
  */
 export async function beginBackup(
   storeDir: string,
-  chart: { chartPath: string; chartType: 'folder' | 'sng'; chartHash: string | null },
+  chart: {
+    chartPath: string
+    chartType: 'folder' | 'sng'
+    chartHash: string | null
+    cloneHeroChecksum: string | null
+  },
   plan: BackupPlan
 ): Promise<PendingBackup> {
   const sizes = await Promise.all(
@@ -426,6 +444,7 @@ export async function beginBackup(
         actionCode: plan.actionCode,
         describe: plan.describe,
         chartHash: chart.chartHash,
+        cloneHeroChecksum: chart.cloneHeroChecksum,
         files,
         remove,
         metadata,
@@ -608,6 +627,10 @@ function isFixBackup(value: unknown): value is FixBackup {
     typeof backup.actionCode === 'string' &&
     typeof backup.describe === 'string' &&
     (typeof backup.chartHash === 'string' || backup.chartHash === null) &&
+    // Tolerated when absent, unlike every other field here: see `FixBackup.cloneHeroChecksum`.
+    (backup.cloneHeroChecksum === undefined ||
+      typeof backup.cloneHeroChecksum === 'string' ||
+      backup.cloneHeroChecksum === null) &&
     Array.isArray(backup.files) &&
     backup.files.every(
       (file) =>

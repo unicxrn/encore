@@ -27,10 +27,29 @@ import { strayIniAction } from './actions/stray-ini'
  * byte. That is Chorus's dedupe identity, not Clone Hero's gameplay identity, and changing it is
  * expected and harmless for multiplayer.
  *
- * The honest limit: this is scan-chart's MODEL of Clone Hero's hash. It is the best available
- * reference and the whole Chorus ecosystem runs on it, but it has not been confirmed against the
- * in-game checksum. That confirmation is a QA step on the first converted chart, not something
- * this file can assert.
+ * Since M17 a SECOND identity is asserted beside it, and this is the one Clone Hero writes down
+ * itself. After every play the game appends the chart's `checksum` to `~/.clonehero/scorestats.json`,
+ * and that value is an MD5 over the chart file's bytes (the DECODED archive entry, for a `.sng`).
+ * `cloneHeroChecksum` reproduces it, and a repair must leave it alone as well.
+ *
+ * What each of the two is for, because they are not symmetric:
+ *
+ * - `chartHash` covers the seven `song.ini` gameplay keys that the chart-file MD5 does not. The
+ *   `strayIni` repair can change which `.ini` scan-chart reads, and so those keys, without going
+ *   near the chart file. Only `chartHash` sees that, and it is why it stays.
+ * - `cloneHeroChecksum` covers nothing `chartHash` does not: `getChartHash` hashes the chart
+ *   file's bytes verbatim, so a chart file that moved moves both. What it adds is that it is
+ *   derived by this codebase rather than read out of scan-chart, so the two cannot fail the same
+ *   way, and — the point — that it is a number the game has been observed to record. The claim
+ *   "a repair cannot break multiplayer" no longer rests only on scan-chart's model of Clone
+ *   Hero's identity; it rests on a value Clone Hero wrote.
+ *
+ * The honest limit, restated rather than removed: what has been verified is that the digest
+ * Clone Hero recorded for a played chart equals the one `cloneHeroChecksum` computes for it
+ * (catalog/chart-checksum.test.ts, against the owner's install). That is one chart, because
+ * `scorestats.json` holds one play. It establishes the derivation; it does not establish that
+ * Clone Hero's multiplayer matching uses this digest and nothing else, and no repair asserted
+ * here has been played online against an unrepaired copy.
  */
 
 /** Where a fix has got to, for the renderer's progress row. `percent` is null when unknown. */
@@ -243,7 +262,8 @@ export async function fixableCodes(
  * 5. Re-scan that one chart, not the library. The per-chart scan is what the UI needs anyway,
  *    and re-running the 3.4 s library report after each of six conversions is 20 s spent learning
  *    what this scan already said.
- * 6. Refuse unless `chartHash` is identical.
+ * 6. Refuse unless BOTH identities are identical: the checksum Clone Hero records for the chart,
+ *    and scan-chart's `chartHash`.
  *
  * **There is still no rollback, deliberately, and an undo is not one.** A rollback would be code
  * that only ever runs in the situation we have already established we do not understand, namely
@@ -282,7 +302,12 @@ export async function applyFix(
         ? null
         : await beginBackup(
             ctx.backupDir,
-            { chartPath: row.chartPath, chartType, chartHash: before.chartHash },
+            {
+              chartPath: row.chartPath,
+              chartType,
+              chartHash: before.chartHash,
+              cloneHeroChecksum: before.cloneHeroChecksum
+            },
             await action.backup(row, ctx)
           )
 
@@ -315,6 +340,17 @@ export async function applyFix(
     }
 
     const after = await scanChartIssues(row.chartPath, chartType)
+    // Clone Hero's own number first, scan-chart's model second. Not arbitrary: the checksum is
+    // the chart file's bytes, the hash is the chart file's bytes PLUS seven ini keys, so between
+    // them they partition the failures. A repair that touched the chart file is reported in the
+    // game's own terms; one that only moved an ini key falls through to the hash, which is the
+    // only one of the two that can see it. Each assertion therefore has a failure only it
+    // catches, and a mutation test that fails if it is deleted.
+    assertCloneHeroChecksumUnchanged(
+      row.chartPath,
+      before.cloneHeroChecksum,
+      after.cloneHeroChecksum
+    )
     assertChartHashUnchanged(row.chartPath, before.chartHash, after.chartHash)
     return after.rows
   })
@@ -391,5 +427,49 @@ export function assertChartHashUnchanged(
     `Fix aborted: it changed the chart hash of ${chartPath}, which would break multiplayer ` +
       `with anyone who has the original (was ${before ?? 'none'}, now ${after ?? 'none'}). ` +
       `The chart has NOT been restored. This is a bug in the fix, not something you did.`
+  )
+}
+
+/**
+ * The same invariant, against the number Clone Hero writes down rather than scan-chart's.
+ *
+ * ## Why "unknown" is not a case here
+ *
+ * The value compared is computed fresh, on both sides, from the bytes the re-scan just read
+ * (`scanChartIssues`). The catalog's `cloneHeroChecksum` column is never consulted, and that is
+ * the deliberate choice: a chart the user has never scanned, or one scanned before the column
+ * existed, has a null or absent row, and a guard that read the row would skip itself on exactly
+ * the charts nobody has looked at. Reading the disk instead means the check always runs, and
+ * costs nothing, because the repair's re-scan has already decoded the chart file.
+ *
+ * So the only way this is null is that the chart carries no parseable `notes.mid`/`notes.chart`
+ * at all. That is tolerated on BOTH sides and refused on one, exactly as `assertChartHashUnchanged`
+ * treats its own null:
+ *
+ * - null before and after: a chart with no chart file has no identity to preserve. It already
+ *   carries a `noChart` issue row saying so, and blocking its repairs would mean refusing to
+ *   delete a stray `.ini` from a chart whose problem is that it has no notes.
+ * - null on one side only: the repair either destroyed the chart file or produced one. Both are
+ *   the failure this exists to catch, and both fail.
+ *
+ * ## What this catches that `assertChartHashUnchanged` would not have
+ *
+ * Nothing, in content: `getChartHash` hashes the chart file's bytes verbatim, so every edit this
+ * sees moves that too. What it changes is which number the user is told about and where it came
+ * from. It runs first (see `applyFix`) so that an edit to the chart file is refused in the
+ * game's own terms rather than scan-chart's, and it is computed by this codebase from the
+ * entries rather than read out of scan-chart, so a defect in one derivation cannot pass both.
+ */
+export function assertCloneHeroChecksumUnchanged(
+  chartPath: string,
+  before: string | null,
+  after: string | null
+): void {
+  if (before === after) return
+  throw new Error(
+    `Fix aborted: it changed the checksum Clone Hero records for ${chartPath}, which would ` +
+      `break multiplayer with anyone who has the original (was ${before ?? 'none'}, now ` +
+      `${after ?? 'none'}). The chart has NOT been restored. This is a bug in the fix, not ` +
+      `something you did.`
   )
 }

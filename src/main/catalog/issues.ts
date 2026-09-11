@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { scanChartFolder } from 'scan-chart'
 import type { JobProgress } from '../../shared/schemas'
 import { isParsedByScanChart, readSngEntriesForScan } from '../downloads/sng-read-selective'
+import { cloneHeroChecksum, type ChartFileEntry } from './chart-checksum'
 import { findChartPaths } from './scanner'
 
 export interface ChartIssueRow {
@@ -155,6 +156,17 @@ export interface SingleChartScan {
    * the chart has no readable chart file, which is itself an issue row.
    */
   chartHash: string | null
+  /**
+   * The digest Clone Hero itself writes for this chart, computed from the same entries the scan
+   * above was given. Null when they carry no chart file's bytes; see catalog/chart-checksum.ts.
+   *
+   * Computed here, from the bytes on disk, rather than read off the catalog row. A catalog row
+   * can be stale, can predate the column, or can be missing altogether for a chart the user has
+   * never scanned, and a repair guard that consulted one would quietly stop guarding on exactly
+   * those charts. Recomputing costs nothing: the bytes are already in hand, because scan-chart
+   * has just parsed them.
+   */
+  cloneHeroChecksum: string | null
 }
 
 /**
@@ -174,26 +186,42 @@ export async function scanChartIssues(
   chartPath: string,
   chartType: 'folder' | 'sng'
 ): Promise<SingleChartScan> {
-  const scanned = await scanOneChart(chartPath, chartType)
-  return { rows: flattenIssues(chartPath, scanned), chartHash: scanned.chartHash ?? null }
+  const { scanned, entries } = await scanOneChart(chartPath, chartType)
+  return {
+    rows: flattenIssues(chartPath, scanned),
+    chartHash: scanned.chartHash ?? null,
+    // The same entries scan-chart was handed, so the two identities always describe one reading
+    // of one chart. Deriving the checksum from a second read of the disk would leave room for
+    // the two to disagree about a chart that changed between them, which is the single thing
+    // this function exists to rule out.
+    cloneHeroChecksum: cloneHeroChecksum(entries)
+  }
 }
 
-/** Read a chart whichever shape it is and run scan-chart over it. */
+/**
+ * Read a chart whichever shape it is and run scan-chart over it.
+ *
+ * Hands back the entries as well as the scan. They are what `cloneHeroChecksum` needs, and the
+ * scanner's own two paths compute it from exactly these (catalog/scanner.ts), so a chart's
+ * checksum is the same number whether it was reached through a library scan or a repair.
+ */
 async function scanOneChart(
   chartPath: string,
   chartType: 'folder' | 'sng'
-): Promise<ReturnType<typeof scanChartFolder>> {
+): Promise<{ scanned: ReturnType<typeof scanChartFolder>; entries: ChartFileEntry[] }> {
   if (chartType === 'folder') {
-    return scanChartFolder(readFolderForIssues(chartPath), {
-      includeMd5: false,
-      includeBTrack: false
-    })
+    const entries = readFolderForIssues(chartPath)
+    return {
+      scanned: scanChartFolder(entries, { includeMd5: false, includeBTrack: false }),
+      entries
+    }
   }
   // .sng: the selective reader already returns media named and empty, so the placeholders this
   // scan used to synthesise now cost nothing to obtain, because the bytes are never read off
-  // disk at all rather than read and then thrown away.
+  // disk at all rather than read and then thrown away. It also DECRYPTS the chart file, because
+  // scan-chart parses it, and those decoded bytes are the ones Clone Hero hashes.
   const { entries } = await readSngEntriesForScan(chartPath)
-  return scanChartFolder(entries, { includeMd5: false, includeBTrack: false })
+  return { scanned: scanChartFolder(entries, { includeMd5: false, includeBTrack: false }), entries }
 }
 
 /**
@@ -259,7 +287,7 @@ export async function scanIssues(
           // cancel take effect within one chart rather than one library.
           if (signal.aborted) return
           try {
-            const scanned = await scanOneChart(chart.path, chart.type)
+            const { scanned } = await scanOneChart(chart.path, chart.type)
             allRows.push(...flattenIssues(chart.path, scanned))
           } catch (err) {
             // Per-chart isolation: one unreadable/corrupt chart must not abort the whole scan.

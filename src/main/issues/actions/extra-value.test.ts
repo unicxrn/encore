@@ -196,6 +196,9 @@ describe('extraValue on a folder chart', () => {
     const after = await scanChartIssues(chart, 'folder')
     expect(after.chartHash).toBe(before.chartHash)
     expect(after.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(after.cloneHeroChecksum).not.toBeNull()
   })
 
   it('MUTATION: an ini edit that touched a hashed key really would move the hash', async () => {
@@ -243,6 +246,9 @@ describe('extraValue on a .sng chart', () => {
     // verifies as correct; the hash is what proves nothing else moved with it.
     expect(rescan.chartHash).toBe(before.chartHash)
     expect(rescan.chartHash).not.toBeNull()
+    // And the number Clone Hero itself records, which is the chart file's bytes alone.
+    expect(rescan.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+    expect(rescan.cloneHeroChecksum).not.toBeNull()
   })
 
   it('keeps every other header value across the repack', async () => {

@@ -16,8 +16,10 @@ import { createHash } from 'node:crypto'
  *
  * Two hashes already on ChartRecord are deliberately NOT this one, and neither can substitute:
  *
- * - `chartHash` is scan-chart's `getChartHash`, which folds in seven song.ini gameplay keys and
- *   returns base64 SHA-256. Different algorithm, different input, different encoding.
+ * - `chartHash` is scan-chart's `getChartHash`, which appends seven song.ini gameplay keys to the
+ *   chart file's bytes and returns base64url BLAKE3. Different algorithm, different input,
+ *   different encoding. It is the wider of the two — those keys are covered by it and not by
+ *   this — and `issues/fix.ts` asserts both for that reason.
  * - scan-chart's whole-folder `getChartMD5` hashes every file's NAME and DATA, so album art or
  *   audio moves it. That is the value `includeMd5: true` would produce, and it is not this.
  *

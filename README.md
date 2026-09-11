@@ -33,12 +33,30 @@ Encore reads the chart folders you already have, in both shapes Clone Hero uses:
 
 ### Repairs that cannot break multiplayer
 
-Clone Hero pairs players by a hash of the chart file's bytes plus a handful of `song.ini` gameplay
-keys. Not the video, not the cover, not the album or the year, not the file names.
+Clone Hero identifies a chart by its chart file's bytes. After every play it writes that identity
+down: a `checksum` field in `~/.clonehero/scorestats.json`, an MD5 over `notes.chart`/`notes.mid`
+(the decoded entry, for a `.sng`). Not the video, not the cover, not the album or the year, not the
+file names.
 
-Every repair re-scans the chart it just wrote and **refuses to report success unless that hash is
-byte-identical**. A repair that got this wrong fails loudly instead of quietly making a chart
-unplayable with everyone else who has it.
+Every repair re-scans the chart it just wrote and **refuses to report success unless two numbers
+are byte-identical**: that checksum, and scan-chart's `getChartHash`, which adds the seven
+`song.ini` gameplay keys the checksum does not cover. Undo is held to the same two. A repair that
+got this wrong fails loudly instead of quietly making a chart unplayable with everyone else who has
+it.
+
+Both are recomputed from the bytes on disk at repair time, never read from the catalog, so a chart
+nobody has scanned is checked like any other. A chart with no readable `notes.*` has no identity to
+preserve and is repaired without one.
+
+**What has actually been checked against the game.** Clone Hero v1.1.0.6142-final recorded
+`E54E9A0521444E81BD1FED4F3F3A3201` for "The Smile - Skrting On The Surface (Mech)", and that is the
+checksum Encore computes for it. Running each of the four repairs over copies of that chart — a
+real VP8/Vorbis conversion, a real 512x512 re-encode, a `diff_*` removal, a `desktop.ini`
+deletion — leaves the value unmoved, in both the folder and `.sng` shapes.
+
+That is one chart, because `scorestats.json` holds one play. It establishes that Encore computes
+the number Clone Hero records. It does not establish that Clone Hero's matchmaking consults only
+that number, and no repaired chart has been played online against an unrepaired copy of it.
 
 | Issue                             | What the fix does                                                                            |
 | --------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -159,7 +177,9 @@ A few conventions that make review quick:
   wrong about until someone put a number on them.
 - **Anything touching a chart is guilty until proven innocent.** A user's library has no backup.
   Writes go through the existing locked, verify-before-swap path, and anything that changes a chart
-  asserts the multiplayer hash afterwards.
+  asserts both multiplayer identities afterwards: the checksum Clone Hero records and scan-chart's
+  `getChartHash`. An assertion on a number that never moves proves nothing, so each one comes with
+  a mutation test that makes it fire.
 - **The UI has no automated eye.** jsdom applies no CSS and computes no layout, so a visual change
   needs a screenshot or a measurement, and saying which parts were only reasoned about is expected.
 
