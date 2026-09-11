@@ -19,3 +19,6 @@ out
 
 # Local working notes and the build history, kept out of the public repo.
 notes
+
+# Local guidance for coding agents. Kept out of the public repo on purpose.
+CLAUDE.md
