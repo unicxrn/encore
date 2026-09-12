@@ -170,16 +170,19 @@ export const CatalogFilterSchema = z.object({
   missing: z.array(z.enum(['video', 'background', 'albumArt', 'lyrics'])).optional(),
   missingMode: z.enum(['all', 'any']).optional(),
   /**
-   * When true, keep only charts with no recorded play.
+   * When true, keep only charts nothing has a record of the user playing.
    *
-   * "No recorded play" is not "never played": the play history only covers the time Encore has
-   * been watching Clone Hero's scorestats.json (see shared/play.ts), so a chart the user wore out
-   * last year and has not touched since Encore was installed matches this. A UI offering it
-   * should say so.
+   * Two sources have to be silent. Encore's own play log, which starts when Encore was installed,
+   * and Clone Hero's score files, which carry a lifetime play count per chart from long before
+   * that (see shared/play.ts). The second is what lets this mean roughly what its name says: a
+   * chart worn out last year and untouched since no longer shows up here.
    *
-   * A chart whose `cloneHeroChecksum` is null matches too, since nothing can ever join a play to
-   * it. That is the right answer for the filter's purpose — it is in the "show me what I have not
-   * got round to" pile — and it is also the only answer available.
+   * Roughly, and not more than that. Two gaps remain, and a UI offering this filter should not
+   * claim they are closed. A chart played on another machine, or under a Clone Hero install whose
+   * score files are not the ones Encore found, is unknown here and matches. And a chart whose
+   * `cloneHeroChecksum` is null matches whatever the user has done with it, because nothing can
+   * ever join either source to it; that is also the only answer available, and it puts the chart
+   * in the "show me what I have not got round to" pile, which is what the filter is for.
    */
   neverPlayed: z.boolean().optional(),
   /**

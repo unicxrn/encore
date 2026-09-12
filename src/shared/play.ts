@@ -207,3 +207,144 @@ export interface PlayInsights {
   /** The last few plays, newest first. Capped by the query. */
   recent: RecentPlay[]
 }
+
+/**
+ * What Clone Hero's OWN score files say, which is a different thing from everything above.
+ *
+ * Everything before this point comes from `scorestats.json`, which holds one play and is gone at
+ * the next song, so Encore's history starts when Encore does. `scoredata.bin` and `scoresext.bin`
+ * are the game's high score table: one record per chart, a lifetime play count, and the best
+ * score, all of it surviving since long before Encore was installed. That is the point of reading
+ * them, and it is also the whole of what they can say. Neither file carries a timestamp, so
+ * nothing here can be placed on a calendar, and none of it is a play in the sense the `plays`
+ * table means.
+ *
+ * The two overlap, and the overlap is the trap. `lifetimePlays` is the game's running total for a
+ * chart and ALREADY INCLUDES every play Encore watched happen. Adding a lifetime count to an
+ * observed count double counts. The shapes below carry both numbers side by side, separately
+ * named, so a screen has to choose which it is showing rather than accidentally summing them.
+ */
+
+/**
+ * What a caller may ask the lifetime channel for.
+ *
+ * The checksum cap is `PLAY_SUMMARY_MAX`, for the same reason it applies there: the caller with
+ * the most to ask for is one rendered page of chart rows.
+ */
+export const LifetimeScoreRequestSchema = z.object({
+  /**
+   * Restrict `charts` to these checksums. Omitted means every chart the score files know of,
+   * which is bounded by how many charts the user has ever played, not by the library's size.
+   *
+   * `totals` ignores this and is always computed over everything, because a summary of the
+   * subset a page happens to be showing would be a number nobody asked for.
+   */
+  checksums: z.array(ChecksumSchema).max(PLAY_SUMMARY_MAX).optional()
+})
+export type LifetimeScoreRequest = z.infer<typeof LifetimeScoreRequestSchema>
+
+/**
+ * One chart's best score, as the score files hold it.
+ *
+ * Taken from the rows whose variant has been confirmed against a real play (see
+ * main/play/scoredata.ts). A chart whose only rows are unconfirmed has no `best` at all rather
+ * than a score on a scale nothing has checked.
+ */
+export interface LifetimeBest {
+  /** The game's own key for this row. Not decoded; carried so a caller can report it verbatim. */
+  variant: number
+  /** 0 to 3 as the file stores it. Only 3, Expert, is confirmed. */
+  difficulty: number
+  /** The name for that code, or null when the code is outside the range we can name. */
+  difficultyName: string | null
+  /** Notes hit over total notes, floored to a whole percent, as the game stored it. */
+  percent: number
+  /** 0 to 6, where 6 is the gold star. */
+  stars: number
+  /** Inferred from a sample with one positive. Do not render this as "perfect". */
+  isFullCombo: boolean
+  /** Playback speed as a percent. 100 in every row seen. */
+  playbackSpeed: number
+  /** The score the game reports, from `scoresext.bin`. This is the number the user remembers. */
+  score: number
+  /** The same score less the clean play bonus, from `scoredata.bin`. Shown by nothing; kept
+   * because the gap between the two is the only evidence of what the bonus was. */
+  scoreWithoutCleanPlayBonus: number
+}
+
+/** Everything the score files say about one chart, with the observed count kept separate. */
+export interface ChartLifetime {
+  checksum: string
+  /**
+   * Plays over the chart's whole life, with no dates attached, as the game counts them.
+   *
+   * INCLUDES the `observedPlays` below. The two are never added.
+   */
+  lifetimePlays: number
+  /** Plays of this chart Encore watched happen, out of the `plays` table. A subset of the above. */
+  observedPlays: number
+  /**
+   * True when the game has a record of this chart at all.
+   *
+   * Trustworthy even when `best` is null: a record exists because the chart was played, whatever
+   * its rows turn out to mean.
+   */
+  everPlayed: boolean
+  /** The best confirmed score, or null when every row for this chart is unconfirmed. */
+  best: LifetimeBest | null
+  /**
+   * Score rows on a variant that has never been tied to a play whose real numbers are known.
+   *
+   * Zero for almost every chart. Above zero means the game keeps a score for this chart that
+   * Encore cannot explain and whose scale does not match a normal one, so a screen showing a
+   * "best" here is showing the best of the rows it CAN explain and should say so. The play count
+   * and `everPlayed` are unaffected: an unexplained row is still a record of a real play.
+   */
+  unconfirmedRows: number
+}
+
+/** The whole-library summary, always over everything the score files hold. */
+export interface LifetimeTotals {
+  /** Charts the score files have a record of. */
+  charts: number
+  /** Those charts' lifetime play counts, summed. Includes `observedPlays`; never add the two. */
+  lifetimePlays: number
+  /** Charts whose checksum matches a chart in the catalog. */
+  chartsInLibrary: number
+  /** The rest: played once and since deleted, moved, renamed, or never scanned. */
+  chartsNotInLibrary: number
+  /** Charts carrying at least one unconfirmed score row. See `ChartLifetime.unconfirmedRows`. */
+  chartsWithUnconfirmedRows: number
+  /** The highest confirmed score in the files, or null when there is no confirmed row at all. */
+  bestScore: number | null
+  /** Plays Encore itself watched happen. Already counted inside `lifetimePlays`. */
+  observedPlays: number
+  /** Distinct charts those observed plays cover. */
+  observedCharts: number
+}
+
+/** Whether the score files were found and read, and where Encore looked. */
+export interface LifetimeScoreStatus {
+  /** True only when a record was actually imported; the UI's single "show this at all" test. */
+  available: boolean
+  /** The same four states as `PlayAvailability`, and none of them is an error. */
+  reason: PlayAvailability
+  /**
+   * The two paths being watched, or null on a platform with no established location.
+   *
+   * Nothing but Linux has been verified (see main/play/location.ts), so a Windows or macOS user
+   * finding nothing is being told where Encore looked, not where the files definitely are.
+   */
+  scoreDataPath: string | null
+  scoresExtPath: string | null
+  /** When the last import ran, by Encore's clock. Null until one has. Not a play date. */
+  lastImportAt: string | null
+}
+
+/** The one shape the lifetime channel answers with. */
+export interface LifetimeScores {
+  status: LifetimeScoreStatus
+  totals: LifetimeTotals
+  /** One entry per chart the score files know of, filtered to the request's checksums if given. */
+  charts: ChartLifetime[]
+}

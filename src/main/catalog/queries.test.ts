@@ -331,6 +331,24 @@ describe('neverPlayed filter', () => {
   const PLAYED = 'e54e9a0521444e81bd1fed4f3f3a3201'
   const UNPLAYED = 'aac70b7c7bfc0092a8f7f05a59db5676'
 
+  /**
+   * A row in Clone Hero's imported score table, written straight rather than through the import.
+   *
+   * The filter's question is "does a lifetime record exist and does it claim anything", and
+   * going through play/score-store.ts would make these tests depend on the parser's shape to
+   * assert something about one SQL clause.
+   */
+  const scoreRecord = (
+    db: CatalogDb,
+    checksum: string,
+    over: { playCount?: number; rowCount?: number } = {}
+  ): void => {
+    db.prepare(
+      `INSERT INTO score_charts (checksum, playCount, rowCount, hasOnlyConfirmedVariants)
+			 VALUES (?, ?, ?, 1)`
+    ).run(checksum, over.playCount ?? 1, over.rowCount ?? 1)
+  }
+
   const withChecksum = (path: string, name: string, checksum: string | null): ChartRecord =>
     ChartRecordSchema.parse({
       path,
@@ -396,6 +414,41 @@ describe('neverPlayed filter', () => {
       '2026-09-11T10:00:00.0000000Z'
     )
     expect(names({ neverPlayed: true })).toEqual(['Parabola'])
+  })
+
+  it('stops matching a chart Clone Hero has a lifetime record of, with no play of its own', () => {
+    // The point of importing the score files. Encore never saw this chart played, and the game
+    // has been counting it since long before Encore was installed, so a filter that still
+    // offered it would be answering a question nobody asked.
+    scoreRecord(db, UNPLAYED, { playCount: 6 })
+    expect(names({ neverPlayed: true })).toEqual(['Parabola'])
+  })
+
+  it('counts a lifetime record with no play count but a score row', () => {
+    // A record with a score row and a zero count is not something the game has been seen to
+    // write. It would still be evidence of a play, and the clause asks for either.
+    scoreRecord(db, UNPLAYED, { playCount: 0, rowCount: 1 })
+    expect(names({ neverPlayed: true })).toEqual(['Parabola'])
+  })
+
+  it('ignores a lifetime record that claims neither a play nor a row', () => {
+    // Evidence of nothing. Hiding a chart on the strength of it would be the filter making a
+    // claim the data does not support.
+    scoreRecord(db, UNPLAYED, { playCount: 0, rowCount: 0 })
+    expect(names({ neverPlayed: true })).toEqual(['Parabola', 'Schism'])
+  })
+
+  it('applies the lifetime test on the search path too', () => {
+    // The count has a cheaper FTS-only branch that cannot see a chart column. Adding a second
+    // source to the clause must not let that branch back in.
+    scoreRecord(db, UNPLAYED, { playCount: 6 })
+    expect(names({ search: 'Schism', neverPlayed: true })).toEqual([])
+    expect(countCharts(db, { search: 'Schism', offset: 0, limit: 100, neverPlayed: true })).toBe(0)
+  })
+
+  it('leaves a chart alone when the lifetime record is of some other chart', () => {
+    scoreRecord(db, 'aac70b7c7bfc0092a8f7f05a59db5677', { playCount: 6 })
+    expect(names({ neverPlayed: true })).toEqual(['Parabola', 'Schism'])
   })
 })
 

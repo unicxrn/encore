@@ -27,8 +27,15 @@ import { ScanRunner } from './catalog/scan-runner'
 import { cancelLibraryScan, scanChart, scanLibrary, type ScanSummary } from './catalog/scanner'
 import { cancelIssueScan, scanIssues, lastIssueReport } from './catalog/issues'
 import { LibraryWatcher } from './catalog/watcher'
-import { scoreStatsPath } from './play/location'
+import { scoreDataPaths, scoreStatsPath } from './play/location'
 import { chartPlaySummaries, countPlays, playInsights, playStats, recordPlay } from './play/store'
+import {
+  chartLifetimes,
+  countScoreCharts,
+  importScoreBests,
+  lifetimeTotals
+} from './play/score-store'
+import { ScoreFileWatcher } from './play/score-watcher'
 import { PlayWatcher } from './play/watcher'
 import { runDownload } from './downloads/download'
 import { DownloadManager } from './downloads/manager'
@@ -209,6 +216,7 @@ function wireIpc(): {
   db: CatalogDb
   watcher: LibraryWatcher
   plays: PlayWatcher
+  scoreFiles: ScoreFileWatcher
   appUpdates: AppUpdateService
 } {
   const settingsPath = join(app.getPath('userData'), 'settings.json')
@@ -299,6 +307,25 @@ function wireIpc(): {
     path: scoreStatsPath(homedir(), process.platform, existsSync, app.getPath('documents')),
     record: (play) => recordPlay(db, play),
     onPlay: () => send(IPC.evPlayRecorded, undefined)
+  })
+
+  /**
+   * Clone Hero's own score files, in Unity's data directory rather than the game's own.
+   *
+   * A second watcher rather than another job for the one above, because the two files live
+   * somewhere else entirely (play/location.ts), say something else, and land in their own tables.
+   * The import runs once here at startup, which is the only moment a play made while Encore was
+   * closed can be picked up, and again whenever the game rewrites either file.
+   *
+   * It reuses evPlayRecorded rather than adding an event of its own. The event carries no payload
+   * and means "the play data on screen is out of date, read it again", which is exactly what a
+   * fresh import makes true; a second event would be a second thing every consumer has to
+   * subscribe to in order to learn the same thing.
+   */
+  const scoreFiles = new ScoreFileWatcher({
+    paths: scoreDataPaths(homedir(), process.platform, existsSync),
+    importCharts: (charts) => importScoreBests(db, charts),
+    onImport: () => send(IPC.evPlayRecorded, undefined)
   })
 
   // Named because two things need it: the sidecar manager installs into it, and locateFfmpeg
@@ -731,6 +758,20 @@ function wireIpc(): {
     playSummaries: (checksums) => chartPlaySummaries(db, checksums),
     playStats: () => playStats(db),
     playInsights: () => playInsights(db),
+    // The lifetime read, gated the same way and for the same reason: `available` has to mean
+    // "there is something to show", so it is a count of imported charts and not the existence of
+    // a file. A Clone Hero that has never recorded a score has both files and nothing in them.
+    playLifetime: ({ checksums }) => ({
+      status: {
+        available: countScoreCharts(db) > 0,
+        reason: scoreFiles.reason,
+        scoreDataPath: scoreFiles.watchedPaths?.scoreData ?? null,
+        scoresExtPath: scoreFiles.watchedPaths?.scoresExt ?? null,
+        lastImportAt: scoreFiles.lastImportAt
+      },
+      totals: lifetimeTotals(db),
+      charts: chartLifetimes(db, checksums)
+    }),
     // saveTextFile: the user explicitly chose the destination path via the
     // system dialog, so we write there directly. There is no library containment
     // guard here: this is the intentional user-chosen exception to the write policy.
@@ -748,7 +789,7 @@ function wireIpc(): {
     }
   })
 
-  return { db, watcher, plays, appUpdates }
+  return { db, watcher, plays, scoreFiles, appUpdates }
 }
 
 function bootstrap(): void {
@@ -779,7 +820,7 @@ function bootstrap(): void {
     // failures for the covers on its first paint, and nothing retries them.
     registerArtProtocol(artCacheDir())
 
-    const { db, watcher, plays, appUpdates } = wireIpc()
+    const { db, watcher, plays, scoreFiles, appUpdates } = wireIpc()
     // Start the library watcher with the current folder paths.
     const initialFolders = loadSettings(
       join(app.getPath('userData'), 'settings.json')
@@ -795,11 +836,18 @@ function bootstrap(): void {
     void plays.start().catch((err: unknown) => {
       console.error('PlayWatcher start failed:', err)
     })
+    // Unawaited for the same reasons, and with one of its own: its first act is to import the
+    // score files, which is a read of a few kilobytes and a diff, and nothing on screen is
+    // waiting for it. Every case it can meet resolves rather than rejecting.
+    void scoreFiles.start().catch((err: unknown) => {
+      console.error('ScoreFileWatcher start failed:', err)
+    })
     // Close on clean exit so WAL checkpoints back into the main db file.
     app.on('will-quit', () => {
       db.close()
       void watcher.stop()
       void plays.stop()
+      void scoreFiles.stop()
     })
 
     createWindow()

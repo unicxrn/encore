@@ -55,6 +55,30 @@ describe('openCatalog', () => {
     openCatalog(file).close()
     expect(() => openCatalog(file).close()).not.toThrow()
   })
+  it('creates the score tables the Clone Hero score files are imported into', () => {
+    // Separate tables from `plays`, which is the rule the whole feature rests on: these hold
+    // lifetime bests with no dates and a count that already includes every observed play.
+    const db = openCatalog(tmpDb())
+    const names = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+    expect(names).toContain('score_charts')
+    expect(names).toContain('score_bests')
+    db.close()
+  })
+  it('adds the score tables to a database that predates them', () => {
+    // They are created outside `migrate`, by the CREATE block that runs on every open, so an
+    // existing catalog picks them up without a version-gated step.
+    const file = tmpDb()
+    makeV1Db(file)
+    const db = openCatalog(file)
+    expect(() => db.prepare('SELECT count(*) FROM score_charts').get()).not.toThrow()
+    expect(() => db.prepare('SELECT count(*) FROM score_bests').get()).not.toThrow()
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    db.close()
+  })
   it('enables WAL mode', () => {
     const db = openCatalog(tmpDb())
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal')

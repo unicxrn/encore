@@ -14,6 +14,23 @@ release.
 
 ### Added
 
+- Encore reads Clone Hero's own score files, `scoredata.bin` and `scoresext.bin`, so it knows what
+  you played before Encore existed. They are the game's high score table: one record per chart, a
+  lifetime play count and the best score, kept since long before Encore was installed. What they do
+  not hold is dates, of any kind. Nothing read from them can be placed on a calendar or counted
+  into a week, so they are stored apart from the plays Encore has watched happen and the two are
+  reported separately: the lifetime count for a chart already includes every play Encore recorded,
+  and adding them would count those twice. The import runs at startup, which is the only moment a
+  play made while Encore was closed can be picked up, and again whenever the game rewrites either
+  file. It is a read; nothing is ever written back to Clone Hero's files. Only the Linux location
+  has been verified against a real install. The Windows and macOS paths follow Unity's own
+  convention for where a game keeps this data and are probed rather than assumed.
+- The "No plays recorded" filter in Installed now also consults Clone Hero's own record, so a chart
+  you wore out last year and have not touched since Encore was installed is no longer in the list.
+  It is still not a complete answer and does not claim to be: a chart played on another machine, or
+  under a Clone Hero whose score files are not the ones Encore found, is unknown either way, and so
+  is a chart Encore cannot compute a Clone Hero checksum for.
+
 - A Stats tab, holding everything Encore knows about what you have played. Encore has been reading
   Clone Hero's own score file since 0.2.0 and keeping what it finds, and none of it reached the
   screen. The page shows plays recorded, charts played, accuracy, full combos, best score and

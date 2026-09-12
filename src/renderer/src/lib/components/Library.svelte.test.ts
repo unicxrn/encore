@@ -715,7 +715,7 @@ describe('Library: the filter bar', () => {
       if (!found) throw new Error('no caveat shown')
       return found
     })
-    expect(caveat.textContent).toMatch(/started watching/i)
+    expect(caveat.textContent).toMatch(/score files/i)
   })
 
   it('asks for neverPlayed only while the toggle is pressed', async () => {

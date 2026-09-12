@@ -20,7 +20,13 @@ import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
 import type { VideoSearchResult } from '../main/sidecars/ytdlp'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import type { AppUpdateStatus } from '../shared/app-update'
-import type { ChartPlaySummary, PlayDataStatus, PlayInsights, PlayStats } from '../shared/play'
+import type {
+  ChartPlaySummary,
+  LifetimeScores,
+  PlayDataStatus,
+  PlayInsights,
+  PlayStats
+} from '../shared/play'
 
 type Unsubscribe = () => void
 
@@ -231,13 +237,23 @@ const api = {
   // on record, the charters behind those plays, and the last few plays. Behind the same gate as
   // the other three, and the only one that also reads the catalog.
   playInsights: (): Promise<PlayInsights> => ipcRenderer.invoke(IPC.playInsights),
+  // What Clone Hero's own score files hold: a lifetime play count and a best score per chart,
+  // from before Encore was installed, plus the totals. A different source from the four above and
+  // a different span of time, so it carries its own status rather than sitting behind playStatus.
+  //
+  // Pass checksums to narrow the per-chart rows to a page; omit them for every chart the files
+  // know of. `totals` covers everything either way. Nothing here has a date, and `lifetimePlays`
+  // already includes the plays the four calls above report: the two are never added.
+  playLifetime: (checksums?: string[]): Promise<LifetimeScores> =>
+    ipcRenderer.invoke(IPC.playLifetime, checksums === undefined ? {} : { checksums }),
   onDownloadUpdate: subscribe(IPC.evDownloadUpdate),
   onScanProgress: subscribe(IPC.evScanProgress),
   onAssetProgress: subscribe(IPC.evAssetProgress),
   onUpdateProgress: subscribe(IPC.evUpdateProgress),
   onAppUpdate: subscribe(IPC.evAppUpdate),
-  // Fires when a NEW play is recorded, never for the repeated reads of an unchanged file. Carries
-  // no payload: re-read whichever of the four calls above you are drawing.
+  // Fires when a NEW play is recorded, and when an import of the score files writes something.
+  // Never for the repeated reads of an unchanged file, which is almost every read either watcher
+  // makes. Carries no payload: re-read whichever of the calls above you are drawing.
   onPlayRecorded: subscribe(IPC.evPlayRecorded)
 }
 

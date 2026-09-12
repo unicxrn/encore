@@ -121,9 +121,10 @@ const SCORES_EXT_ROW_BYTES = 11
  * The only variant confirmed against a play whose real numbers are known.
  *
  * Named rather than written as a bare 0 at each use because the number means "the class of row we
- * can vouch for", and a reader who meets it as a literal has no way to know that.
+ * can vouch for", and a reader who meets it as a literal has no way to know that. Exported
+ * because the same judgement has to be made in SQL, over stored rows, by play/score-store.ts.
  */
-const CONFIRMED_VARIANT = 0
+export const CONFIRMED_VARIANT = 0
 
 /** One chart's best score on one variant, from `scoredata.bin`. */
 export interface ScoreDataRow {

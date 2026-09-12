@@ -506,9 +506,9 @@
       />
       <span class="range-to">min</span>
     </span>
-    <!-- "No plays recorded", never "never played". Encore only knows about plays made while it
-         was watching Clone Hero, so a chart worn out last year and untouched since sits in here
-         too. The sentence below the bar says so whenever the filter is on; see shared/play.ts. -->
+    <!-- "No plays recorded", never "never played". Two records are consulted, Encore's own log
+         and Clone Hero's score files, and neither covers a play made on another machine. The
+         sentence below the bar says so whenever the filter is on; see shared/schemas.ts. -->
     <button
       class="toggle"
       aria-pressed={$libraryFilter.neverPlayed}
@@ -557,8 +557,8 @@
          shown beside the list rather than hidden in a tooltip because a user reading a short
          list has already drawn a conclusion by the time they would hover anything. -->
     <p class="caveat">
-      Encore counts plays only from when it started watching Clone Hero, so a chart you played
-      before that is in this list too.
+      Encore checks its own play log and, where it can read them, Clone Hero's own score files. A
+      chart played on another machine, or one Encore cannot identify, is in this list too.
     </p>
   {:else if playStatus?.available}
     <!-- The same fact from the other side, and it earns the same line for the same reason: a

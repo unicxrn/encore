@@ -78,6 +78,14 @@ export const IPC = {
   playSummaries: 'play:summaries',
   playStats: 'play:stats',
   playInsights: 'play:insights',
+  // Clone Hero's OWN score files, which is a different source from the four above and covers a
+  // different span of time: they hold a lifetime play count and a best score per chart, from
+  // before Encore existed, and no dates at all. One channel answers with all three things a
+  // screen needs at once, because they are read from the same tables in the same moment and a
+  // caller splitting them across calls would have to explain why its total disagreed with its
+  // rows. Lifetime numbers and observed ones are separately named in the payload: the lifetime
+  // count already includes every play Encore watched, so adding them double counts.
+  playLifetime: 'play:lifetime',
   // Asks Chorus whether it holds a different version of the given charts (all of them when the
   // list is empty). Never runs on its own: each request costs API budget against a 50-per-minute
   // limit, so it is always something the user asked for. updatesLast replays the session's

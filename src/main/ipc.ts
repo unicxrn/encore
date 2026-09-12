@@ -22,8 +22,11 @@ import type { FixBackup } from './issues/backup-store'
 import type { FixableCode } from './issues/fix'
 import type { AppUpdateStatus } from '../shared/app-update'
 import {
+  LifetimeScoreRequestSchema,
   PlaySummaryRequestSchema,
   type ChartPlaySummary,
+  type LifetimeScoreRequest,
+  type LifetimeScores,
   type PlayDataStatus,
   type PlayInsights,
   type PlayStats
@@ -199,18 +202,20 @@ export interface IpcDeps {
     sender: unknown
   ) => Promise<string | null>
   /**
-   * Clone Hero's own play data. All four are synchronous reads of the local catalog file, so
+   * Clone Hero's own play data. All five are synchronous reads of the local catalog file, so
    * none of them returns a promise and none can fail in a way the caller has to handle.
    *
    * `playStatus` is the gate: it answers "is there anything here at all", and its `available:
    * false` is an ordinary state for most users rather than an error (see shared/play.ts). A
-   * consumer that skips it and calls the other two on a machine with no Clone Hero gets an empty
+   * consumer that skips it and calls the others on a machine with no Clone Hero gets an empty
    * array and a zeroed stats object, which is correct but indistinguishable from "installed and
    * never played" — hence the gate.
    *
    * `playSummaries` takes checksums rather than chart paths: the checksum is what the play table
    * is keyed by, it is on every ChartRecord already, and taking paths would make this a second
-   * place that has to know how a chart is identified.
+   * place that has to know how a chart is identified. `playLifetime` takes them for the same
+   * reason, and carries its own gate rather than sharing `playStatus`: the two sources are found
+   * in different places and either can be present without the other.
    *
    * `playInsights` is the Stats tab's second read, and the only one of the four that also
    * touches `charts`: the history by day, how much of the library has a play on record, the
@@ -220,6 +225,16 @@ export interface IpcDeps {
   playSummaries: (checksums: string[]) => ChartPlaySummary[]
   playStats: () => PlayStats
   playInsights: () => PlayInsights
+  /**
+   * What Clone Hero's own score files say: a lifetime play count and a best score per chart, and
+   * the totals over all of them. A read of the same catalog file, and equally unable to fail.
+   *
+   * One call rather than a status call, a totals call and a rows call, because all three come out
+   * of the same two tables in the same moment and a screen showing a total that disagreed with
+   * the rows under it would be worse than a slightly larger payload. `checksums` narrows the rows
+   * to a rendered page; the totals ignore it on purpose (see shared/play.ts).
+   */
+  playLifetime: (req: LifetimeScoreRequest) => LifetimeScores
 }
 
 const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
@@ -444,6 +459,13 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   )
   ipcMain.handle(IPC.playStats, () => deps.playStats())
   ipcMain.handle(IPC.playInsights, () => deps.playInsights())
+  // Same checksum validation as play:summaries, and the same cap, for the same reason: the
+  // caller with the most to name is one rendered page of chart rows. An absent payload is the
+  // ordinary "give me everything" call, so undefined is parsed as an empty request rather than
+  // rejected.
+  ipcMain.handle(IPC.playLifetime, (_e, raw) =>
+    deps.playLifetime(LifetimeScoreRequestSchema.parse(raw ?? {}))
+  )
   ipcMain.handle(IPC.saveTextFile, (e, raw) => {
     const { defaultName, content } = SaveTextFileSchema.parse(raw)
     return deps.saveTextFile({ defaultName, content }, e.sender)

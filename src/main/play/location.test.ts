@@ -1,6 +1,14 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { scoreStatsCandidates, scoreStatsPath, SCORE_STATS_FILE } from './location'
+import {
+  scoreDataDirCandidates,
+  scoreDataPaths,
+  scoreStatsCandidates,
+  scoreStatsPath,
+  SCORES_EXT_FILE,
+  SCORE_DATA_FILE,
+  SCORE_STATS_FILE
+} from './location'
 
 // join() uses the separator of the platform the tests run on, not of the platform being probed.
 // That is correct in production, where the two always match, and it is why the Windows
@@ -83,5 +91,70 @@ describe('scoreStatsPath', () => {
       join(HOME, 'Documents', 'Clone Hero', SCORE_STATS_FILE)
     )
     expect(scoreStatsPath(HOME, 'linux', never)).toBe(join(HOME, '.clonehero', SCORE_STATS_FILE))
+  })
+})
+
+const UNITY_LINUX = join(HOME, '.config', 'unity3d', 'srylain Inc_', 'Clone Hero')
+
+describe('scoreDataDirCandidates', () => {
+  it('probes the verified Linux location, which is not where scorestats.json lives', () => {
+    // The two files are in Unity's persistentDataPath, and scorestats.json is in Clone Hero's own
+    // user-data root. A test that let them collapse into one directory would hide the whole
+    // reason this resolver exists.
+    expect(scoreDataDirCandidates(HOME, 'linux')).toEqual([UNITY_LINUX])
+    expect(scoreDataDirCandidates(HOME, 'linux')[0]).not.toBe(join(HOME, '.clonehero'))
+  })
+
+  it('probes LocalLow on Windows, per Unity persistentDataPath', () => {
+    // Not verified against a Windows install; see the module comment. LocalLow is where Unity
+    // puts persistentDataPath there, and where the migration guide says score saves go.
+    expect(scoreDataDirCandidates(HOME, 'win32')).toEqual([
+      join(HOME, 'AppData', 'LocalLow', 'srylain Inc_', 'Clone Hero')
+    ])
+  })
+
+  it('probes both macOS shapes, the current one first', () => {
+    // Also unverified. Unity composes company and product folders now and used the bundle
+    // identifier before that, and an install carried over may still be reading the older one.
+    expect(scoreDataDirCandidates(HOME, 'darwin')).toEqual([
+      join(HOME, 'Library', 'Application Support', 'srylain Inc_', 'Clone Hero'),
+      join(HOME, 'Library', 'Application Support', 'com.srylain.CloneHero')
+    ])
+  })
+
+  it('offers nothing for a platform it has no evidence about', () => {
+    expect(scoreDataDirCandidates(HOME, 'freebsd')).toEqual([])
+  })
+})
+
+describe('scoreDataPaths', () => {
+  it('is null only when the platform is unknown', () => {
+    expect(scoreDataPaths(HOME, 'freebsd', never)).toBeNull()
+    expect(scoreDataPaths(HOME, 'linux', never)).not.toBeNull()
+  })
+
+  it('names both files in the same directory', () => {
+    expect(scoreDataPaths(HOME, 'linux', always)).toEqual({
+      scoreData: join(UNITY_LINUX, SCORE_DATA_FILE),
+      scoresExt: join(UNITY_LINUX, SCORES_EXT_FILE)
+    })
+  })
+
+  it('picks a directory holding only one of the two', () => {
+    // scoresext.bin is the newer file, so an install that has not written it yet still has the
+    // right directory. Requiring both would send this to the fallback and, on macOS, to the
+    // wrong one of two candidates.
+    const older = join(HOME, 'Library', 'Application Support', 'com.srylain.CloneHero')
+    const found = scoreDataPaths(HOME, 'darwin', (p) => p === join(older, SCORE_DATA_FILE))
+    expect(found?.scoreData).toBe(join(older, SCORE_DATA_FILE))
+    expect(found?.scoresExt).toBe(join(older, SCORES_EXT_FILE))
+  })
+
+  it('falls back to the first candidate when nothing exists', () => {
+    // The common case: no Clone Hero on this machine. The watcher still needs a directory, so
+    // the files are picked up if they ever appear.
+    expect(scoreDataPaths(HOME, 'darwin', never)?.scoreData).toBe(
+      join(HOME, 'Library', 'Application Support', 'srylain Inc_', 'Clone Hero', SCORE_DATA_FILE)
+    )
   })
 })

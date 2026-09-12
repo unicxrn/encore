@@ -252,21 +252,35 @@ function missingClause(filter: CatalogFilter, prefix = ''): Clause {
 }
 
 /**
- * `AND` the chart has no play recorded against it (empty string when the filter does not ask).
+ * `AND` nothing has a record of this chart being played (empty when the filter does not ask).
  *
- * A chart with no `cloneHeroChecksum` matches, and must: nothing can ever join a play to it, so
- * excluding it would hide it from both halves of a played/unplayed split. The NOT EXISTS handles
- * the other side; written as a correlated subquery rather than a LEFT JOIN so it composes with
- * both query shapes below without changing either one's column list or its `charts.*` select.
+ * TWO sources have to be silent, not one. `plays` is what Encore watched happen, which starts
+ * when Encore was installed. `score_charts` is what Clone Hero's own score files say, which goes
+ * back to whenever the user first played the chart, and is why this filter now means roughly what
+ * its name has always claimed. A chart matching only the first test was the old behaviour and was
+ * wrong for anyone who played before installing Encore, which is everyone.
  *
- * See CatalogFilterSchema on what "never played" can and cannot mean here: the play table only
- * covers the time Encore has been watching, not the user's whole history with the game.
+ * A chart with no `cloneHeroChecksum` matches, and must: nothing can ever join either source to
+ * it, so excluding it would hide it from both halves of a played/unplayed split. Both tests are
+ * correlated subqueries rather than LEFT JOINs so this composes with both query shapes below
+ * without changing either one's column list or its `charts.*` select, and both are index lookups.
+ *
+ * The `score_charts` test asks for a play count or a score row rather than for the mere presence
+ * of a record. The game writes a record because a chart was played, so the distinction is
+ * theoretical, but a record carrying neither would be evidence of nothing and must not hide a
+ * chart from this list.
+ *
+ * See CatalogFilterSchema for what this still cannot see, which is a play on another machine.
  */
 function neverPlayedClause(filter: CatalogFilter, prefix = ''): Clause {
   if (!filter.neverPlayed) return NO_CLAUSE
   return {
-    sql: ` AND (${prefix}cloneHeroChecksum IS NULL OR NOT EXISTS (
-		SELECT 1 FROM plays WHERE plays.checksum = ${prefix}cloneHeroChecksum))`,
+    sql: ` AND (${prefix}cloneHeroChecksum IS NULL OR (NOT EXISTS (
+		SELECT 1 FROM plays WHERE plays.checksum = ${prefix}cloneHeroChecksum
+	) AND NOT EXISTS (
+		SELECT 1 FROM score_charts WHERE score_charts.checksum = ${prefix}cloneHeroChecksum
+			AND (score_charts.playCount > 0 OR score_charts.rowCount > 0)
+	)))`,
     params: []
   }
 }

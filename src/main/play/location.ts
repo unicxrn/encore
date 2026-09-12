@@ -2,6 +2,15 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
+ * Where Clone Hero keeps the files Encore reads: `scorestats.json`, and the two score files.
+ *
+ * They are in two unrelated places, and the first half of this module is about the first of them.
+ * `scorestats.json` sits in Clone Hero's own user-data root; `scoredata.bin` and `scoresext.bin`
+ * sit in Unity's `persistentDataPath`, which is somewhere else entirely on every platform. See
+ * `scoreDataDirCandidates` at the bottom for the second location and what backs it.
+ *
+ * ---
+ *
  * Where Clone Hero keeps `scorestats.json`, the file it rewrites after every play.
  *
  * **No source anywhere gives this file's path.** The wiki has no page for it (a search for
@@ -38,18 +47,18 @@ export const SCORE_STATS_FILE = 'scorestats.json'
  * Every path worth probing for a platform, best-supported first.
  *
  * - **Linux**: `~/.clonehero`. Verified directly; this is the one entry on any platform that is
- *   not an inference. Note the stale wiki "Data Locations" page claims
- *   `~/.config/unity3d/srylain Inc_/Clone Hero` instead — that page is at revision 2 from
- *   2023-06-02 and describes the pre-v1 Unity layout and a different file (`scoredata.bin`). Its
- *   Linux path is demonstrably wrong for a v1.1 install, which is the reason nothing else it
- *   says is trusted here either.
+ *   not an inference. The wiki's "Data Locations" page gives
+ *   `~/.config/unity3d/srylain Inc_/Clone Hero` instead, and that page is about a DIFFERENT file:
+ *   it names `scoredata.bin`, which a v1.1 install really does keep there, written the same
+ *   minute as `scorestats.json` (verified 2026-09-12 on the same install). So the page is right
+ *   about the file it describes and says nothing about this one. `scoreDataDirCandidates` below
+ *   is where that other location lives.
  *
  * - **macOS**: `~/Clone Hero`. Established for the user-data root by three wiki pages and the
  *   official blog, all agreeing that v1.0 moved everything out of
- *   `~/Library/Application Support/com.srylain.CloneHero` and into `~/Clone Hero`. The
- *   "Application Support still holds scores" claim that contradicts this traces to the same
- *   stale Data Locations page as above, and to nothing else. Only one candidate is listed, since
- *   the pre-v1 location cannot hold a file that did not exist until v1.1.
+ *   `~/Library/Application Support/com.srylain.CloneHero` and into `~/Clone Hero`. Only one
+ *   candidate is listed, since the pre-v1 location cannot hold a file that did not exist until
+ *   v1.1.
  *
  * - **Windows**: `<Documents>/Clone Hero` first, per the wiki's Installation page ("settings,
  *   profiles, custom content, and songs go into Documents > Clone Hero"), which is the same root
@@ -110,4 +119,94 @@ export function scoreStatsPath(
   const candidates = scoreStatsCandidates(home, platform, documents)
   if (candidates.length === 0) return null
   return candidates.find(exists) ?? candidates[0]
+}
+
+/** Clone Hero's high score table: one chart per record, and the only record of an old play. */
+export const SCORE_DATA_FILE = 'scoredata.bin'
+
+/** The companion file holding the score the game actually reports. See play/scoredata.ts. */
+export const SCORES_EXT_FILE = 'scoresext.bin'
+
+/** The pair, which is only ever read together: neither file alone decodes into anything. */
+export interface ScoreDataPaths {
+  scoreData: string
+  scoresExt: string
+}
+
+/**
+ * Unity's company folder for Clone Hero, and the product folder inside it.
+ *
+ * `srylain Inc.` with the dot rewritten as an underscore is Unity's own sanitising of the
+ * company name, not a typo, and it is what the directory on disk is actually called.
+ */
+const UNITY_COMPANY = 'srylain Inc_'
+const UNITY_PRODUCT = 'Clone Hero'
+
+/**
+ * Every directory worth probing for the two score files, best-supported first.
+ *
+ * These files are NOT in Clone Hero's user-data root. They are in Unity's `persistentDataPath`,
+ * which the engine composes per platform as `<platform root>/<company>/<product>`, and which
+ * moves with the engine rather than with the game's own layout. That is why this is a second,
+ * independent resolver rather than another file name appended to `scoreStatsCandidates`: a
+ * correction to one of the two locations must not move the other.
+ *
+ * - **Linux**: `~/.config/unity3d/srylain Inc_/Clone Hero`. **The only verified entry.** The
+ *   owner's install holds both files there, written the same minute as
+ *   `~/.clonehero/scorestats.json`, against Clone Hero v1.1.0.6142-final on 2026-09-12. The
+ *   wiki's "Data Locations" page names the same directory for `scoredata.bin`.
+ *
+ * - **Windows**: `%USERPROFILE%/AppData/LocalLow/srylain Inc_/Clone Hero`, which is where Unity
+ *   puts `persistentDataPath` on Windows. NOT verified: nobody has run this against a Windows
+ *   install. It agrees with the migration guide's "score saves and other hidden data are stored"
+ *   in LocalLow, which is a second source for the directory and still not a sighting of the file.
+ *
+ * - **macOS**: `~/Library/Application Support/srylain Inc_/Clone Hero`, Unity's own macOS
+ *   `persistentDataPath`, followed by `~/Library/Application Support/com.srylain.CloneHero`,
+ *   which is the shape Unity used before it switched to company-and-product folders and is what
+ *   an install carried over from an older build may still be reading. Neither is verified.
+ *
+ * The shape is the one `scoreStatsCandidates` already uses for an unverifiable platform: a list
+ * that is probed rather than a single path committed to, and an empty list where there is no
+ * evidence at all, so an unknown platform can be told apart from a missing install.
+ */
+export function scoreDataDirCandidates(home: string, platform: NodeJS.Platform): string[] {
+  switch (platform) {
+    case 'linux':
+      return [join(home, '.config', 'unity3d', UNITY_COMPANY, UNITY_PRODUCT)]
+    case 'win32':
+      return [join(home, 'AppData', 'LocalLow', UNITY_COMPANY, UNITY_PRODUCT)]
+    case 'darwin':
+      return [
+        join(home, 'Library', 'Application Support', UNITY_COMPANY, UNITY_PRODUCT),
+        join(home, 'Library', 'Application Support', 'com.srylain.CloneHero')
+      ]
+    default:
+      return []
+  }
+}
+
+/**
+ * The two score-file paths to read and watch, or null on a platform with no candidates.
+ *
+ * Picks the first candidate directory holding EITHER file, and falls back to the first candidate
+ * when none does, for the same reason `scoreStatsPath` does: most machines running Encore have no
+ * Clone Hero at all, and the watcher still needs a directory to watch in case one appears.
+ *
+ * Either file rather than both, because one of them is enough to identify the directory and the
+ * two are not always in step: `scoresext.bin` is the newer of the pair, so an install that has
+ * not written it yet has the right directory and only one file in it. What to do about a half
+ * present pair is the reader's problem, not the locator's (play/score-watcher.ts refuses it).
+ */
+export function scoreDataPaths(
+  home: string,
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean = existsSync
+): ScoreDataPaths | null {
+  const dirs = scoreDataDirCandidates(home, platform)
+  if (dirs.length === 0) return null
+  const dir =
+    dirs.find((d) => exists(join(d, SCORE_DATA_FILE)) || exists(join(d, SCORES_EXT_FILE))) ??
+    dirs[0]
+  return { scoreData: join(dir, SCORE_DATA_FILE), scoresExt: join(dir, SCORES_EXT_FILE) }
 }

@@ -158,6 +158,26 @@ const deps = (): IpcDeps => ({
     coverage: { inLibrary: 4, identified: 3, withPlay: 2, playsOffLibrary: 1 },
     topCharters: [{ charter: 'Mech', owned: 2, played: 1, plays: 3 }],
     recent: []
+  }),
+  playLifetime: vi.fn().mockReturnValue({
+    status: {
+      available: true,
+      reason: 'ok',
+      scoreDataPath: '/home/u/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
+      scoresExtPath: '/home/u/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
+      lastImportAt: '2026-09-12T09:00:00.000Z'
+    },
+    totals: {
+      charts: 2,
+      lifetimePlays: 9,
+      chartsInLibrary: 1,
+      chartsNotInLibrary: 1,
+      chartsWithUnconfirmedRows: 1,
+      bestScore: 80597,
+      observedPlays: 3,
+      observedCharts: 2
+    },
+    charts: []
   })
 })
 
@@ -991,7 +1011,7 @@ describe('registerIpc', () => {
     expect(d.detectLibraries).toHaveBeenCalledTimes(1)
   })
 
-  it('routes the four play reads to deps', async () => {
+  it('routes the five play reads to deps', async () => {
     const ipc = fakeIpc()
     const d = deps()
     registerIpc(ipc as never, d)
@@ -1000,8 +1020,34 @@ describe('registerIpc', () => {
     expect(await ipc.invoke(IPC.playInsights)).toMatchObject({
       coverage: { inLibrary: 4, identified: 3, withPlay: 2, playsOffLibrary: 1 }
     })
+    expect(await ipc.invoke(IPC.playLifetime, {})).toMatchObject({
+      totals: { lifetimePlays: 9, observedPlays: 3 }
+    })
     await ipc.invoke(IPC.playSummaries, ['e54e9a0521444e81bd1fed4f3f3a3201'])
     expect(d.playSummaries).toHaveBeenCalledWith(['e54e9a0521444e81bd1fed4f3f3a3201'])
+  })
+
+  it('validates checksums at the play:lifetime boundary, and allows no payload at all', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const one = 'e54e9a0521444e81bd1fed4f3f3a3201'
+    await expect(ipc.invoke(IPC.playLifetime, { checksums: ['nope'] })).rejects.toThrow()
+    await expect(ipc.invoke(IPC.playLifetime, { checksums: [one.toUpperCase()] })).rejects.toThrow()
+    await expect(
+      ipc.invoke(IPC.playLifetime, { checksums: new Array(501).fill(one) })
+    ).rejects.toThrow()
+    expect(d.playLifetime).not.toHaveBeenCalled()
+    // No payload is the "everything" call, and reaches deps with no checksums rather than
+    // failing: the renderer has no list to send when it is drawing a summary.
+    await ipc.invoke(IPC.playLifetime, undefined)
+    expect(d.playLifetime).toHaveBeenCalledWith({})
+    await ipc.invoke(IPC.playLifetime, { checksums: [one] })
+    expect(d.playLifetime).toHaveBeenCalledWith({ checksums: [one] })
+    // An empty list is not the same request, and must stay tellable from an absent one: it asks
+    // for the rows of no charts, which is what a page showing nothing wants.
+    await ipc.invoke(IPC.playLifetime, { checksums: [] })
+    expect(d.playLifetime).toHaveBeenCalledWith({ checksums: [] })
   })
 
   it('validates checksums at the play:summaries boundary', async () => {

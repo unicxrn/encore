@@ -61,8 +61,13 @@ export const SCAN_VERSION = 7
  * itself the thing those tests are about.
  *
  * 6: the four stripped-name columns, the `charts_search` view and an FTS index rebuilt over it.
+ *
+ * 7: `score_charts` and `score_bests`, holding what Clone Hero's own score files say. No
+ *    SCAN_VERSION bump goes with this one, and that is not an oversight: nothing in either table
+ *    comes from reading a chart, so a rescan could not fill them and asking every user for one
+ *    would re-read their whole library to learn nothing. The import fills them instead.
  */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 /**
  * The text columns stored twice: once as the chart says it, once as a reader sees it.
@@ -377,6 +382,47 @@ export function openCatalog(filePath: string): CatalogDb {
 			UNIQUE(checksum, playedAt)
 		);
 		CREATE INDEX IF NOT EXISTS plays_checksum ON plays(checksum);
+		-- What Clone Hero's own score files say about each chart, imported from scoredata.bin and
+		-- scoresext.bin (play/scoredata.ts decodes them, play/score-store.ts writes these rows).
+		--
+		-- SEPARATE FROM plays ON PURPOSE, and the two must never be merged. plays is a log of
+		-- plays Encore watched happen, one row per play, each with the timestamp the game wrote.
+		-- These two tables are a table of BESTS with no dates at all, and playCount is a lifetime
+		-- running total that ALREADY INCLUDES every play plays holds. Writing these rows into
+		-- plays would double count every play Encore has seen, invent dates for plays that have
+		-- none, and corrupt every total and every day of the activity chart. Keeping them apart is
+		-- also what lets a screen show the two side by side and say which is which.
+		--
+		-- The checksum is Clone Hero's own chart identity, lower hex, joinable to
+		-- charts.cloneHeroChecksum through the charts_checksum index. Not a foreign key, for the
+		-- same reason plays is not: the game has records for charts this library never had.
+		--
+		-- One row per chart the game has a record of. rowCount and hasOnlyConfirmedVariants are
+		-- derived from the score rows, and stored rather than re-derived by a join: a chart can have
+		-- a play count and no score rows at all, and the rule for which variants are confirmed
+		-- lives in the parser. One writer (the import) replaces both tables inside one
+		-- transaction, so they cannot disagree.
+		CREATE TABLE IF NOT EXISTS score_charts (
+			checksum TEXT PRIMARY KEY,
+			playCount INTEGER NOT NULL,
+			rowCount INTEGER NOT NULL,
+			hasOnlyConfirmedVariants INTEGER NOT NULL
+		);
+		-- One row per chart per variant: the game's own key for the several scores it keeps for one
+		-- chart. See play/scoredata.ts on what a variant is not known to mean, and why a score from
+		-- an unconfirmed variant must not be shown beside a confirmed one.
+		CREATE TABLE IF NOT EXISTS score_bests (
+			checksum TEXT NOT NULL,
+			variant INTEGER NOT NULL,
+			difficulty INTEGER NOT NULL,
+			percent INTEGER NOT NULL,
+			isFullCombo INTEGER NOT NULL DEFAULT 0,
+			playbackSpeed INTEGER NOT NULL,
+			stars INTEGER NOT NULL,
+			score INTEGER NOT NULL,
+			scoreWithoutCleanPlayBonus INTEGER NOT NULL,
+			PRIMARY KEY (checksum, variant)
+		);
 		${SEARCH_VIEW_SQL}
 		${FTS_SQL}
 		${FTS_TRIGGERS_SQL}
