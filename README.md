@@ -195,10 +195,13 @@ inside the build: a release body typed into the browser afterwards can never get
 that already exists. What that buys is an app that can show what changed with no network, and a
 release page that says the same thing it does.
 
-1. Write the entry, under a `## [x.y.z] - yyyy-mm-dd` heading at the top of `CHANGELOG.md`, with
-   the tag link at the foot of the file. Bullets, `###` sections, and backticks for file names.
-   No other markdown: the panel renders backticks and text, and `src/shared/changelog.test.ts`
-   fails on anything else.
+1. Write the entry under a `## [x.y.z] - yyyy-mm-dd` heading at the top of `CHANGELOG.md`, with
+   the tag link at the foot of the file. Between releases that entry is being written under a
+   `## [Unreleased]` heading, so cutting one usually means renaming that heading rather than
+   writing a new entry. Bullets, `###` sections, and backticks for file names. No other markdown:
+   the panel renders backticks and text, and `src/shared/changelog.test.ts` fails on anything
+   else. The panel and the release pins both skip `Unreleased`, so work can land there without
+   anything having to claim it shipped.
 2. Bump `version` in `package.json` to match. `test/release-notes.test.ts` fails if the newest
    changelog entry is not the version about to be built, so a release with no notes cannot be cut
    by accident.

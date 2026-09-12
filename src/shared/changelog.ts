@@ -153,6 +153,32 @@ export function parseChangelog(markdown: string): ChangelogRelease[] {
   return releases
 }
 
+/**
+ * The heading Keep a Changelog puts above work that is committed but not yet cut.
+ *
+ * It is a real entry in the file and parses like any other, but it is not a release: it has no
+ * version and no date, and no build has ever carried it. Everything that reasons about releases
+ * goes through `releasedOnly` so a heading here cannot be mistaken for one, which is what the
+ * release pins in `test/release-notes.test.ts` depend on.
+ */
+export const UNRELEASED = 'Unreleased'
+
+/** True for the `## [Unreleased]` heading, in any casing someone writes it. */
+export function isUnreleased(release: ChangelogRelease): boolean {
+  return release.version.toLowerCase() === UNRELEASED.toLowerCase()
+}
+
+/**
+ * The releases, with the unreleased heading dropped.
+ *
+ * The parser keeps that heading rather than swallowing it, because dropping it silently would mean
+ * a typo in a version heading vanished from the file instead of failing a test. Filtering it here
+ * puts the decision in one place.
+ */
+export function releasedOnly(releases: readonly ChangelogRelease[]): readonly ChangelogRelease[] {
+  return releases.filter((release) => !isUnreleased(release))
+}
+
 /** The entry for one version, or null when this build's changelog has none. */
 export function releaseFor(
   releases: readonly ChangelogRelease[],

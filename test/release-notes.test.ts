@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 // release tool run by hand, not something the app imports, so giving it a build step to produce
 // types would be more machinery than the file itself.
 import { assetSection, releaseNotes, sectionFor } from '../scripts/release-notes.mjs'
-import { parseChangelog } from '../src/shared/changelog'
+import { parseChangelog, releasedOnly } from '../src/shared/changelog'
 import pkg from '../package.json'
 
 /**
@@ -27,8 +27,11 @@ describe('CHANGELOG.md against package.json', () => {
     expect(sectionFor(CHANGELOG, pkg.version)).not.toBeNull()
   })
 
+  // `releasedOnly` here and not `parseChangelog`, because a `## [Unreleased]` heading is the
+  // normal state of this file between releases: work lands under it and is renamed to a version
+  // when one is cut. The pin is about the newest *release*, which is what a build ships.
   it('leads with that version, so the newest entry is the one shipping', () => {
-    expect(parseChangelog(CHANGELOG)[0].version).toBe(pkg.version)
+    expect(releasedOnly(parseChangelog(CHANGELOG))[0]?.version).toBe(pkg.version)
   })
 })
 

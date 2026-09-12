@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte'
 import { describe, expect, it, vi } from 'vitest'
 import WhatsNew from './WhatsNew.svelte'
 import { CHANGELOG } from '../changelog'
+import { releasedOnly } from '../../../../shared/changelog'
 import { APP_VERSION } from '../../../../shared/constants'
 
 /**
@@ -34,14 +35,22 @@ describe('WhatsNew', () => {
     // Not a fixture: this is the real CHANGELOG.md, inlined by the `?raw` import in lib/changelog.
     expect(CHANGELOG.length).toBeGreaterThan(0)
     mount()
-    for (const release of CHANGELOG) {
+    for (const release of releasedOnly(CHANGELOG)) {
       expect(screen.getByRole('heading', { name: `Encore ${release.version}` })).toBeTruthy()
     }
   })
 
+  it('leaves out the unreleased heading, which no build carries', () => {
+    // Between releases CHANGELOG.md leads with `## [Unreleased]`, so a build from such a checkout
+    // parses one. Drawing it would put a release nobody can install at the top of the panel, above
+    // the version the user is actually running, dated nothing.
+    mount()
+    expect(screen.queryByRole('heading', { name: /Encore Unreleased/i })).toBeNull()
+  })
+
   it('renders a release section as a heading over a list', () => {
     mount()
-    const added = CHANGELOG[0].sections.find((section) => section.title === 'Added')
+    const added = releasedOnly(CHANGELOG)[0].sections.find((s) => s.title === 'Added')
     expect(added).toBeTruthy()
     expect(screen.getAllByRole('heading', { name: 'Added' }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('listitem').length).toBeGreaterThanOrEqual(added?.items.length ?? 0)
@@ -50,7 +59,7 @@ describe('WhatsNew', () => {
   it('draws a backticked run as code rather than printing the backticks', () => {
     // Read out of the changelog rather than written here, so this keeps testing the real entries
     // as they change instead of pinning one file name forever.
-    const expected = CHANGELOG.flatMap((release) =>
+    const expected = releasedOnly(CHANGELOG).flatMap((release) =>
       release.sections.flatMap((section) =>
         section.items.flatMap((item) => item.filter((span) => span.code).map((span) => span.text))
       )

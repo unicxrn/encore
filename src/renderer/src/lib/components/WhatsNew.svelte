@@ -17,6 +17,7 @@
    */
   import { CHANGELOG } from '../changelog'
   import {
+    releasedOnly,
     releaseFor,
     type ChangelogItem,
     type ChangelogRelease
@@ -109,7 +110,10 @@
         {/if}
       {/if}
 
-      {#each CHANGELOG as release (release.version)}
+      <!-- `releasedOnly`, because between releases CHANGELOG.md leads with an `## [Unreleased]`
+           heading. A build from such a checkout would otherwise draw it as a release nobody can
+           install, dated nothing. -->
+      {#each releasedOnly(CHANGELOG) as release (release.version)}
         <section class="release" aria-labelledby="whats-new-{release.version}">
           <div class="release-head">
             <h3 class="version" id="whats-new-{release.version}">Encore {release.version}</h3>

@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  isUnreleased,
   parseChangelog,
   parseSpans,
   releaseFor,
+  releasedOnly,
   whatsNewOnLaunch,
   type ChangelogItem
 } from './changelog'
@@ -148,11 +150,20 @@ describe('the real CHANGELOG.md', () => {
   })
 
   it('gives every release a semver version, a date and something to read', () => {
-    for (const release of releases) {
+    for (const release of releasedOnly(releases)) {
       expect(release.version).toMatch(/^\d+\.\d+\.\d+$/)
       expect(release.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
       expect(release.sections.flatMap((s) => s.items).length).toBeGreaterThan(0)
     }
+  })
+
+  it('carries at most one unreleased heading, and carries it at the top', () => {
+    // Between releases this file leads with `## [Unreleased]`, and at a release that heading is
+    // renamed to the version. Two of them, or one buried under a release, means someone wrote a
+    // second entry instead of adding to the first.
+    const unreleased = releases.filter(isUnreleased)
+    expect(unreleased.length).toBeLessThanOrEqual(1)
+    if (unreleased.length === 1) expect(releases[0]).toBe(unreleased[0])
   })
 
   it('names no version twice', () => {

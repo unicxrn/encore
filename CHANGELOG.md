@@ -10,6 +10,23 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
+## [Unreleased]
+
+### Added
+
+- Explore loads the next page as you reach the bottom of the results, instead of asking you to
+  press a button for each one. It appends on its own up to 500 charts, then leaves a button that
+  fetches a page and raises the ceiling again, so a long browse stays a list you can still scroll
+  and a fast one cannot spend the catalogue's whole rate limit. The button is a real control at the
+  end of the list, so reaching more results never needs a scroll gesture.
+- Advanced search in Explore, against the catalogue's own advanced endpoint. Search by name,
+  artist, album, genre, year and charter, each of which can be matched exactly or excluded; by
+  ranges of song length, intensity, average and peak notes per second, and year; and by what a
+  chart contains, including solo sections, lyrics, vocals, open notes, tap notes, forced notes,
+  roll lanes, 2x kick, a video background, known issues, and whether it is a modchart. The panel
+  stays shut until you open it, and once filters are applied the button that opens it says how
+  many, with a way to clear them.
+
 ## [0.2.0] - 2026-09-11
 
 ### Added
