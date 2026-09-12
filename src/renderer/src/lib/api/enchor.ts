@@ -1,4 +1,5 @@
 import { ENCHOR_FILES_URL } from '../../../../shared/constants'
+import { advancedBody, type AdvancedQuery } from './advanced'
 
 export const ENCHOR_API = 'https://api.enchor.us'
 export const ENCHOR_FILES = ENCHOR_FILES_URL
@@ -9,6 +10,11 @@ export interface SearchParams {
   instrument?: string | null
   difficulty?: string | null
   sort?: { type: string; direction: 'asc' | 'desc' }
+  /**
+   * The advanced panel's fields. A query with none of them filled in goes to `/search`, and one
+   * with any of them goes to `/search/advanced`; see `searchCharts`.
+   */
+  advanced?: AdvancedQuery | null
 }
 
 export interface FilterOption {
@@ -112,8 +118,18 @@ export async function searchCharts(
   fetchFn: typeof fetch = fetch,
   opts: SearchOpts = {}
 ): Promise<SearchResult> {
+  // One place decides which endpoint answers, so paging, retry, backoff and abort are the same
+  // code whichever it is. The advanced fields are what decides: `/search` accepts them and
+  // silently ignores every one, so sending them there looks answered and is not.
+  const advanced = params.advanced ? advancedBody(params.advanced) : {}
+  const useAdvanced = Object.keys(advanced).length > 0
+  const url = `${ENCHOR_API}${useAdvanced ? '/search/advanced' : '/search'}`
   const body = JSON.stringify({
-    search: params.search,
+    // `/search/advanced` ignores `search` (measured: a term there answers with the whole
+    // catalog), so the wildcard goes out in its place rather than a term the answer does not
+    // honour. The panel's Name field is where a title goes once advanced filters are on, and
+    // Explore says so beside the box it disables.
+    search: useAdvanced ? '*' : params.search,
     per_page: 25,
     page: params.page ?? 1,
     instrument: params.instrument ?? null,
@@ -121,11 +137,12 @@ export async function searchCharts(
     drumType: null,
     drumsReviewed: true,
     sort: params.sort ?? null,
-    source: 'api'
+    source: 'api',
+    ...advanced
   })
   let lastError: Error = new Error('unreachable')
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const response = await fetchFn(`${ENCHOR_API}/search`, {
+    const response = await fetchFn(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,

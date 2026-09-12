@@ -7,6 +7,7 @@
   import { INSTRUMENTS, DIFFICULTIES, albumArtUrl, type ChartData } from '../api/enchor'
   import { msToTime, diffDisplay } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
+  import AdvancedSearch from './AdvancedSearch.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   // Rows open the full Detail page (the old inline side panel is retired).
@@ -17,7 +18,9 @@
   // (and drop the pages already loaded) each time.
   const search = browseSearch
   const { results, groups, found, loading, error, searched, expanded, mode, selected } = search
+  const { advancedCount, advancedOpen, hasMore, atAutoCap } = search
   let inputEl = $state<HTMLInputElement | null>(null)
+  let advToggleEl = $state<HTMLButtonElement | null>(null)
   // Seeded from the shared store so a remount restores the chips the user set.
   let instrument = $state<string | null>(get(search.filters).instrument)
   let difficulty = $state<string | null>(get(search.filters).difficulty)
@@ -27,6 +30,26 @@
   // collapsed every open group on the way back from a chart Detail.
 
   let tableEl = $state<HTMLDivElement | null>(null)
+  let sentinelEl = $state<HTMLButtonElement | null>(null)
+
+  /**
+   * The offset the restore below wrote, until a scroll event accounts for it.
+   *
+   * Setting `scrollTop` makes the browser fire a scroll event of its own, and treating that one
+   * as the user's would arm auto-append at exactly the offset they left. On a list they had
+   * scrolled to the bottom, that is one unasked-for request on every trip back from a chart
+   * Detail, spent fetching a page nobody looked for. A scroll to any other offset is theirs.
+   */
+  let restoredTo: number | null = null
+  /**
+   * Whether reaching the bottom may fetch.
+   *
+   * False until the user moves the list themselves, for the reason above. The button at the
+   * bottom works from the first paint either way, so nothing is unreachable while this is false.
+   */
+  let armed = $state(false)
+  /** Whether the sentinel is on screen, as the observer last saw it. */
+  let atBottom = $state(false)
 
   // Put the list back where the user left it. Runs once, when bind:this fills
   // tableEl on mount; the rows are already in the DOM by then because the
@@ -36,7 +59,67 @@
   // always 0 and a test could only assert that this line ran. This needs QA in
   // the desktop app.
   $effect(() => {
-    if (tableEl) tableEl.scrollTop = search.savedScroll()
+    if (!tableEl) return
+    const saved = search.savedScroll()
+    if (saved <= 0) return
+    restoredTo = saved
+    tableEl.scrollTop = saved
+  })
+
+  function onTableScroll(top: number): void {
+    if (restoredTo !== null && top === restoredTo) restoredTo = null
+    else armed = true
+    search.saveScroll(top)
+  }
+
+  /**
+   * Watch the button at the end of the list and record whether it is in view.
+   *
+   * The decision is not taken here. A page that lands while the sentinel is still on screen fires
+   * no new intersection of its own, so acting inside the callback would load one page and stop;
+   * the effect below re-takes the decision whenever the rows, the loading flag or the cap move.
+   *
+   * `rootMargin` starts the next page a screenful early, so the rows arrive before the user
+   * reaches the end rather than after they have stared at the bottom of the list.
+   *
+   * NOT COVERED BY ANY TEST as written: jsdom ships no IntersectionObserver and computes no
+   * layout, so the tests stub the observer and drive it by hand. What the real one does with this
+   * root and this margin needs QA in the desktop app.
+   */
+  $effect(() => {
+    const el = sentinelEl
+    const root = tableEl
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined
+    const observer = new IntersectionObserver(
+      (entries) => {
+        atBottom = entries.some((entry) => entry.isIntersecting)
+      },
+      { root, rootMargin: '400px 0px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  })
+
+  /**
+   * Load the next page when the end of the list is in view.
+   *
+   * Every guard here is about spending requests the user did not ask for. `armed` keeps a restored
+   * scroll position from fetching; `$loading` keeps one request in flight at a time (the store
+   * checks it again, so a scroll that crosses the sentinel twice in a turn still costs one);
+   * `$error` stops a failed page being asked for over and over, which is how a rate-limited client
+   * stays rate-limited, and leaves the error card's Retry as the way back; `$atAutoCap` is where
+   * appending stops and the button takes over.
+   */
+  $effect(() => {
+    if (!armed || !atBottom || $loading || $error || !$hasMore || $atAutoCap) return
+    // One arrival at the bottom is one page, so the decision is consumed rather than left
+    // standing. Left standing it would fire again the instant `$loading` went back to false,
+    // which is before the observer has had a chance to say the sentinel moved, and a scroll to
+    // the end of a 95,262 chart catalog would then run pages off as fast as the network answered.
+    // The observer speaks again when the sentinel next crosses the edge of the viewport, and the
+    // button below covers the case where a short page leaves it sitting in view.
+    atBottom = false
+    void search.loadMore()
   })
 
   // chartIds whose name+artist+charter match a local catalog row. A metadata
@@ -97,7 +180,10 @@
   }
 
   export function focusSearch(): void {
-    inputEl?.focus()
+    // The box is disabled while advanced filters are on, and a disabled input cannot take focus,
+    // so this would otherwise do nothing at all. The panel is where a title goes in that state.
+    if (inputEl?.disabled) advToggleEl?.focus()
+    else inputEl?.focus()
   }
 
   function openChart(chart: ChartData): void {
@@ -227,12 +313,23 @@
         value={$globalQuery}
         placeholder="Search charts…"
         aria-label="Search charts"
+        disabled={$advancedCount > 0}
+        aria-describedby={$advancedCount > 0 ? 'adv-takeover' : undefined}
         oninput={(e) => onQueryInput(e.currentTarget.value)}
       />
       <span class="count">
         {#if $loading}SEARCHING…{:else if $found}{$found.toLocaleString()} RESULTS{/if}
       </span>
     </div>
+    <!-- Said rather than left to be worked out. Chorus Encore's advanced endpoint takes no search
+         term (measured: a term sent with it answers with the whole catalog), so a box that still
+         accepted typing would look broken instead of being off. -->
+    {#if $advancedCount > 0}
+      <p class="takeover" id="adv-takeover">
+        Advanced filters are on, and Chorus Encore does not take a search term alongside them. Put a
+        title in the panel's Name field, or clear the filters.
+      </p>
+    {/if}
     <div class="filters">
       <select
         class="chip"
@@ -254,6 +351,25 @@
           <option value={opt.value ?? ''}>{opt.label}</option>
         {/each}
       </select>
+      <!-- The count is on the button, not only inside the panel, because the panel is shut most
+           of the time and a list narrowed by filters nobody can see is a list that looks wrong.
+           Clear sits beside it for the same reason: the way out has to be where the evidence is. -->
+      <button
+        bind:this={advToggleEl}
+        class="adv"
+        class:on={$advancedCount > 0}
+        aria-expanded={$advancedOpen}
+        aria-controls="advanced-panel"
+        aria-label={$advancedCount > 0
+          ? `Advanced search, ${$advancedCount} ${$advancedCount === 1 ? 'filter' : 'filters'} applied`
+          : 'Advanced search'}
+        onclick={() => search.setAdvancedOpen(!$advancedOpen)}
+      >
+        Advanced{#if $advancedCount > 0}<span class="adv-count">{$advancedCount}</span>{/if}
+      </button>
+      {#if $advancedCount > 0}
+        <button class="adv-clear" onclick={() => search.clearAdvanced()}>Clear filters</button>
+      {/if}
       <!-- Two buttons rather than one that toggles: the label of a toggle names
            the state you are leaving or the one you are going to, and which of
            those it means is a coin flip. Here each button names a layout and
@@ -267,6 +383,9 @@
         >
       </div>
     </div>
+    {#if $advancedOpen}
+      <AdvancedSearch {search} />
+    {/if}
     <!-- Only while there is a selection: an empty selection is the state this
          list is in nearly all the time, and a bar that is always there would
          charge every visit for an occasional action. -->
@@ -368,7 +487,7 @@
     <div
       class="table selectable"
       bind:this={tableEl}
-      onscroll={(e) => search.saveScroll(e.currentTarget.scrollTop)}
+      onscroll={(e) => onTableScroll(e.currentTarget.scrollTop)}
     >
       {#if $mode === 'grid'}
         <div class="grid">
@@ -471,11 +590,38 @@
           {/if}
         {/each}
       {/if}
-      {#if !$error && $results.length && $results.length < $found}
-        <button class="more" disabled={$loading} onclick={() => void search.loadMore()}>
-          Load more
-        </button>
+      <!-- One control, two jobs. Reaching it loads the next page on its own until the cap, and
+           pressing it loads one past the cap, so a keyboard or screen-reader user who never makes
+           a scroll gesture reaches the same rows by tabbing to it and pressing Enter.
+
+           Deliberately not disabled while a page is in flight: disabling the control that has
+           focus throws focus back to the document, which loses a keyboard user their place in the
+           list every time a page lands. The store ignores a call made while one is already
+           running, so a press during a load costs nothing. -->
+      {#if !$error && $hasMore}
+        <div class="more-row">
+          <button bind:this={sentinelEl} class="more" onclick={() => void search.loadMore()}>
+            {#if $loading}Loading more…{:else if $atAutoCap}Keep loading{:else}Load more{/if}
+          </button>
+          {#if $atAutoCap && !$loading}
+            <p class="more-note">
+              {$results.length.toLocaleString()} of {$found.toLocaleString()} loaded. Explore stops adding
+              them on its own here, because everything loaded stays on screen and a list this long is
+              what slows down next, not the search.
+            </p>
+          {/if}
+        </div>
       {/if}
+      <!-- The rows appear below the fold, so nothing about an appended page is announced without
+           this. Rendered from the first paint rather than when the first page lands: a live region
+           added to the page at the same moment as its text is not reliably read out. -->
+      <p class="sr-only" role="status">
+        {#if $loading}
+          Loading more charts
+        {:else if $results.length}
+          {$results.length.toLocaleString()} of {$found.toLocaleString()} charts loaded
+        {/if}
+      </p>
       {#if showEmpty}
         <p class="empty">
           {#if activeQuery && (instrument || difficulty)}
@@ -980,9 +1126,14 @@
     color: var(--text-3);
     text-align: right;
   }
+  .more-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px 20px;
+  }
   .more {
-    display: block;
-    margin: 12px auto;
     background: var(--surface-1);
     border: 1px solid var(--hairline);
     border-radius: 7px;
@@ -995,12 +1146,87 @@
       color var(--t-fast) var(--ease),
       border-color var(--t-fast) var(--ease);
   }
-  .more:hover:not(:disabled) {
+  .more:hover {
     color: var(--text-1);
     border-color: rgba(255, 255, 255, 0.2);
   }
-  .more:disabled {
+  .more-note {
+    margin: 0;
+    max-width: 52ch;
+    text-align: center;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+  }
+  /* Advanced sits with the filter chips because it is one, and lights the same way the mode
+     buttons and Installed's toggles do when it is on. */
+  .adv,
+  .adv-clear {
+    appearance: none;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-size: var(--fs-secondary);
+    font-family: var(--font-ui);
+    color: var(--text-2);
+    padding: 4px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+  .adv:hover,
+  .adv:focus,
+  .adv-clear:hover,
+  .adv-clear:focus {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .adv.on {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  /* A number, not a dot: "filters are on" is useful, "three filters are on" is what tells someone
+     whether they have found all of them again. */
+  .adv-count {
+    display: inline-block;
+    margin-left: 6px;
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    line-height: 16px;
+    text-align: center;
+  }
+  /* Full width under the search box, so it lands against the control it is about. */
+  .takeover {
+    margin: 0 16px 8px;
+    max-width: 68ch;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+  }
+  input:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  /* Off screen rather than `display: none`, which takes an element out of the accessibility tree
+     along with the layout and would silence the live region entirely. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

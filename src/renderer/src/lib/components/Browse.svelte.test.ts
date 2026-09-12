@@ -5,6 +5,7 @@ import { browseSearch } from '../stores/search'
 import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
 import type { ChartData, SearchResult } from '../api/enchor'
+import type { AdvancedQuery } from '../api/advanced'
 
 // Browse drives the module-scoped `browseSearch`, which was constructed with the
 // real `fetch` at import time, so stubbing the global afterwards would be too late.
@@ -69,6 +70,36 @@ type MetaKey = { charter: string }
 
 const downloadAdd = vi.fn<(r: unknown) => Promise<void>>()
 
+/**
+ * The observers Browse has opened, newest last.
+ *
+ * jsdom ships no IntersectionObserver and computes no layout, so there is nothing to observe and
+ * nothing that could ever intersect. The stub below records what Browse asked to watch and hands
+ * back a way to say it came into view, which is the only part of this a test can drive.
+ */
+const observers: { fire: (visible: boolean) => void }[] = []
+
+class StubIntersectionObserver {
+  constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+  observe(): void {
+    observers.push({ fire: (visible) => this.callback([{ isIntersecting: visible }]) })
+  }
+  unobserve(): void {
+    // Nothing to forget: `observers` is emptied by renderBrowse before each mount.
+  }
+  disconnect(): void {
+    // As above.
+  }
+  takeRecords(): never[] {
+    return []
+  }
+}
+
+/** Say the button at the end of the list has come into view (or gone out of it). */
+function sentinelInView(visible = true): void {
+  for (const observer of observers) observer.fire(visible)
+}
+
 function renderBrowse(
   onOpenChart: (target: unknown) => void = () => {},
   {
@@ -84,6 +115,8 @@ function renderBrowse(
   } = {}
 ): ReturnType<typeof render> {
   settings.set({ ...defaultSettings(), libraryFolders })
+  observers.length = 0
+  vi.stubGlobal('IntersectionObserver', StubIntersectionObserver)
   vi.stubGlobal('encore', {
     existsByMeta: (keys: MetaKey[]): Promise<boolean[]> =>
       Promise.resolve(
@@ -94,8 +127,7 @@ function renderBrowse(
   return render(Browse, { onOpenChart })
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals()
+afterEach(async () => {
   downloadAdd.mockReset()
   // `settings` is another module-level writable this file writes to; left set,
   // a library folder from one test is what the next one's first paint reads.
@@ -105,11 +137,24 @@ afterEach(() => {
   // most of this file asserts on list rows, and `Browse grid view` switches for itself.
   browseSearch.setMode('list')
   browseSearch.clearSelected()
+  // Same singleton again. An advanced query one test applies disables the next test's search box
+  // and routes its request to a different endpoint, and an open panel puts thirty more controls
+  // on screen for every getByRole after it.
+  browseSearch.clearAdvanced()
+  browseSearch.setAdvancedOpen(false)
+  browseSearch.saveScroll(0)
   // `browseSearch` is module-scoped and outlives every render in this file, so a
   // group one test expands is still expanded on the next test's first paint,
   // which would put two rows for the same song on screen and make `getByRole`
   // ambiguous. Collapse whatever is open, the way a fresh store would be.
   for (const songId of get(browseSearch.expanded)) browseSearch.toggleExpanded(songId)
+  // Unstubbed last, and only once the run `clearAdvanced` may have started has settled. Browse is
+  // still mounted while this hook runs (the library's cleanup is registered before it, so it runs
+  // after), and its in-library effect reaches for the bridge every time the rows change. Pulling
+  // the bridge out from under it first surfaces as an unhandled TypeError attributed to whichever
+  // test happened to be last.
+  await new Promise((r) => setTimeout(r, 0))
+  vi.unstubAllGlobals()
 })
 
 describe('Browse expanded version groups', () => {
@@ -552,7 +597,273 @@ describe('Browse bulk download', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Download 2' }))
 
-    expect(await screen.findByText(/2 of 2/)).toBeTruthy()
+    // Named down to the sentence: "2 of 2" alone also matches the list's own "2 of 2 charts
+    // loaded" status line, and a matcher that finds either one is not checking this.
+    expect(await screen.findByText(/could not queue 2 of 2/)).toBeTruthy()
     expect(screen.getByText('2 selected')).toBeTruthy()
+  })
+})
+
+/**
+ * Loading as the user reaches the end of the list.
+ *
+ * Nothing here sees a scroll: jsdom applies no CSS and computes no layout, so the list has no
+ * height, no overflow and no scrolling box, and `scrollTop` on it is 0 whatever is assigned to it.
+ * What these pin is the wiring either side of the measurement. That the sentinel really lands at
+ * the end of the list, and that a real IntersectionObserver reports it where this one is told to,
+ * needs QA in the desktop app.
+ */
+describe('Browse loading as the list is scrolled', () => {
+  /** The store left with rows on screen and more pages behind them, and Browse rendered over it. */
+  async function renderWithMorePages(): Promise<HTMLElement> {
+    // `found` well past the rows in hand, so there is always another page to ask for. retry() is
+    // the one path that re-runs a query the module-scoped store has already answered.
+    searchCharts.mockResolvedValue({ found: 50, out_of: 50, page: 1, data: TWO_VERSIONS })
+    browseSearch.retry()
+    await new Promise((r) => setTimeout(r, 350))
+    const { container } = renderBrowse()
+    await screen.findByRole('button', { name: 'Load more' })
+    return container.querySelector('.table') as HTMLElement
+  }
+
+  /**
+   * jsdom's `scrollTop` setter does nothing without a scrolling box, so the offset a scroll event
+   * reports has to be defined onto the element directly.
+   */
+  function scrollTo(table: HTMLElement, top: number): Promise<boolean> {
+    Object.defineProperty(table, 'scrollTop', { value: top, writable: true, configurable: true })
+    return fireEvent.scroll(table)
+  }
+
+  it('fetches exactly one more page when the end of the list comes into view', async () => {
+    const table = await renderWithMorePages()
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    await scrollTo(table, 120)
+    sentinelInView()
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+
+    // One page, not several. The decision is taken once per arrival at the bottom: left standing,
+    // it would fire again the instant the request finished, before the observer could say the
+    // sentinel had moved, and a fast scroll would spend the API's 50 a minute on the way down.
+    const params = searchCharts.mock.calls[1][0] as { page: number }
+    expect(params.page).toBe(2)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not fetch until the user has moved the list themselves', async () => {
+    // Explore is destroyed by every navigation and the mount puts the list back where it was. On
+    // a list left at the bottom, an observer armed from the first paint would spend a request on
+    // every trip back from a chart Detail, for a page nobody asked for.
+    const table = await renderWithMorePages()
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    sentinelInView()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    await scrollTo(table, 120)
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not treat the restored scroll offset as the user reaching the bottom', async () => {
+    // The restore writes scrollTop, and the browser answers with a scroll event of its own. That
+    // one is not a gesture and must not arm anything.
+    searchCharts.mockResolvedValue({ found: 50, out_of: 50, page: 1, data: TWO_VERSIONS })
+    browseSearch.retry()
+    await new Promise((r) => setTimeout(r, 350))
+    browseSearch.saveScroll(420)
+
+    const { container } = renderBrowse()
+    await screen.findByRole('button', { name: 'Load more' })
+    const table = container.querySelector('.table') as HTMLElement
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    await scrollTo(table, 420)
+    sentinelInView()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    // A scroll to anywhere else is the user's, and the page they have reached is then fetched.
+    await scrollTo(table, 560)
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+  })
+
+  it('leaves a button at the end of the list, so reaching more needs no scroll gesture', async () => {
+    // The whole point of keeping a real button rather than an empty sentinel div: a keyboard or
+    // screen-reader user never fires an intersection, and tabbing to this and pressing it is how
+    // they reach the same rows.
+    const table = await renderWithMorePages()
+    const button = screen.getByRole('button', { name: 'Load more' })
+    expect(button.tagName).toBe('BUTTON')
+
+    await fireEvent.click(button)
+
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+    // Never disabled: disabling the control that has focus throws focus back to the document and
+    // loses a keyboard user their place in the list every time a page lands.
+    expect(
+      (screen.getByRole('button', { name: /Load more|Loading more/ }) as HTMLButtonElement).disabled
+    ).toBe(false)
+    expect(table).toBeTruthy()
+  })
+
+  it('says how much of the answer is loaded, where a screen reader will hear it', async () => {
+    await renderWithMorePages()
+    const status = screen.getByRole('status')
+    expect(status.textContent).toMatch(/2 of 50 charts loaded/)
+  })
+
+  it('asks for nothing more once a failed page has left the error card up', async () => {
+    // Re-asking on every re-evaluation is how a rate-limited client stays rate-limited. Retry is
+    // the deliberate way back, and it is already on the error card.
+    const table = await renderWithMorePages()
+    searchCharts.mockRejectedValueOnce(new Error('Search failed: 429'))
+
+    await scrollTo(table, 120)
+    sentinelInView()
+    await screen.findByRole('alert')
+    const spent = searchCharts.mock.calls.length
+
+    sentinelInView(false)
+    sentinelInView(true)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(spent)
+  })
+})
+
+describe('Browse advanced search', () => {
+  let mounted: ReturnType<typeof render> | null = null
+
+  /** Opens the panel from the button that carries the filter count. */
+  async function openPanel(): Promise<void> {
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    mounted = renderBrowse()
+    await fireEvent.click(await screen.findByRole('button', { name: 'Advanced search' }))
+  }
+
+  /** What opening a chart Detail does to this view: destroys it, then builds it again. */
+  function remount(): void {
+    mounted?.unmount()
+    mounted = renderBrowse()
+  }
+
+  it('keeps the panel shut until it is asked for', async () => {
+    // Thirty controls is not what most people came for. The plain box is.
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    renderBrowse()
+
+    const toggle = await screen.findByRole('button', { name: 'Advanced search' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText('Name')).toBeNull()
+  })
+
+  it('opens on the toggle and offers a field per thing the endpoint takes', async () => {
+    await openPanel()
+
+    expect(
+      screen.getByRole('button', { name: 'Advanced search' }).getAttribute('aria-expanded')
+    ).toBe('true')
+    for (const label of ['Name', 'Artist', 'Album', 'Genre', 'Year', 'Charter']) {
+      expect(screen.getByLabelText(label)).toBeTruthy()
+    }
+    expect(screen.getByLabelText('Match Name exactly')).toBeTruthy()
+    expect(screen.getByLabelText('Exclude charts matching Name')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Modchart' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+  })
+
+  it('names the unit on the length range, which the API counts in seconds', async () => {
+    await openPanel()
+    expect(screen.getByLabelText('Lowest length, in min')).toBeTruthy()
+    expect(screen.getByLabelText('Highest length, in min')).toBeTruthy()
+  })
+
+  it('changes nothing until Search is pressed', async () => {
+    // Thirty controls searching on change is thirty requests against 50 a minute, and a
+    // half-filled form is rarely a question anyone means.
+    await openPanel()
+    const spent = searchCharts.mock.calls.length
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'bloom' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
+
+    expect(searchCharts).toHaveBeenCalledTimes(spent)
+    expect(screen.getByRole('button', { name: 'Advanced search' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(spent + 1))
+    const params = searchCharts.mock.calls.at(-1)?.[0] as { advanced: AdvancedQuery }
+    expect(params.advanced.flags.modchart).toBe(true)
+    expect(params.advanced.text.name.value).toBe('bloom')
+  })
+
+  it('says on the closed panel how many filters are on, and offers the way out beside it', async () => {
+    // The panel is shut most of the time, and a list narrowed by filters nobody can see is a list
+    // that looks wrong.
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    const toggle = await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+    await fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    // Still named after the count with the panel shut, and Clear is in reach of it.
+    expect(screen.getByRole('button', { name: 'Advanced search, 1 filter applied' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+
+    await screen.findByRole('button', { name: 'Advanced search' })
+  })
+
+  it('turns the search box off and says why, because the endpoint takes no term', async () => {
+    // Measured against the live service: a term sent to /search/advanced answers with the whole
+    // catalog. A box that still took typing would look broken rather than being off.
+    await openPanel()
+    const box = screen.getByLabelText('Search charts') as HTMLInputElement
+    expect(box.disabled).toBe(false)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Search charts') as HTMLInputElement).disabled).toBe(true)
+    )
+    expect(screen.getByText(/does not take a search term/)).toBeTruthy()
+  })
+
+  it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {
+    // App renders Detail instead of Browse, so visiting a chart destroys this component and the
+    // panel with it. Ten fields typed and lost is worse than a search nobody ran.
+    await openPanel()
+    await fireEvent.input(screen.getByLabelText('Charter'), { target: { value: 'half typed' } })
+
+    remount()
+
+    // The panel is still open, because that is state too, and the boxes still hold what was typed.
+    expect(
+      (await screen.findByRole('button', { name: 'Advanced search' })).getAttribute('aria-expanded')
+    ).toBe('true')
+    expect((screen.getByLabelText('Charter') as HTMLInputElement).value).toBe('half typed')
+  })
+
+  it('keeps the applied filters across the same unmount', async () => {
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+    const spent = searchCharts.mock.calls.length
+
+    remount()
+
+    // The rows on screen were fetched with these, so the count has to still say so, and the
+    // remount must not spend a request re-asking a question the store has already answered.
+    expect(
+      await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+    ).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(spent)
   })
 })

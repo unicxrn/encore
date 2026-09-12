@@ -1,11 +1,29 @@
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store'
 import { searchCharts, type ChartData } from '../api/enchor'
+import { advancedCount, cloneAdvanced, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 
 export interface SearchConfig {
   fetchFn?: typeof fetch
   debounceMs?: number
   retryDelayMs?: number
 }
+
+/**
+ * How many results Explore appends on its own before it stops and asks.
+ *
+ * There are 95,262 charts, so "append until the end" has no end: 3,811 requests, 95,262 cards and
+ * as many album art requests, in a list nothing can scroll. Somewhere it has to stop, and a button
+ * is a better place to stop than a browser running out of memory.
+ *
+ * 500 is 20 pages, which is also 20 of the 50 requests a minute the API allows. That makes the cap
+ * the rate limit's brake as well: the fastest possible scroll spends at most 20 requests before it
+ * has to wait for a click.
+ *
+ * Deliberately not virtualisation. The grid is `auto-fill` over a window the user can resize, so a
+ * windowing layer would have to be told the row height and the column count that layout exists to
+ * work out for itself, and it would have to hold the list mode's variable row heights too.
+ */
+export const AUTO_APPEND_CAP = 500
 
 export interface SongGroup {
   primary: ChartData
@@ -93,8 +111,50 @@ export interface SearchStore {
    * several. Ticking a group's primary selects the primary and nothing else.
    */
   selected: Readable<ReadonlySet<number>>
+  /**
+   * The advanced fields the results on screen were asked for.
+   *
+   * Here rather than in the panel for the reason everything else in this store is: Explore is
+   * destroyed by every navigation and by opening a chart Detail, and a panel-owned query would
+   * quietly go back to matching everything while the rows from the narrowed one stayed up.
+   */
+  advanced: Readable<AdvancedQuery>
+  /**
+   * What the panel currently has typed into it, which is not the same thing.
+   *
+   * The panel does not search as it is edited: thirty controls searching on change is thirty
+   * requests against a 50 per minute budget, and a half-filled form is rarely a question anyone
+   * means. So the draft is what the boxes hold and `advanced` is what was asked, and Search is
+   * what moves one to the other. The draft is kept here too so a form filled in but not yet
+   * submitted survives the same round trip the applied one does.
+   */
+  advancedDraft: Readable<AdvancedQuery>
+  /** How many advanced fields are narrowing the results right now. 0 when none are. */
+  advancedCount: Readable<number>
+  /** Whether the panel is open. Survives a remount for the same reason `mode` does. */
+  advancedOpen: Readable<boolean>
+  /**
+   * Whether another page exists.
+   *
+   * Both halves matter. `found` is the service's count and the rows can overshoot it, because a
+   * page carries every version of a song it lists while `found` counts songs, so rows past `found`
+   * is the ordinary end of the data. A page that comes back empty is the other end, and without it
+   * an appending list would ask for page after page of nothing.
+   */
+  hasMore: Readable<boolean>
+  /**
+   * Whether Explore has appended as much as it will without being asked. See `AUTO_APPEND_CAP`.
+   */
+  atAutoCap: Readable<boolean>
   setQuery: (value: string) => void
   setFilters: (instrument: string | null, difficulty: string | null) => void
+  /** Records what the panel holds. Changes no results; `applyAdvanced` is what searches. */
+  setAdvancedDraft: (next: AdvancedQuery) => void
+  /** Runs the draft as the query. */
+  applyAdvanced: () => void
+  /** Empties both the draft and the applied query, and re-runs if anything was narrowing. */
+  clearAdvanced: () => void
+  setAdvancedOpen: (open: boolean) => void
   toggleExpanded: (songId: number) => void
   toggleSelected: (chartId: number) => void
   clearSelected: () => void
@@ -132,6 +192,18 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   // still the better answer for comparing charters and difficulty tiers across versions of one
   // song, which is why both exist.
   const mode = writable<BrowseMode>('grid')
+  const advancedApplied = writable<AdvancedQuery>(emptyAdvanced())
+  const advancedDraft = writable<AdvancedQuery>(emptyAdvanced())
+  const advancedOpen = writable(false)
+  const activeCount = derived(advancedApplied, advancedCount)
+  // Raised a cap's worth at a time by an explicit loadMore; see AUTO_APPEND_CAP and loadMore.
+  const autoCap = writable(AUTO_APPEND_CAP)
+  const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
+  const exhausted = writable(false)
+  const hasMore = derived(
+    [results, found, exhausted],
+    ([rows, total, done]) => !done && rows.length > 0 && rows.length < total
+  )
   let query = '*'
   // The last query we started a run for, or null before the first one. This is
   // what "already answered" means, independent of whether the answer was rows,
@@ -151,7 +223,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     error.set(null)
     try {
       const response = await searchCharts(
-        { search: query, page, instrument, difficulty },
+        { search: query, page, instrument, difficulty, advanced: get(advancedApplied) },
         fetchFn,
         {
           signal: controller.signal,
@@ -159,6 +231,9 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
         }
       )
       results.update((prev) => (append ? [...prev, ...response.data] : response.data))
+      // An empty page is the end of the data whatever `found` says, and it is the one thing that
+      // stops an appending list asking for the next page forever.
+      if (append && response.data.length === 0) exhausted.set(true)
       // Expansion keys are songIds from the rows currently on screen, so it goes
       // stale exactly when those rows are replaced, and not when a run merely
       // starts. A failed run leaves the old rows visible, and collapsing groups
@@ -169,6 +244,11 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
         expanded.set(new Set())
         selected.set(new Set())
         scrollTop = 0
+        // A different question is a different list, so the appetite for it starts over: the
+        // previous one's raised cap would let a fresh search run straight past the point the user
+        // had to ask at last time.
+        autoCap.set(AUTO_APPEND_CAP)
+        exhausted.set(false)
       }
       found.set(response.found)
       searched.set(true)
@@ -281,10 +361,52 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     return scrollTop
   }
 
+  /**
+   * Fetch the next page and append it.
+   *
+   * The loading guard is what keeps one request in flight: `run` sets `loading` before its first
+   * await, so a second call made in the same turn (a scroll that crosses the sentinel twice, a
+   * double click on the button) sees it already true and returns having spent nothing.
+   *
+   * Called both by the sentinel below the cap and by the button at it, and raising the cap here
+   * rather than in the button is what keeps that one path. Below the cap the raise cannot fire;
+   * at it, the only caller left is a deliberate click, and a click is the user asking for another
+   * cap's worth.
+   */
   async function loadMore(): Promise<void> {
-    if (get(loading) || get(results).length >= get(found)) return
+    if (get(loading) || get(exhausted) || get(results).length >= get(found)) return
+    const held = get(results).length
+    if (held >= get(autoCap)) autoCap.set(held + AUTO_APPEND_CAP)
     page += 1
     await run(true)
+  }
+
+  function setAdvancedDraft(next: AdvancedQuery): void {
+    advancedDraft.set(cloneAdvanced(next))
+  }
+
+  function applyAdvanced(): void {
+    advancedApplied.set(cloneAdvanced(get(advancedDraft)))
+    page = 1
+    // A press of Search, like a filter change, is a click rather than typing.
+    if (timer) clearTimeout(timer)
+    void run(false)
+  }
+
+  function clearAdvanced(): void {
+    const wasNarrowed = get(activeCount) > 0
+    advancedApplied.set(emptyAdvanced())
+    advancedDraft.set(emptyAdvanced())
+    // Clearing a form that was not narrowing anything changes no answer, and re-asking the same
+    // question would spend one of the 50 requests a minute to get the rows already on screen.
+    if (!wasNarrowed) return
+    page = 1
+    if (timer) clearTimeout(timer)
+    void run(false)
+  }
+
+  function setAdvancedOpen(open: boolean): void {
+    advancedOpen.set(open)
   }
 
   return {
@@ -298,8 +420,18 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     expanded,
     selected: { subscribe: selected.subscribe },
     mode: { subscribe: mode.subscribe },
+    advanced: { subscribe: advancedApplied.subscribe },
+    advancedDraft: { subscribe: advancedDraft.subscribe },
+    advancedCount: activeCount,
+    advancedOpen: { subscribe: advancedOpen.subscribe },
+    hasMore,
+    atAutoCap,
     setQuery,
     setFilters,
+    setAdvancedDraft,
+    applyAdvanced,
+    clearAdvanced,
+    setAdvancedOpen,
     toggleExpanded,
     toggleSelected,
     clearSelected,

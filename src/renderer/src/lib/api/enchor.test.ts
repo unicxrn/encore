@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { searchCharts } from './enchor'
+import { emptyAdvanced } from './advanced'
 
 const ok = (body: unknown): Promise<Response> =>
   Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
@@ -102,5 +103,95 @@ describe('searchCharts', () => {
     await expect(searchCharts({ search: 'x' }, fetchFn, { retryDelayMs: 1 })).rejects.toThrow(
       'invalid response'
     )
+  })
+})
+
+/**
+ * Which endpoint answers, and what it is sent.
+ *
+ * One function decides, so paging, retry, backoff and abort are the same code either way. The
+ * decision is the advanced fields themselves rather than a flag beside them, because a flag can
+ * disagree with the body it is passed and these cannot.
+ */
+describe('searchCharts and the advanced endpoint', () => {
+  const ok = (body: unknown): Promise<Response> =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+  const empty = { found: 0, out_of: 0, page: 1, data: [] }
+
+  it('stays on /search when the advanced form is untouched', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(empty))
+    await searchCharts({ search: 'everlong', advanced: emptyAdvanced() }, fetchFn)
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.enchor.us/search')
+    // Byte for byte the body a search without the advanced parameter sends: an untouched form is
+    // not a different request.
+    expect(JSON.parse(String(init.body))).toEqual({
+      search: 'everlong',
+      per_page: 25,
+      page: 1,
+      instrument: null,
+      difficulty: null,
+      drumType: null,
+      drumsReviewed: true,
+      sort: null,
+      source: 'api'
+    })
+  })
+
+  it('moves to /search/advanced as soon as one field is filled in', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(empty))
+    const advanced = emptyAdvanced()
+    advanced.flags.modchart = true
+    await searchCharts({ search: 'everlong', advanced }, fetchFn)
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.enchor.us/search/advanced')
+    expect(JSON.parse(String(init.body))).toMatchObject({ modchart: true })
+  })
+
+  it('sends the wildcard in place of a search term the advanced endpoint ignores', async () => {
+    // Measured against the live service: a term sent to /search/advanced answers with the whole
+    // catalog. Passing it on anyway would put a question in the body that the answer does not
+    // honour, and Explore's own note about the disabled box would be describing something else.
+    const fetchFn = vi.fn().mockImplementation(() => ok(empty))
+    const advanced = emptyAdvanced()
+    advanced.text.name.value = 'bloom'
+    await searchCharts({ search: 'everlong', advanced }, fetchFn)
+    const [, init] = fetchFn.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).search).toBe('*')
+  })
+
+  it('keeps paging and the instrument filters on the advanced endpoint', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(empty))
+    const advanced = emptyAdvanced()
+    advanced.numbers.minLength = '10'
+    await searchCharts(
+      { search: '*', page: 3, instrument: 'drums', difficulty: 'expert', advanced },
+      fetchFn
+    )
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.enchor.us/search/advanced')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      page: 3,
+      per_page: 25,
+      instrument: 'drums',
+      difficulty: 'expert',
+      // Typed in minutes, sent in seconds.
+      minLength: 600
+    })
+  })
+
+  it('retries an advanced request the same way, and against the same URL', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('busy', { status: 503 }))
+      .mockImplementationOnce(() => ok({ ...empty, found: 1 }))
+    const advanced = emptyAdvanced()
+    advanced.flags.hasLyrics = true
+    const result = await searchCharts({ search: '*', advanced }, fetchFn, { retryDelayMs: 1 })
+    expect(result.found).toBe(1)
+    expect(fetchFn.mock.calls.map((c) => c[0])).toEqual([
+      'https://api.enchor.us/search/advanced',
+      'https://api.enchor.us/search/advanced'
+    ])
   })
 })

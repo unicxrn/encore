@@ -1,7 +1,8 @@
 import { get } from 'svelte/store'
 import { describe, expect, it, vi } from 'vitest'
 import type { ChartData, SearchResult } from '../api/enchor'
-import { createSearch, groupBySong } from './search'
+import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
+import { AUTO_APPEND_CAP, createSearch, groupBySong } from './search'
 
 const makeChart = (
   chartId: number,
@@ -665,5 +666,315 @@ describe('rate-limited Explore settles', () => {
     store.retry()
     await new Promise((r) => setTimeout(r, 30))
     expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+})
+
+/** The body of the last request the store sent, parsed. */
+const lastBody = (fetchFn: ReturnType<typeof vi.fn>): Record<string, unknown> =>
+  JSON.parse(String((fetchFn.mock.calls.at(-1) as [string, RequestInit])[1].body)) as Record<
+    string,
+    unknown
+  >
+
+const lastUrl = (fetchFn: ReturnType<typeof vi.fn>): string =>
+  (fetchFn.mock.calls.at(-1) as [string, RequestInit])[0]
+
+/** A draft with one field filled in, which is all it takes to route to the advanced endpoint. */
+function draftWith(edit: (q: AdvancedQuery) => void): AdvancedQuery {
+  const query = emptyAdvanced()
+  edit(query)
+  return query
+}
+
+describe('advanced search', () => {
+  it('starts with nothing applied, so a plain query goes to /search', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(0)
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+  })
+
+  it('does not search while the draft is being edited', async () => {
+    // Thirty controls searching on change is thirty requests against a 50 a minute budget, and a
+    // half-filled form is rarely a question anyone means.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+
+    search.setAdvancedDraft(draftWith((q) => (q.text.name.value = 'bloom')))
+    search.setAdvancedDraft(draftWith((q) => (q.text.name.value = 'bloomin')))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(get(search.advancedCount)).toBe(0)
+  })
+
+  it('applyAdvanced sends the draft to the advanced endpoint, from page 1', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await search.loadMore()
+
+    search.setAdvancedDraft(
+      draftWith((q) => {
+        q.text.name.value = 'bloom'
+        q.text.name.exact = true
+      })
+    )
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn)).toMatchObject({
+      page: 1,
+      name: { value: 'bloom', exact: true, exclude: false }
+    })
+    expect(get(search.advancedCount)).toBe(1)
+  })
+
+  it('keeps the advanced fields on every page it appends', async () => {
+    // A second page fetched without them is a page of the unfiltered catalog appended to a
+    // filtered list, which is worse than not paging at all.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.flags.modchart = true)))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    await search.loadMore()
+
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn)).toMatchObject({ page: 2, modchart: true })
+  })
+
+  it('keeps the instrument and difficulty chips alongside them', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.numbers.minLength = '10')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters('drums', 'expert')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(lastBody(fetchFn)).toMatchObject({
+      instrument: 'drums',
+      difficulty: 'expert',
+      minLength: 600
+    })
+  })
+
+  it('survives the setQuery a remount re-applies', async () => {
+    // Explore is destroyed by every navigation and by opening a chart Detail. An applied query
+    // that did not survive would leave the narrowed rows on screen under a form that says nothing
+    // is narrowing them.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.text.artist.value = 'Foo Fighters')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(fetchFn).toHaveBeenCalledTimes(spent)
+    expect(get(search.advancedCount)).toBe(1)
+    expect(get(search.advanced).text.artist.value).toBe('Foo Fighters')
+  })
+
+  it('keeps a draft that was typed but never searched', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setAdvancedDraft(draftWith((q) => (q.text.charter.value = 'half typed')))
+
+    expect(get(search.advancedDraft).text.charter.value).toBe('half typed')
+    expect(get(search.advancedCount)).toBe(0)
+  })
+
+  it('clearAdvanced empties both the draft and the applied query and searches again', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.flags.hasVideoBackground = true)))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+
+    search.clearAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(fetchFn).toHaveBeenCalledTimes(spent + 1)
+    expect(get(search.advancedCount)).toBe(0)
+    expect(get(search.advancedDraft)).toEqual(emptyAdvanced())
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+  })
+
+  it('clearAdvanced spends nothing when nothing was narrowing the results', async () => {
+    // Clearing a form that was only ever a draft changes no answer, and re-asking would spend one
+    // of the 50 requests a minute to get back the rows already on screen.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.text.name.value = 'never searched')))
+
+    search.clearAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(get(search.advancedDraft)).toEqual(emptyAdvanced())
+  })
+
+  it('remembers whether the panel is open', () => {
+    const search = createSearch({ fetchFn: vi.fn(), debounceMs: 5 })
+    expect(get(search.advancedOpen)).toBe(false)
+    search.setAdvancedOpen(true)
+    expect(get(search.advancedOpen)).toBe(true)
+  })
+
+  it('does not let the panel hold a reference into the applied query', async () => {
+    // Both are the same shape, and an edit to the draft leaking through would change what the
+    // rows on screen were fetched with without fetching anything.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    const draft = draftWith((q) => (q.text.name.value = 'bloom'))
+    search.setAdvancedDraft(draft)
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    draft.text.name.value = 'everlong'
+
+    expect(get(search.advanced).text.name.value).toBe('bloom')
+    expect(get(search.advancedDraft).text.name.value).toBe('bloom')
+  })
+})
+
+describe('how far Explore will append', () => {
+  /** `found` big enough that paging never runs out before the cap does. */
+  const page = (n: number): SearchResult =>
+    result(
+      Array.from({ length: n }, (_, i) => `S${i}`),
+      9999
+    )
+
+  it('reports more to load while rows are short of the count', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(page(25)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.hasMore)).toBe(true)
+    expect(get(search.atAutoCap)).toBe(false)
+  })
+
+  /** Pages up to the cap, 25 rows a page as the API delivers them. */
+  async function pageToCap(search: ReturnType<typeof createSearch>): Promise<void> {
+    while (!get(search.atAutoCap)) await search.loadMore()
+  }
+
+  it('stops at the cap, and one press of the button lifts it by another cap', async () => {
+    // 95,262 charts exist. Appending to the end would be 3,811 requests and a list nothing can
+    // scroll, so it stops somewhere and says so rather than running out of memory.
+    const fetchFn = vi.fn().mockImplementation(() => ok(page(25)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await pageToCap(search)
+    expect(get(search.results)).toHaveLength(AUTO_APPEND_CAP)
+    expect(get(search.atAutoCap)).toBe(true)
+
+    await search.loadMore()
+
+    // The press both fetched a page and raised the ceiling by a whole cap, so appending resumes
+    // and runs to the new one rather than stopping again at the next row.
+    expect(get(search.results)).toHaveLength(AUTO_APPEND_CAP + 25)
+    expect(get(search.atAutoCap)).toBe(false)
+  })
+
+  it('puts the cap back where it started when a new query replaces the rows', async () => {
+    // A raised ceiling belongs to the question that raised it. Carrying it over would let an
+    // unrelated search run straight past the point the user had to ask at last time.
+    const fetchFn = vi.fn().mockImplementation(() => ok(page(25)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await pageToCap(search)
+    await search.loadMore()
+    expect(get(search.atAutoCap)).toBe(false)
+
+    search.setQuery('y')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(get(search.results)).toHaveLength(25)
+    // The ceiling is back at the first cap, so this list stops after 500 rows the way the last
+    // one did rather than inheriting the room the last one was given.
+    await pageToCap(search)
+    expect(get(search.results)).toHaveLength(AUTO_APPEND_CAP)
+  })
+
+  it('stops asking once a page comes back empty, whatever the count says', async () => {
+    // `found` counts songs and a page carries every version of one, so the two do not have to
+    // meet. Without this an appending list would ask for page after page of nothing.
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(() => ok(page(25)))
+      .mockImplementation(() => ok(result([], 9999)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    await search.loadMore()
+    expect(get(search.hasMore)).toBe(false)
+    const spent = fetchFn.mock.calls.length
+
+    await search.loadMore()
+    expect(fetchFn).toHaveBeenCalledTimes(spent)
+  })
+
+  it('is willing again after a new query', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(() => ok(page(25)))
+      .mockImplementationOnce(() => ok(result([], 9999)))
+      .mockImplementation(() => ok(page(25)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await search.loadMore()
+    expect(get(search.hasMore)).toBe(false)
+
+    search.setQuery('y')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(get(search.hasMore)).toBe(true)
+  })
+
+  it('spends one request for two loadMore calls made in the same turn', async () => {
+    // A scroll that crosses the sentinel twice before the first page lands must not spend the
+    // budget twice on the same page.
+    const fetchFn = vi.fn().mockImplementation(() => ok(page(25)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+
+    await Promise.all([search.loadMore(), search.loadMore(), search.loadMore()])
+
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(lastBody(fetchFn).page).toBe(2)
   })
 })
