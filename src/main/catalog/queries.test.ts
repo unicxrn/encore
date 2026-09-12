@@ -12,6 +12,12 @@ import {
   chartFacets
 } from './queries'
 import { tmpDir } from '../../../test/helpers/tmp'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT,
+  TAGGED_CHARTER,
+  TAGGED_CHARTER_TEXT
+} from '../../../test/helpers/marked-up-names'
 
 const record = (path: string, name: string, artist: string): ChartRecord =>
   ChartRecordSchema.parse({
@@ -753,5 +759,141 @@ describe('chartFacets', () => {
   it('answers an empty catalog with empty lists', () => {
     const empty = openCatalog(join(tmpDir('facets-empty'), 'catalog.db'))
     expect(chartFacets(empty)).toEqual({ artists: [], genres: [], charters: [], years: [] })
+  })
+})
+
+/**
+ * Names as Clone Hero renders them, which is not how song.ini writes them.
+ *
+ * A charter who colours every letter of their name is one token per letter to a unicode61
+ * tokeniser, so the eight-tag name was findable by nothing a user could type, while `color` was a
+ * term every styled chart in the library shared. Sorting had the same root: a title opening with
+ * a tag files under `<`.
+ */
+describe('names written in Clone Hero markup', () => {
+  let db: CatalogDb
+
+  const meta = (path: string, fields: Partial<ChartRecord>): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      chartType: 'folder',
+      folderHash: path,
+      modifiedTime: 1,
+      ...fields
+    })
+
+  const paths = (filter: Partial<CatalogFilter>): string[] =>
+    queryCharts(db, { search: '', offset: 0, limit: 100, ...filter }).map((c) => c.path)
+
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('markup'), 'catalog.db'))
+    upsertChart(
+      db,
+      meta('/lib/firestarter', {
+        name: 'Firestarter',
+        artist: 'The Prodigy',
+        charter: EIGHT_TAG_CHARTER
+      })
+    )
+    upsertChart(
+      db,
+      meta('/lib/monkfish', { name: 'Bohemian Rhapsody', artist: 'Queen', charter: TAGGED_CHARTER })
+    )
+    // Sorts between "Bohemian Rhapsody" and "Firestarter" by what it reads as, and ahead of both
+    // by what it stores.
+    upsertChart(
+      db,
+      meta('/lib/marked', {
+        name: `<b><color=#FF0000>D</color>eath</b> of a Bachelor`,
+        artist: 'Panic! at the Disco',
+        charter: 'Skyline'
+      })
+    )
+  })
+
+  it('finds a charter by the name on screen', () => {
+    expect(paths({ search: EIGHT_TAG_CHARTER_TEXT })).toEqual(['/lib/firestarter'])
+    expect(paths({ search: TAGGED_CHARTER_TEXT })).toEqual(['/lib/monkfish'])
+  })
+
+  it('finds a marked-up title by the words a reader sees', () => {
+    expect(paths({ search: 'Death of a Bachelor' })).toEqual(['/lib/marked'])
+  })
+
+  // The index carries the readable form only. Both halves of that decision are here: the tag
+  // names stop being search terms, and a term that only ever appeared inside a tag matches
+  // nothing rather than matching every styled chart in the library.
+  it('no longer matches every marked-up chart on a tag name', () => {
+    expect(paths({ search: 'color' })).toEqual([])
+    expect(paths({ search: '8200f3' })).toEqual([])
+  })
+
+  // The search box is stripped with the same rules as the index, so the one thing a user is
+  // likeliest to paste, the line straight out of song.ini, still lands on its chart.
+  it('finds a chart from its raw song.ini text pasted into the search box', () => {
+    expect(paths({ search: TAGGED_CHARTER })).toEqual(['/lib/monkfish'])
+  })
+
+  it('sorts a marked-up title where its visible name belongs', () => {
+    expect(paths({ sort: 'title', direction: 'asc' })).toEqual([
+      '/lib/monkfish',
+      '/lib/marked',
+      '/lib/firestarter'
+    ])
+  })
+
+  // The Installed list opens on this order, before the user has touched a sort control.
+  it('sorts the unsorted list the same way', () => {
+    expect(paths({})).toEqual(['/lib/monkfish', '/lib/marked', '/lib/firestarter'])
+  })
+
+  it('sorts by charter on the readable name', () => {
+    expect(paths({ sort: 'charter', direction: 'asc' })).toEqual([
+      '/lib/monkfish',
+      '/lib/marked',
+      '/lib/firestarter'
+    ])
+  })
+
+  // The catalog keeps what the chart says. Stripping on the way in would edit the user's data to
+  // make a query convenient, and the markup cannot be recovered once it is gone.
+  it('stores the raw text unchanged', () => {
+    expect(getChartByPath(db, '/lib/firestarter')?.charter).toBe(EIGHT_TAG_CHARTER)
+    expect(getChartByPath(db, '/lib/monkfish')?.charter).toBe(TAGGED_CHARTER)
+  })
+
+  it('filters by the charter name the picker offers', () => {
+    expect(paths({ charter: EIGHT_TAG_CHARTER_TEXT })).toEqual(['/lib/firestarter'])
+  })
+
+  /**
+   * One charter, two spellings, one option.
+   *
+   * The pickers read the catalog, so a charter who styled their name in one chart and not in
+   * another was two entries that each returned half their work, and neither said which was which.
+   */
+  it('collapses one charter styled two ways into a single picker option', () => {
+    upsertChart(
+      db,
+      meta('/lib/plain-monkfish', {
+        name: 'Killer Queen',
+        artist: 'Queen',
+        charter: TAGGED_CHARTER_TEXT
+      })
+    )
+    const { charters } = chartFacets(db)
+    expect(charters.filter((c) => c.toLowerCase() === TAGGED_CHARTER_TEXT.toLowerCase())).toEqual([
+      TAGGED_CHARTER_TEXT
+    ])
+    expect(paths({ charter: TAGGED_CHARTER_TEXT }).sort()).toEqual([
+      '/lib/monkfish',
+      '/lib/plain-monkfish'
+    ])
+  })
+
+  it('offers artists by their readable name', () => {
+    upsertChart(db, meta('/lib/styled-artist', { name: 'Basket Case', artist: `<i>Green Day</i>` }))
+    expect(chartFacets(db).artists).toContain('Green Day')
+    expect(paths({ artist: 'Green Day' })).toEqual(['/lib/styled-artist'])
   })
 })
