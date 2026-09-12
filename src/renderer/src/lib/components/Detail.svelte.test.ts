@@ -1,11 +1,25 @@
-import { render, screen, within } from '@testing-library/svelte'
+import { render, screen, within, waitFor } from '@testing-library/svelte'
 import { get } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChartRecordSchema, type ChartRecord } from '../../../../shared/schemas'
 import type { ChartVerdict } from '../../../../shared/updates'
 import { verdicts } from '../stores/updates'
-import type { ChartData, NoteCount } from '../api/enchor'
+import { globalQuery } from '../stores/global-search'
+import { browseSearch } from '../stores/search'
+import { advancedBody, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
+import type { ChartData, NoteCount, SearchResult } from '../api/enchor'
 import type { ChartTarget } from './Home.svelte'
+
+// Clicking a tag chip runs a real search through the module-scoped `browseSearch`, which was
+// constructed with the real `fetch` at import time. Mocking the API module is the seam that
+// works after that; the same one Browse's tests use. Partial, because Detail also reads
+// `albumArtUrl` and `INSTRUMENTS` from here.
+const searchCharts = vi.fn<(...args: unknown[]) => Promise<SearchResult>>()
+vi.mock('../api/enchor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/enchor')>()),
+  searchCharts: (...args: unknown[]) => searchCharts(...args)
+}))
+
 import Detail from './Detail.svelte'
 
 // U+2014. What Detail renders for "we do not know", in both the stat cards and the ABOUT rows.
@@ -79,11 +93,22 @@ function renderDetail(target: ChartTarget): void {
   render(Detail, { props: { target, onBack: () => {}, onNavigate: () => {} } })
 }
 
-afterEach(() => {
+const EMPTY_PAGE: SearchResult = { found: 0, out_of: 0, page: 1, data: [] }
+
+afterEach(async () => {
   vi.unstubAllGlobals()
   // The verdict map is module-level so Detail and Installed read one thing; a test that seeds it
   // must not leak that seed into the next.
   verdicts.set(new Map())
+  // `browseSearch` and `globalQuery` are module-scoped too, and a chip clicked in one test leaves
+  // a filter applied, a panel open and a term cleared for the next.
+  searchCharts.mockResolvedValue(EMPTY_PAGE)
+  browseSearch.clearAdvanced()
+  browseSearch.setAdvancedOpen(false)
+  globalQuery.set('')
+  // `clearAdvanced` may have started a run; let it settle before the mock is reset under it.
+  await new Promise((r) => setTimeout(r, 0))
+  searchCharts.mockReset()
 })
 
 const DIFF_KEYS = ['E', 'M', 'H', 'X'] as const
@@ -481,5 +506,164 @@ describe('Detail: Chorus version check', () => {
     expect(await screen.findByText(/Nothing to update/)).toBeTruthy()
     expect(updatesCheck).toHaveBeenCalledWith([record.path])
     expect(get(verdicts).get(record.path)?.kind).toBe('current')
+  })
+})
+
+/**
+ * The metadata chips under the title.
+ *
+ * These tests pin the wiring: which filter a click applies, what it replaces, what it clears and
+ * where it goes. What they cannot pin is anything the user sees, because jsdom applies no CSS and
+ * computes no layout. That a chip still looks like a chip once it is a <button> rests on the
+ * `.chip.tag` rule restating the font family a button brings of its own, which is reasoning about
+ * a declaration rather than a measurement.
+ */
+describe('Detail: the metadata chips search on their field', () => {
+  const TAGGED = remoteChart({
+    charter: 'Numbuh681',
+    year: '2016',
+    album: 'Utopia',
+    genre: 'Visual Kei Rock'
+  })
+
+  /** The applied advanced query, as the endpoint would be asked for it. */
+  const appliedBody = (): Record<string, unknown> => advancedBody(get(browseSearch.advanced))
+
+  function renderTagged(
+    onNavigate: (id: string) => void = () => {},
+    { inLibrary = false }: { inLibrary?: boolean } = {}
+  ): void {
+    searchCharts.mockResolvedValue(EMPTY_PAGE)
+    vi.stubGlobal('encore', {
+      existsByMeta: (): Promise<boolean[]> => Promise.resolve([inLibrary])
+    })
+    render(Detail, {
+      props: {
+        target: { kind: 'remote', chart: TAGGED } satisfies ChartTarget,
+        onBack: () => {},
+        onNavigate
+      }
+    })
+  }
+
+  it('offers one button per tag, named so it says what it does', async () => {
+    // "Numbuh681" on its own does not tell a screen reader user that the control searches, and
+    // does not say which of the four fields it searches on.
+    renderTagged()
+
+    for (const [field, value] of [
+      ['charter', 'Numbuh681'],
+      ['year', '2016'],
+      ['album', 'Utopia'],
+      ['genre', 'Visual Kei Rock']
+    ]) {
+      const button = await screen.findByRole('button', {
+        name: `Search charts with ${field} ${value}`
+      })
+      // The visible text is the value alone; the label is what adds the rest.
+      expect(button.textContent?.trim()).toBe(value)
+    }
+  })
+
+  it('applies exactly one text filter, exact and not excluded', async () => {
+    // Exact because the value came out of the catalog verbatim rather than being typed. Measured
+    // against the live service: a loose album match on "Utopia" also returns "Dystopia: Road to
+    // Utopia", which is not the album the user pointed at.
+    renderTagged()
+
+    ;(await screen.findByRole('button', { name: 'Search charts with charter Numbuh681' })).click()
+
+    await waitFor(() =>
+      expect(appliedBody()).toEqual({
+        charter: { value: 'Numbuh681', exact: true, exclude: false }
+      })
+    )
+    // All three keys, always: the endpoint answers 400 naming the missing path when either flag
+    // is left out, so a filter short of one of them is a failed request, not a smaller one.
+    const applied = get(browseSearch.advanced) as AdvancedQuery
+    expect(Object.keys(applied.text.charter).sort()).toEqual(['exact', 'exclude', 'value'])
+  })
+
+  it('sends that filter to the service, and only once', async () => {
+    // Explore re-applies the global query when it mounts. Without the query being settled here
+    // too, that mount would schedule a second request for the rows this one is already fetching.
+    renderTagged()
+
+    ;(await screen.findByRole('button', { name: 'Search charts with album Utopia' })).click()
+
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(1))
+    const params = searchCharts.mock.calls[0][0] as { advanced: AdvancedQuery }
+    expect(params.advanced.text.album).toEqual({ value: 'Utopia', exact: true, exclude: false })
+    await new Promise((r) => setTimeout(r, 400))
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+  })
+
+  it('replaces the filters that were already on rather than joining them', async () => {
+    // "Search this charter" means charts by that charter, not that charter narrowed by whatever
+    // an earlier search left behind.
+    const seeded = emptyAdvanced()
+    seeded.text.genre = { value: 'Metal', exact: false, exclude: false }
+    seeded.flags.modchart = true
+    searchCharts.mockResolvedValue(EMPTY_PAGE)
+    browseSearch.setAdvancedDraft(seeded)
+    browseSearch.applyAdvanced()
+    await waitFor(() => expect(Object.keys(appliedBody()).length).toBe(2))
+
+    renderTagged()
+    ;(await screen.findByRole('button', { name: 'Search charts with charter Numbuh681' })).click()
+
+    await waitFor(() =>
+      expect(appliedBody()).toEqual({
+        charter: { value: 'Numbuh681', exact: true, exclude: false }
+      })
+    )
+  })
+
+  it('clears the plain search term, which the advanced endpoint ignores', async () => {
+    // A term left in a visible box would be describing results it had no part in.
+    globalQuery.set('utopia')
+    renderTagged()
+
+    ;(await screen.findByRole('button', { name: 'Search charts with year 2016' })).click()
+
+    expect(get(globalQuery)).toBe('')
+  })
+
+  it('opens the panel, so the changed result set has a visible reason', async () => {
+    // The closed panel's badge counts to one without saying one of what. Open, it names the
+    // field, the value and the Exact tick, and is where the user edits or drops them.
+    renderTagged()
+
+    ;(
+      await screen.findByRole('button', { name: 'Search charts with genre Visual Kei Rock' })
+    ).click()
+
+    await waitFor(() => expect(get(browseSearch.advancedOpen)).toBe(true))
+  })
+
+  it('goes to Explore, where the results are', async () => {
+    const onNavigate = vi.fn()
+    renderTagged(onNavigate)
+
+    ;(await screen.findByRole('button', { name: 'Search charts with album Utopia' })).click()
+
+    expect(onNavigate).toHaveBeenCalledWith('browse')
+  })
+
+  it('leaves the IN LIBRARY chip inert, because it is not a search', async () => {
+    // It says something about the user's own library. There is no Chorus field to search it on.
+    renderTagged(() => {}, { inLibrary: true })
+
+    const chip = await screen.findByText('IN LIBRARY', { selector: 'span.chip' })
+    expect(chip.tagName).toBe('SPAN')
+    // The chip row holds the four searchable tags and nothing else clickable. Scoped to that row
+    // because the actions below it carry a disabled IN LIBRARY button of their own, which is the
+    // Download slot rather than a chip.
+    const row = chip.parentElement as HTMLElement
+    expect(
+      within(row)
+        .getAllByRole('button')
+        .map((b) => b.textContent?.trim())
+    ).toEqual(['Numbuh681', '2016', 'Utopia', 'Visual Kei Rock'])
   })
 })

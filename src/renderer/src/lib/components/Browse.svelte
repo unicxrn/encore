@@ -689,7 +689,15 @@
       </p>
       {#if showEmpty}
         <p class="empty">
-          {#if activeQuery && (instrument || difficulty)}
+          <!-- Ahead of the query branches, because the endpoint that answered ignores the search
+               term when advanced filters are on, so naming the term would credit it for an empty
+               answer it had no part in. Reached most often from a chart Detail's tag chips: a
+               charter or an album read off an installed chart need not exist on Chorus at all,
+               and the branch below would have called that the service having trouble. -->
+          {#if $advancedCount > 0}
+            No charts on Chorus Encore match those advanced filters. Try turning off Exact for a
+            field, or clear the filters.
+          {:else if activeQuery && (instrument || difficulty)}
             Nothing matches "{activeQuery}" with those filters on. Try clearing the instrument or
             difficulty first.
           {:else if activeQuery}

@@ -4,8 +4,10 @@
   import { msToTime, fallbackChartName } from '../../../../shared/format'
   import Icon from './Icon.svelte'
   import { countInstruments, diffMatrix } from '../matrix'
+  import { emptyAdvanced, type AdvancedTextField } from '../api/advanced'
   import { encore } from '../stores/bridge'
   import { globalQuery } from '../stores/global-search'
+  import { browseSearch } from '../stores/search'
   import { recordVerdicts, verdicts } from '../stores/updates'
   import DiffMatrix from './DiffMatrix.svelte'
   import PreviewPane from './PreviewPane.svelte'
@@ -259,8 +261,12 @@
 
   // Keyed by field name, not by text: two chips can legitimately carry the same
   // value (e.g. album == genre), which would break an each-key on the string.
+  //
+  // `field` is an advanced-search text field rather than a free string, because each chip runs a
+  // search on that field. A field this page shows but the endpoint does not take would fail the
+  // build here rather than clicking through to a filter nothing honours.
   const chips = $derived.by(() => {
-    const out: { field: string; value: string }[] = []
+    const out: { field: AdvancedTextField; value: string }[] = []
     const charter = chart?.charter ?? record?.charter
     if (charter?.trim()) out.push({ field: 'charter', value: charter.trim() })
     if (yearText) out.push({ field: 'year', value: yearText })
@@ -287,6 +293,38 @@
     globalQuery.set(artist.trim())
     onNavigate('browse')
   }
+
+  /**
+   * Run one metadata tag as an advanced search on Explore.
+   *
+   * The tag replaces the whole filter set rather than joining it. "Search this charter" means
+   * charts by that charter, not that charter narrowed by whatever an earlier search left behind,
+   * and a chip that quietly ANDed itself onto a stale filter would answer a question nobody asked.
+   *
+   * Exact, because the value came out of the catalog verbatim rather than being typed. Measured
+   * against the live service: a loose album match on "Utopia" also returns "Dystopia: Road to
+   * Utopia" and "Black Utopia", while the exact one returns the album the user pointed at.
+   *
+   * The plain search term is cleared as part of this. `/search/advanced` ignores it (see
+   * `searchCharts`), so a term left in a visible box would be describing results it had no part
+   * in. `setQuery` is called here rather than left to Explore's own mount effect so that the
+   * effect finds the query already answered: otherwise it would schedule a second request for the
+   * rows `applyAdvanced` is fetching, against a budget of 50 a minute.
+   */
+  const searchTag = (field: AdvancedTextField, value: string): void => {
+    globalQuery.set('')
+    browseSearch.setQuery('')
+    const query = emptyAdvanced()
+    query.text[field] = { value, exact: true, exclude: false }
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+    // Opened, not left to the closed panel's badge. The badge counts to one without saying one of
+    // what, and arriving at a changed result set with no visible reason for it is the failure this
+    // feature would otherwise introduce. Open, the panel names the field, the value and the Exact
+    // tick, and is also where the user edits or drops them.
+    browseSearch.setAdvancedOpen(true)
+    onNavigate('browse')
+  }
 </script>
 
 <div class="detail selectable">
@@ -300,8 +338,18 @@
     {/if}
     {#if chips.length > 0 || inLibrary}
       <div class="chips">
+        <!-- aria-label rather than the bare value: "Numbuh681" does not tell anyone what the
+             control does, and naming the field says which of the four searches this is. The
+             visible text is inside the label, so the two do not disagree. -->
         {#each chips as chip (chip.field)}
-          <span class="chip">{chip.value}</span>
+          <button
+            class="chip tag"
+            aria-label="Search charts with {chip.field} {chip.value}"
+            title="Search charts with {chip.field} {chip.value}"
+            onclick={() => searchTag(chip.field, chip.value)}
+          >
+            {chip.value}
+          </button>
         {/each}
         {#if inLibrary}
           <span class="chip lib mono">IN LIBRARY</span>
@@ -545,6 +593,19 @@
     font-size: var(--fs-secondary);
     color: var(--text-2);
     background: var(--surface-1);
+  }
+  /* A <button> inherits none of the page's font and brings its own, so the family is restated
+     here; everything else the .chip rule above already sets applies to either element. */
+  .chip.tag {
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .chip.tag:hover {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
   }
   .chip.lib {
     font-size: var(--fs-caption);

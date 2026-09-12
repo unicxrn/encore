@@ -19,6 +19,11 @@ release.
   fetches a page and raises the ceiling again, so a long browse stays a list you can still scroll
   and a fast one cannot spend the catalogue's whole rate limit. The button is a real control at the
   end of the list, so reaching more results never needs a scroll gesture.
+- The charter, year, album and genre tags on a chart's page are buttons. Clicking one searches
+  Explore for that exact value on that field, replacing whatever was filtered before rather than
+  adding to it, and opens the advanced panel so the filter that changed the results is on screen
+  and can be edited or dropped. The plain search box is cleared, because the advanced endpoint
+  takes no search term.
 - Advanced search in Explore, against the catalogue's own advanced endpoint. Search by name,
   artist, album, genre, year and charter, each of which can be matched exactly or excluded; by
   ranges of song length, intensity, average and peak notes per second, and year; and by what a
@@ -29,6 +34,9 @@ release.
 
 ### Fixed
 
+- Explore answered an advanced search that matched nothing with "Chorus Encore returned no charts
+  at all. It may be having trouble." It now names the filters, which is what an exact charter or
+  album taken from an installed chart runs into when that charter or album is not on Chorus.
 - Explore only appended a page if the list had been scrolled, and on a window wider than about
   1600px the first 25 charts do not fill the results box, so there was nothing to scroll and no
   page after the first ever arrived on its own. It now fills the box on its own and keeps going

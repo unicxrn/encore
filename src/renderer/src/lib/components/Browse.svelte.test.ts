@@ -902,4 +902,22 @@ describe('Browse advanced search', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(searchCharts).toHaveBeenCalledTimes(spent)
   })
+
+  it('blames the filters for an empty answer, not the service', async () => {
+    // The term is cleared when a chart Detail's tag chip applies a filter, and with no term and
+    // no instrument or difficulty set, the branch below this one used to answer "Chorus Encore
+    // returned no charts at all. It may be having trouble." A charter or an album read off an
+    // installed chart need not exist on Chorus at all, so that is a working service saying no.
+    await openPanel()
+    await fireEvent.input(screen.getByLabelText('Charter'), { target: { value: 'NobodyAtAll' } })
+    searchCharts.mockResolvedValue({ found: 0, out_of: 0, page: 1, data: [] })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    expect(await screen.findByText(/match those advanced filters/)).toBeTruthy()
+    expect(screen.queryByText(/It may be having trouble/)).toBeNull()
+    // Retry belongs to the branch that blames the service, and re-asking a question the service
+    // already answered is not the way out of this one.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
 })
