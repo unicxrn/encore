@@ -27,6 +27,14 @@ release.
   stays shut until you open it, and once filters are applied the button that opens it says how
   many, with a way to clear them.
 
+### Fixed
+
+- Explore only appended a page if the list had been scrolled, and on a window wider than about
+  1600px the first 25 charts do not fill the results box, so there was nothing to scroll and no
+  page after the first ever arrived on its own. It now fills the box on its own and keeps going
+  as the end of the list stays in view, so the button at the bottom is there for the keyboard and
+  for the 500 chart ceiling rather than for every page.
+
 ## [0.2.0] - 2026-09-11
 
 ### Added

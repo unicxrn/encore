@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { get } from 'svelte/store'
   import { SvelteSet } from 'svelte/reactivity'
   import { browseSearch } from '../stores/search'
@@ -32,6 +33,27 @@
   let tableEl = $state<HTMLDivElement | null>(null)
   let sentinelEl = $state<HTMLButtonElement | null>(null)
 
+  /** How far past the edge of the scrolling box the end of the list still counts as reached. */
+  const LOOKAHEAD_PX = 400
+
+  /**
+   * The box the results scroll in, found rather than assumed.
+   *
+   * `.table` is that box today, measured in the desktop app: 609px of box around 1219px of rows
+   * at 1280x800. The observer's root, the restore below and the scroll listener all have to name
+   * the same element, and a layout change that moved the overflow to an ancestor would leave all
+   * three pointing at one that clips nothing. That fails quietly rather than visibly, so the
+   * element is looked up instead of written down. `tableEl` is the fallback for a document with
+   * no scrolling ancestor at all, which is every jsdom test: they apply no CSS.
+   */
+  function scrollBox(): HTMLElement | null {
+    for (let node: HTMLElement | null = tableEl; node; node = node.parentElement) {
+      const { overflowY } = getComputedStyle(node)
+      if (overflowY === 'auto' || overflowY === 'scroll') return node
+    }
+    return tableEl
+  }
+
   /**
    * The offset the restore below wrote, until a scroll event accounts for it.
    *
@@ -44,10 +66,19 @@
   /**
    * Whether reaching the bottom may fetch.
    *
-   * False until the user moves the list themselves, for the reason above. The button at the
-   * bottom works from the first paint either way, so nothing is unreachable while this is false.
+   * True from the first paint, and false only while a restored offset is still unaccounted for:
+   * the thing it guards against is the restore fetching a page nobody asked for, and a list with
+   * an offset to restore is by definition long enough to scroll, so a scroll event is a signal
+   * that exists there.
+   *
+   * It used to start false on every mount and wait for a scroll event, which is the defect this
+   * replaces. Measured in the desktop app: at 1920x1080 the first 25 charts are 889px of grid in
+   * a box 889px tall, and at 2560x1440 1249px in a box 1249px tall. Nothing overflows, so nothing
+   * can be scrolled, so no scroll event is ever fired and Explore stopped at one page with the
+   * end of the list already on screen. At 1280x800 the same page is 1219px in a 609px box and
+   * auto-append worked, which is how this shipped.
    */
-  let armed = $state(false)
+  let armed = $state(search.savedScroll() <= 0)
   /** Whether the sentinel is on screen, as the observer last saw it. */
   let atBottom = $state(false)
 
@@ -55,15 +86,26 @@
   // tableEl on mount; the rows are already in the DOM by then because the
   // results live in the shared store, so there is nothing to wait for.
   //
-  // NOT COVERED BY ANY TEST: jsdom performs no layout, so scrollTop there is
-  // always 0 and a test could only assert that this line ran. This needs QA in
-  // the desktop app.
+  // Not covered by any test: jsdom performs no layout, so scrollTop there is always 0 and a test
+  // could only assert that this line ran. Measured in the desktop app instead: a list scrolled to
+  // 900px, a chart Detail opened from it and left again, comes back at 900px.
   $effect(() => {
-    if (!tableEl) return
+    const box = scrollBox()
+    if (!box) return
     const saved = search.savedScroll()
     if (saved <= 0) return
     restoredTo = saved
-    tableEl.scrollTop = saved
+    box.scrollTop = saved
+  })
+
+  // The scroll listener goes on whichever element turns out to scroll, for the reason
+  // `scrollBox` exists. In the markup it could only name `.table`.
+  $effect(() => {
+    const box = scrollBox()
+    if (!box) return undefined
+    const onScroll = (): void => onTableScroll(box.scrollTop)
+    box.addEventListener('scroll', onScroll, { passive: true })
+    return () => box.removeEventListener('scroll', onScroll)
   })
 
   function onTableScroll(top: number): void {
@@ -75,29 +117,33 @@
   /**
    * Watch the button at the end of the list and record whether it is in view.
    *
-   * The decision is not taken here. A page that lands while the sentinel is still on screen fires
-   * no new intersection of its own, so acting inside the callback would load one page and stop;
-   * the effect below re-takes the decision whenever the rows, the loading flag or the cap move.
+   * The decision is not taken here, because the callback is not where the guards are; the effect
+   * below takes it. `rootMargin` starts the next page a screenful early, so the rows arrive
+   * before the user reaches the end rather than after they have stared at the bottom of the list.
    *
-   * `rootMargin` starts the next page a screenful early, so the rows arrive before the user
-   * reaches the end rather than after they have stared at the bottom of the list.
-   *
-   * NOT COVERED BY ANY TEST as written: jsdom ships no IntersectionObserver and computes no
-   * layout, so the tests stub the observer and drive it by hand. What the real one does with this
-   * root and this margin needs QA in the desktop app.
+   * Held in `observer` so `fillToTheEnd` can ask it again. Not covered by any test as written:
+   * jsdom ships no IntersectionObserver and computes no layout, so the tests stub the observer
+   * and drive it by hand. What the real one does with this root and this margin was measured in
+   * the desktop app: with the first page not filling the box it reports the sentinel visible on
+   * the first paint, and reports it gone once an appended page has pushed it past the margin.
    */
+  let observer: IntersectionObserver | null = null
+
   $effect(() => {
     const el = sentinelEl
-    const root = tableEl
-    if (!el || typeof IntersectionObserver === 'undefined') return undefined
-    const observer = new IntersectionObserver(
+    if (!el || !tableEl || typeof IntersectionObserver === 'undefined') return undefined
+    const watching = new IntersectionObserver(
       (entries) => {
         atBottom = entries.some((entry) => entry.isIntersecting)
       },
-      { root, rootMargin: '400px 0px' }
+      { root: scrollBox(), rootMargin: `${LOOKAHEAD_PX}px 0px` }
     )
-    observer.observe(el)
-    return () => observer.disconnect()
+    watching.observe(el)
+    observer = watching
+    return () => {
+      watching.disconnect()
+      if (observer === watching) observer = null
+    }
   })
 
   /**
@@ -112,15 +158,36 @@
    */
   $effect(() => {
     if (!armed || !atBottom || $loading || $error || !$hasMore || $atAutoCap) return
-    // One arrival at the bottom is one page, so the decision is consumed rather than left
-    // standing. Left standing it would fire again the instant `$loading` went back to false,
-    // which is before the observer has had a chance to say the sentinel moved, and a scroll to
-    // the end of a 95,262 chart catalog would then run pages off as fast as the network answered.
-    // The observer speaks again when the sentinel next crosses the edge of the viewport, and the
-    // button below covers the case where a short page leaves it sitting in view.
-    atBottom = false
-    void search.loadMore()
+    void fillToTheEnd()
   })
+
+  /**
+   * One page, then ask the observer where the sentinel is now.
+   *
+   * The decision is consumed rather than left standing. Left standing it would fire again the
+   * instant `$loading` went back to false, which is before the observer has had a chance to say
+   * the sentinel moved, and a scroll to the end of a 95,262 chart catalog would then run pages
+   * off as fast as the network answered.
+   *
+   * That alone stops too early. An observer only speaks when the sentinel crosses the edge of its
+   * root, and a page that lands with the end of the list still on screen crosses nothing, so the
+   * consumed decision would never be retaken and the list would sit one page long with its end in
+   * view. Observing a target again delivers its current state, which is what re-observing here is
+   * for: it keeps filling until the sentinel is genuinely past the margin, which is also the point
+   * at which there is something to scroll. Every guard above still applies to each page, and the
+   * cap still stops it at 500.
+   */
+  async function fillToTheEnd(): Promise<void> {
+    atBottom = false
+    await search.loadMore()
+    // After the rows are in the DOM: the observer answers from layout, and the page that just
+    // landed is what moves the sentinel.
+    await tick()
+    const el = sentinelEl
+    if (!el || !observer) return
+    observer.unobserve(el)
+    observer.observe(el)
+  }
 
   // chartIds whose name+artist+charter match a local catalog row. A metadata
   // match means "this song by this charter is in your library", not
@@ -484,11 +551,9 @@
         </span>
       </div>
     {/snippet}
-    <div
-      class="table selectable"
-      bind:this={tableEl}
-      onscroll={(e) => onTableScroll(e.currentTarget.scrollTop)}
-    >
+    <!-- No `onscroll` here: the listener is attached to the element that actually scrolls, which
+         is this one today and is looked up rather than assumed. See `scrollBox`. -->
+    <div class="table selectable" bind:this={tableEl}>
       {#if $mode === 'grid'}
         <div class="grid">
           {#each $groups as group (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}

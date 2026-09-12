@@ -182,6 +182,9 @@ A few conventions that make review quick:
   a mutation test that makes it fire.
 - **The UI has no automated eye.** jsdom applies no CSS and computes no layout, so a visual change
   needs a screenshot or a measurement, and saying which parts were only reasoned about is expected.
+  `scripts/measure-explore-append.mjs` is one way to take one: it runs the built renderer in an
+  offscreen window, which never appears on a desktop, and prints what layout made of it at a given
+  window size. Explore's paging bug was a window size the jsdom tests could not have a view on.
 
 Commits are plain prose in the imperative: what changed and why it had to.
 

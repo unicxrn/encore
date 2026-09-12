@@ -76,19 +76,26 @@ const downloadAdd = vi.fn<(r: unknown) => Promise<void>>()
  * jsdom ships no IntersectionObserver and computes no layout, so there is nothing to observe and
  * nothing that could ever intersect. The stub below records what Browse asked to watch and hands
  * back a way to say it came into view, which is the only part of this a test can drive.
+ *
+ * `observe` answers with the sentinel's current state, as a real observer does: observing a
+ * target delivers its state without waiting for it to cross anything, and that is what Browse
+ * re-observes for after each appended page.
  */
-const observers: { fire: (visible: boolean) => void }[] = []
+const observers: { deliver: (visible: boolean) => void }[] = []
+let sentinelVisible = false
 
 class StubIntersectionObserver {
-  constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+  constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {
+    observers.push({ deliver: (visible) => callback([{ isIntersecting: visible }]) })
+  }
   observe(): void {
-    observers.push({ fire: (visible) => this.callback([{ isIntersecting: visible }]) })
+    this.callback([{ isIntersecting: sentinelVisible }])
   }
   unobserve(): void {
-    // Nothing to forget: `observers` is emptied by renderBrowse before each mount.
+    // Nothing to forget: this stub watches one target and answers for it on demand.
   }
   disconnect(): void {
-    // As above.
+    // As above; `observers` is emptied by renderBrowse before each mount.
   }
   takeRecords(): never[] {
     return []
@@ -97,7 +104,8 @@ class StubIntersectionObserver {
 
 /** Say the button at the end of the list has come into view (or gone out of it). */
 function sentinelInView(visible = true): void {
-  for (const observer of observers) observer.fire(visible)
+  sentinelVisible = visible
+  for (const observer of observers) observer.deliver(visible)
 }
 
 function renderBrowse(
@@ -116,6 +124,7 @@ function renderBrowse(
 ): ReturnType<typeof render> {
   settings.set({ ...defaultSettings(), libraryFolders })
   observers.length = 0
+  sentinelVisible = false
   vi.stubGlobal('IntersectionObserver', StubIntersectionObserver)
   vi.stubGlobal('encore', {
     existsByMeta: (keys: MetaKey[]): Promise<boolean[]> =>
@@ -609,16 +618,24 @@ describe('Browse bulk download', () => {
  *
  * Nothing here sees a scroll: jsdom applies no CSS and computes no layout, so the list has no
  * height, no overflow and no scrolling box, and `scrollTop` on it is 0 whatever is assigned to it.
- * What these pin is the wiring either side of the measurement. That the sentinel really lands at
- * the end of the list, and that a real IntersectionObserver reports it where this one is told to,
- * needs QA in the desktop app.
+ * What these pin is the wiring either side of the measurement: which of the guards let a page
+ * through, and what happens to the one after it.
+ *
+ * Where the sentinel lands and what a real observer makes of it is measured instead, by
+ * `scripts/measure-explore-append.mjs`, which runs the built renderer in an offscreen window at a
+ * window size of your choosing. It is how the defect two of these tests are about was found.
  */
 describe('Browse loading as the list is scrolled', () => {
-  /** The store left with rows on screen and more pages behind them, and Browse rendered over it. */
-  async function renderWithMorePages(): Promise<HTMLElement> {
-    // `found` well past the rows in hand, so there is always another page to ask for. retry() is
-    // the one path that re-runs a query the module-scoped store has already answered.
-    searchCharts.mockResolvedValue({ found: 50, out_of: 50, page: 1, data: TWO_VERSIONS })
+  /**
+   * The store left with rows on screen and more pages behind them, and Browse rendered over it.
+   *
+   * `found` is how many pages there are: each mocked page carries the two rows of TWO_VERSIONS,
+   * so `found: 4` is one more page and `found: 6` is two. Tests that would otherwise append until
+   * the mock ran out say how far they want it to go. retry() is the one path that re-runs a query
+   * the module-scoped store has already answered.
+   */
+  async function renderWithMorePages(found = 4): Promise<HTMLElement> {
+    searchCharts.mockResolvedValue({ found, out_of: found, page: 1, data: TWO_VERSIONS })
     browseSearch.retry()
     await new Promise((r) => setTimeout(r, 350))
     const { container } = renderBrowse()
@@ -635,7 +652,7 @@ describe('Browse loading as the list is scrolled', () => {
     return fireEvent.scroll(table)
   }
 
-  it('fetches exactly one more page when the end of the list comes into view', async () => {
+  it('fetches the next page when the end of the list comes into view', async () => {
     const table = await renderWithMorePages()
     expect(searchCharts).toHaveBeenCalledTimes(1)
 
@@ -643,34 +660,52 @@ describe('Browse loading as the list is scrolled', () => {
     sentinelInView()
     await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
 
-    // One page, not several. The decision is taken once per arrival at the bottom: left standing,
-    // it would fire again the instant the request finished, before the observer could say the
-    // sentinel had moved, and a fast scroll would spend the API's 50 a minute on the way down.
+    // The page after the one in hand, asked for once. The mock holds no page 3, so what this pins
+    // is which page a scroll to the end asks for, not where appending stops; that is the next
+    // test but one.
     const params = searchCharts.mock.calls[1][0] as { page: number }
     expect(params.page).toBe(2)
     await new Promise((r) => setTimeout(r, 50))
     expect(searchCharts).toHaveBeenCalledTimes(2)
   })
 
-  it('does not fetch until the user has moved the list themselves', async () => {
-    // Explore is destroyed by every navigation and the mount puts the list back where it was. On
-    // a list left at the bottom, an observer armed from the first paint would spend a request on
-    // every trip back from a chart Detail, for a page nobody asked for.
-    const table = await renderWithMorePages()
+  it('fetches with no scroll gesture at all when the first page does not fill the list', async () => {
+    // The defect this replaces: auto-append waited for a scroll event before it would fetch, and
+    // a first page that leaves the end of the list on screen gives the user nothing to scroll.
+    // Measured in the desktop app at 1920x1080: the first 25 charts are 889px of grid in a box
+    // 889px tall, so the list could not be scrolled, no scroll event was ever fired, and Explore
+    // stopped at one page with the button as the only way on. At 1280x800 the same page overflows
+    // and it worked, which is how it shipped.
+    await renderWithMorePages()
     expect(searchCharts).toHaveBeenCalledTimes(1)
 
     sentinelInView()
-    await new Promise((r) => setTimeout(r, 50))
+
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps filling while the end of the list is still on screen', async () => {
+    // An observer speaks when its target crosses the edge of the root, and a page that lands with
+    // the sentinel still in view crosses nothing. Without asking it again, one page would land and
+    // the list would sit there with its end on screen and, on a window too tall for one page,
+    // still nothing to scroll.
+    await renderWithMorePages(6)
     expect(searchCharts).toHaveBeenCalledTimes(1)
 
-    await scrollTo(table, 120)
-    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+    sentinelInView()
+
+    // Two pages, unasked and one after the other, and then it stops: the mock has no third, so
+    // `hasMore` goes false. Every guard still applies to each of them.
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(3))
+    expect(searchCharts.mock.calls.map((c) => (c[0] as { page: number }).page)).toEqual([1, 2, 3])
+    await new Promise((r) => setTimeout(r, 50))
+    expect(searchCharts).toHaveBeenCalledTimes(3)
   })
 
   it('does not treat the restored scroll offset as the user reaching the bottom', async () => {
     // The restore writes scrollTop, and the browser answers with a scroll event of its own. That
     // one is not a gesture and must not arm anything.
-    searchCharts.mockResolvedValue({ found: 50, out_of: 50, page: 1, data: TWO_VERSIONS })
+    searchCharts.mockResolvedValue({ found: 4, out_of: 4, page: 1, data: TWO_VERSIONS })
     browseSearch.retry()
     await new Promise((r) => setTimeout(r, 350))
     browseSearch.saveScroll(420)
@@ -694,7 +729,8 @@ describe('Browse loading as the list is scrolled', () => {
     // The whole point of keeping a real button rather than an empty sentinel div: a keyboard or
     // screen-reader user never fires an intersection, and tabbing to this and pressing it is how
     // they reach the same rows.
-    const table = await renderWithMorePages()
+    // Two pages behind the rows in hand, so the button is still there after the one this presses.
+    const table = await renderWithMorePages(6)
     const button = screen.getByRole('button', { name: 'Load more' })
     expect(button.tagName).toBe('BUTTON')
 
@@ -710,7 +746,7 @@ describe('Browse loading as the list is scrolled', () => {
   })
 
   it('says how much of the answer is loaded, where a screen reader will hear it', async () => {
-    await renderWithMorePages()
+    await renderWithMorePages(50)
     const status = screen.getByRole('status')
     expect(status.textContent).toMatch(/2 of 50 charts loaded/)
   })
