@@ -132,11 +132,13 @@ describe('SidecarManager', () => {
     ffmpeg?: string
     ffmpegChecksum?: SidecarChecksum
     ffmpegArchiveEntry?: string | null
+    timeouts?: { versionMs?: number; updateMs?: number }
   }
 
   const makeManager = (overrides: ManagerOverrides = {}): SidecarManager =>
     new SidecarManager({
       dir,
+      ...(overrides.timeouts ? { timeouts: overrides.timeouts } : {}),
       sources: {
         ytdlp: {
           url: overrides.ytdlp ?? `${baseUrl}/ytdlp`,
@@ -381,6 +383,117 @@ describe('SidecarManager', () => {
         'ffmpeg version 6.1 Copyright (c) 2000-2023 the FFmpeg developers'
       )
     }, 10_000)
+  })
+
+  /**
+   * The two spawns that used to have no way out.
+   *
+   * Both of these once hung forever on a binary that never exits: `status()` never settled, so
+   * Settings sat on its before-we-know placeholder with no control that could end it, and
+   * `update()` left the row's button disabled on "..." for the life of the session. The stubs
+   * below are that binary. Each records its own pid and then `exec`s a sleep, so the pid the test
+   * checks is the process the manager actually spawned rather than a shell that wrapped it.
+   *
+   * Timeouts are injected in the hundreds of milliseconds. The real ones are five seconds and two
+   * minutes, and a test that waited them out would be a test nobody runs.
+   */
+  describe('spawn timeouts', () => {
+    const install = (fileName: string, script: string): void =>
+      writeFileSync(join(dir, fileName), script, { mode: 0o755 })
+
+    const HANGING_PROBE = [
+      '#!/bin/sh',
+      'echo $$ > "$(dirname "$0")/probe.pid"',
+      'exec sleep 30',
+      ''
+    ].join('\n')
+
+    const HANGING_UPDATER = [
+      '#!/bin/sh',
+      'if [ "$1" = "-U" ]; then',
+      '  echo $$ > "$(dirname "$0")/update.pid"',
+      '  exec sleep 30',
+      'fi',
+      'echo v1',
+      ''
+    ].join('\n')
+
+    // Ignores SIGTERM outright, which is the case that makes a polite kill worthless. It sleeps a
+    // second at a time rather than `exec`ing one long sleep, so the shell keeps the trap and the
+    // one child outstanding when SIGKILL lands is gone within a second.
+    const STUBBORN_PROBE = [
+      '#!/bin/sh',
+      "trap '' TERM",
+      'echo $$ > "$(dirname "$0")/stubborn.pid"',
+      'i=0',
+      'while [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done',
+      ''
+    ].join('\n')
+
+    const pidFrom = (fileName: string): number => {
+      const pid = Number(readFileSync(join(dir, fileName), 'utf8').trim())
+      // A pid file that never got written would read NaN, and `process.kill(NaN, 0)` throws the
+      // same way a dead process does, so every assertion below would pass without a child.
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      return pid
+    }
+
+    /** Signal 0 checks for the process without touching it: ESRCH is how "gone" reads. */
+    const alive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const goneWithin = async (pid: number, ms: number): Promise<boolean> => {
+      const deadline = Date.now() + ms
+      while (Date.now() < deadline) {
+        if (!alive(pid)) return true
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      return !alive(pid)
+    }
+
+    it('kills a version probe that runs past its timeout, and answers with no version', async () => {
+      install('yt-dlp', HANGING_PROBE)
+      const started = Date.now()
+      const status = await makeManager({ timeouts: { versionMs: 300 } }).status('ytdlp')
+      // The whole point: it settles at all. `installed` stays true because the file is there, and
+      // null version is what Settings draws as VERSION UNKNOWN.
+      expect(status).toEqual({ installed: true, version: null, path: join(dir, 'yt-dlp') })
+      // Answered on the timeout, not on the sleep finishing 30 seconds later.
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(await goneWithin(pidFrom('probe.pid'), 2_000)).toBe(true)
+    }, 15_000)
+
+    it('kills a self-update that runs past its timeout, and reports it as a job error', async () => {
+      install('yt-dlp', HANGING_UPDATER)
+      const manager = makeManager({ timeouts: { updateMs: 300 } })
+      const events: JobProgress[] = []
+      await expect(manager.update('ytdlp', (p) => events.push(p))).rejects.toThrow(
+        /did not finish within/i
+      )
+      // Reaching the user matters as much as terminating: Settings renders the error event's
+      // message, and the rethrow is what its catch turns into the ERROR line.
+      expect(events.map((e) => e.status)).toEqual(['running', 'error'])
+      expect(events.at(-1)?.message).toMatch(/did not finish within/i)
+      expect(await goneWithin(pidFrom('update.pid'), 2_000)).toBe(true)
+    }, 15_000)
+
+    it('escalates to SIGKILL for a child that ignores SIGTERM', async () => {
+      install('yt-dlp', STUBBORN_PROBE)
+      expect((await makeManager({ timeouts: { versionMs: 300 } }).status('ytdlp')).version).toBe(
+        null
+      )
+      const pid = pidFrom('stubborn.pid')
+      // Still there after the polite signal, which is what the grace period exists for. Without
+      // the escalation this process would outlive the app.
+      expect(await goneWithin(pid, 500)).toBe(false)
+      expect(await goneWithin(pid, 4_000)).toBe(true)
+    }, 15_000)
   })
 
   describe('archive extraction', () => {

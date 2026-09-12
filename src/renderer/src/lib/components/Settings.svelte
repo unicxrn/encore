@@ -291,6 +291,10 @@
     <!-- The two rows are identical in structure and their buttons read
          "Install"/"Update" on both, so the tool's name is the only thing that
          tells them apart; it labels the row and the buttons borrow it. -->
+    <!-- Three states, not two. A binary that is on disk but did not answer the version probe (it
+         exited non-zero, printed nothing, or ran past the probe's timeout and was killed) used to
+         fall through to NOT INSTALLED, which is the one thing it certainly is not, and which
+         sits next to an Update button that only appears because it IS installed. -->
     <div class="tool-row" role="group" aria-labelledby="tool-ytdlp">
       <span class="tool-name" id="tool-ytdlp">yt-dlp</span>
       <span class="tool-status mono">
@@ -300,6 +304,8 @@
           —
         {:else if ytdlpStatus.installed && ytdlpStatus.version}
           {ytdlpStatus.version}
+        {:else if ytdlpStatus.installed}
+          VERSION UNKNOWN
         {:else}
           NOT INSTALLED
         {/if}
@@ -329,6 +335,8 @@
           —
         {:else if ffmpegStatus.installed && ffmpegStatus.version}
           {ffmpegStatus.version}
+        {:else if ffmpegStatus.installed}
+          VERSION UNKNOWN
         {:else}
           NOT INSTALLED
         {/if}

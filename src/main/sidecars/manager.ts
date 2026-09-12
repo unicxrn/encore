@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,
@@ -48,12 +48,74 @@ export interface SidecarManagerConfig {
   sources: Record<SidecarName, SidecarSource>
   /** Defaults to process.platform; injectable so tests pin behavior. */
   platform?: NodeJS.Platform
+  /**
+   * Overrides for the two spawn timeouts, in ms. Injectable for the same reason `platform` is:
+   * a test that proved the timeout fires by waiting out the real one would take two minutes.
+   */
+  timeouts?: { versionMs?: number; updateMs?: number }
 }
 
 export interface SidecarStatus {
   installed: boolean
+  /**
+   * What the binary said when asked its version, or null when it did not say.
+   *
+   * Null covers a spawn that failed, a non-zero exit, empty output and a probe that ran past
+   * `VERSION_TIMEOUT_MS`. `installed` is the separate question of whether the file is there, so
+   * the pair `installed: true, version: null` is a real state and Settings draws it as its own.
+   */
   version: string | null
   path: string
+}
+
+/**
+ * How long a version probe may run before it is killed.
+ *
+ * The child prints one line and exits, so the only honest cost is process start: the loader
+ * mapping a binary that reaches 130 MB for ffmpeg, off a cold page cache, on a disk that may be
+ * spinning. Five seconds is far past that and still short enough that Settings finishes opening
+ * even when both probes have to be killed, since `status` runs them concurrently and a stuck pair
+ * costs five seconds, not ten.
+ *
+ * The cost of it being wrong is small and recoverable: the row reads VERSION UNKNOWN, the Update
+ * button is still there, and the next visit to Settings probes again.
+ */
+export const VERSION_TIMEOUT_MS = 5_000
+
+/**
+ * How long `yt-dlp -U` may run before it is killed.
+ *
+ * A different number from the probe because it is a different thing: -U asks GitHub for the
+ * newest release and then downloads the replacement binary, so the network sets the floor. The
+ * largest asset yt-dlp ships is around 17 MB, which two minutes covers at roughly 1.2 Mbps.
+ *
+ * Below that the update does time out on a link that would eventually have finished, and the user
+ * is told so rather than being left with a button stuck on "…" for as long as the app runs. That
+ * is the trade this number makes, and it is made in favour of always terminating, because the
+ * failure it replaces has no exit at all.
+ */
+export const UPDATE_TIMEOUT_MS = 120_000
+
+/**
+ * How long a killed child gets to exit on SIGTERM before SIGKILL.
+ *
+ * SIGTERM first, because a sidecar caught mid-write is better off being allowed to unwind. A
+ * process that ignores it would make the timeout above mean nothing, which is the whole defect,
+ * so the signal that cannot be ignored follows.
+ */
+const KILL_GRACE_MS = 2_000
+
+/**
+ * Stop a child that has outstayed its timeout, and do not take its word for it.
+ *
+ * The escalation timer is unref'd and cleared on close: a timer left armed keeps the event loop
+ * alive, and this must never be the reason the app cannot quit.
+ */
+function killOvertime(child: ChildProcess): void {
+  child.kill('SIGTERM')
+  const escalate = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS)
+  escalate.unref()
+  child.once('close', () => clearTimeout(escalate))
 }
 
 const YTDLP_LATEST = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
@@ -124,9 +186,13 @@ export function defaultSidecarSources(
 
 export class SidecarManager {
   private readonly platform: NodeJS.Platform
+  private readonly versionTimeoutMs: number
+  private readonly updateTimeoutMs: number
 
   constructor(private config: SidecarManagerConfig) {
     this.platform = config.platform ?? process.platform
+    this.versionTimeoutMs = config.timeouts?.versionMs ?? VERSION_TIMEOUT_MS
+    this.updateTimeoutMs = config.timeouts?.updateMs ?? UPDATE_TIMEOUT_MS
   }
 
   binPath(name: SidecarName): string {
@@ -136,7 +202,11 @@ export class SidecarManager {
   async status(name: SidecarName): Promise<SidecarStatus> {
     const path = this.binPath(name)
     if (!existsSync(path)) return { installed: false, version: null, path }
-    return { installed: true, version: await readVersion(path, VERSION_ARGS[name]), path }
+    return {
+      installed: true,
+      version: await readVersion(path, VERSION_ARGS[name], this.versionTimeoutMs),
+      path
+    }
   }
 
   async install(name: SidecarName, onProgress: (p: JobProgress) => void): Promise<void> {
@@ -245,7 +315,7 @@ export class SidecarManager {
         })
       report(null, 'running', null)
       try {
-        await runExpectingExitZero(this.binPath(name), ['-U'])
+        await runExpectingExitZero(this.binPath(name), ['-U'], this.updateTimeoutMs)
       } catch (err) {
         // Matches install's error contract: report, then rethrow.
         report(null, 'error', err instanceof Error ? err.message : String(err))
@@ -310,36 +380,83 @@ const VERSION_ARGS: Record<SidecarName, readonly string[]> = {
   ffmpeg: ['-version']
 }
 
-/** First line of the binary's version output on stdout, or null when the spawn or exit fails. */
-// TODO(sidecars): no spawn timeout, so a pathological binary can hang status indefinitely.
-function readVersion(binPath: string, args: readonly string[]): Promise<string | null> {
+/**
+ * First line of the binary's version output on stdout, or null when the spawn, the exit or the
+ * timeout says there is no answer.
+ *
+ * A binary that never exits used to leave this promise unsettled, which took `status` with it and
+ * left Settings drawing its before-we-know placeholder for the life of the session, with no
+ * control that could end the wait. Null is an outcome the caller and the UI both already handle,
+ * so the timeout answers with one rather than inventing a failure mode.
+ */
+function readVersion(
+  binPath: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<string | null> {
   return new Promise((resolve) => {
     // stderr is discarded rather than piped-and-ignored. ffmpeg writes its ~1.7 KB startup banner
     // there on every invocation, and an unread pipe stops being free once a binary exceeds the
     // 64 KB buffer: the child blocks on write, never exits, and this promise never settles.
     const child = spawn(binPath, [...args], { stdio: ['ignore', 'pipe', 'ignore'] })
     let out = ''
+    let settled = false
+    const finish = (version: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(version)
+    }
+    // Answer first, kill second. The caller is waiting on the answer, not on the child's death,
+    // and SIGTERM followed by a grace period is not something to make Settings sit through.
+    const timer = setTimeout(() => {
+      finish(null)
+      killOvertime(child)
+    }, timeoutMs)
     child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()))
-    child.on('error', () => resolve(null))
+    child.on('error', () => finish(null))
     child.on('close', (code) => {
       const firstLine = out.split('\n')[0]?.trim()
-      resolve(code === 0 && firstLine ? firstLine : null)
+      finish(code === 0 && firstLine ? firstLine : null)
     })
   })
 }
 
-// TODO(sidecars): no spawn timeout, so yt-dlp -U on a slow network can hang update
-// indefinitely.
-function runExpectingExitZero(binPath: string, args: string[]): Promise<void> {
+/**
+ * Run the binary and reject unless it exits 0, or runs past `timeoutMs`.
+ *
+ * The rejection is the point: `update` turns whatever comes back into an error JobProgress and
+ * rethrows, and Settings renders both. Without the timeout `yt-dlp -U` on a stalled connection
+ * settled neither way, so the row's button stayed disabled on "…" with nothing left to press.
+ */
+function runExpectingExitZero(binPath: string, args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(binPath, args)
+    // stdout is discarded for the reason the version probe discards stderr: yt-dlp -U reports its
+    // progress there, nothing reads it, and a pipe nobody drains stops the child at 64 KB.
+    const child = spawn(binPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
+    let settled = false
+    const finish = (err: Error | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (err) reject(err)
+      else resolve()
+    }
+    const timer = setTimeout(() => {
+      finish(
+        new Error(
+          `${binPath} did not finish within ${Math.round(timeoutMs / 1000)}s and was stopped`
+        )
+      )
+      killOvertime(child)
+    }, timeoutMs)
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
-    child.on('error', (err) => reject(err))
+    child.on('error', (err) => finish(err))
     child.on('close', (code) => {
-      if (code === 0) resolve()
+      if (code === 0) finish(null)
       else
-        reject(
+        finish(
           new Error(`${binPath} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)
         )
     })
