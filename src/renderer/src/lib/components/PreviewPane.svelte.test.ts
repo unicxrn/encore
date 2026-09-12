@@ -3,8 +3,10 @@ import { tick } from 'svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChartRecordSchema, type ChartRecord } from '../../../../shared/schemas'
 import type { LyricLinesResult } from '../../../../main/catalog/lyric-lines'
+import { get } from 'svelte/store'
 import { nowPlaying, progress } from '../stores/preview-controller'
 import type { ChartTarget } from './Home.svelte'
+import { TAGGED_CHARTER, TAGGED_CHARTER_TEXT } from '../../../../../test/helpers/marked-up-names'
 import PreviewPane from './PreviewPane.svelte'
 
 /** Through the real schema, so the fields the pane reads are the catalog's own. */
@@ -167,5 +169,36 @@ describe('PreviewPane lyrics overlay', () => {
     const toggle = lyricsToggle()
     await waitFor(() => expect(toggle.title).toBe('No lyrics in this chart'))
     expect(toggle.disabled).toBe(true)
+  })
+})
+
+/**
+ * The pane does not draw the name itself: it hands it to `openPreview`, which sets `nowPlaying`,
+ * which is the only thing the player bar reads. So stripping here is what puts a readable name
+ * in the bar, and this is where it can be pinned. PlayerBar itself needs no change and gets no
+ * test: it renders the store verbatim, and a test of that would pass with or without this.
+ */
+describe('PreviewPane hands the player bar a name it can read', () => {
+  it('strips the markup out of the title and artist it opens with', async () => {
+    vi.stubGlobal('encore', {
+      chartLyricLines: () => Promise.resolve(LINES),
+      chartReadFiles: () => Promise.resolve([])
+    })
+    render(PreviewPane, {
+      props: {
+        target: localRecord({ name: '<b>YYZ</b>', artist: TAGGED_CHARTER }),
+        instruments: []
+      }
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+
+    // `openPreview` sets the store before it awaits the player module, which jsdom has no way to
+    // load; the name is already through by then, and the failure that follows is caught by the
+    // pane's own error handling.
+    await waitFor(() => {
+      if (get(nowPlaying) === null) throw new Error('nothing playing yet')
+    })
+    expect(get(nowPlaying)).toMatchObject({ title: 'YYZ', artist: TAGGED_CHARTER_TEXT })
   })
 })

@@ -9,6 +9,12 @@ import { browseSearch } from '../stores/search'
 import { advancedBody, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 import type { ChartData, NoteCount, SearchResult } from '../api/enchor'
 import type { ChartTarget } from './Home.svelte'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT,
+  TAGGED_CHARTER,
+  TAGGED_CHARTER_TEXT
+} from '../../../../../test/helpers/marked-up-names'
 
 // Clicking a tag chip runs a real search through the module-scoped `browseSearch`, which was
 // constructed with the real `fetch` at import time. Mocking the API module is the seam that
@@ -665,5 +671,82 @@ describe('Detail: the metadata chips search on their field', () => {
         .getAllByRole('button')
         .map((b) => b.textContent?.trim())
     ).toEqual(['Numbuh681', '2016', 'Utopia', 'Visual Kei Rock'])
+  })
+})
+
+/**
+ * Both of Detail's sources carry a charter's styling verbatim, so the page has to read it as
+ * text. Text assertions only; jsdom draws nothing.
+ */
+describe('Detail names written in Clone Hero markup', () => {
+  it('reads the heading, the artist button and the ABOUT rows of a local chart', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: '<b>YYZ</b>',
+        artist: `<color=#8200f3>Rush</color>`,
+        album: '<i>Moving Pictures</i>',
+        charter: EIGHT_TAG_CHARTER
+      })
+    })
+
+    expect((await screen.findByRole('heading', { level: 1 })).textContent?.trim()).toBe('YYZ')
+    // The button's `title` is built from the same string, so stripping once settles both.
+    const artist = screen.getByRole('button', { name: 'Rush' })
+    expect(artist.getAttribute('title')).toBe('Search charts by Rush')
+    expect(valueBeside('CHARTER')).toBe(EIGHT_TAG_CHARTER_TEXT)
+    expect(valueBeside('ALBUM')).toBe('Moving Pictures')
+  })
+
+  it('reads the same fields on a remote chart', async () => {
+    renderDetail({
+      kind: 'remote',
+      chart: remoteChart({ name: '<b>YYZ</b>', charter: TAGGED_CHARTER })
+    })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent?.trim()).toBe('YYZ')
+    expect(valueBeside('CHARTER')).toBe(TAGGED_CHARTER_TEXT)
+  })
+
+  it('names the tag chip and the search it runs with the same text', async () => {
+    // The chip is one control whose label and whose action are the same string, so a chip that
+    // read "SirMonkfish" and searched Chorus for a colour tag would answer nothing, every time.
+    searchCharts.mockResolvedValue(EMPTY_PAGE)
+    renderDetail({
+      kind: 'local',
+      record: localRecord({ path: '/library/Rush - YYZ', name: 'YYZ', charter: TAGGED_CHARTER })
+    })
+
+    const chip = await screen.findByRole('button', {
+      name: `Search charts with charter ${TAGGED_CHARTER_TEXT}`
+    })
+    expect(chip.textContent?.trim()).toBe(TAGGED_CHARTER_TEXT)
+  })
+
+  it('asks the catalog about the raw name, because that is what the catalog stores', async () => {
+    // The IN LIBRARY answer is a metadata match against rows written from song.ini. Stripping
+    // this side of it would tell the user they do not own a chart they do own.
+    const keys: unknown[] = []
+    vi.stubGlobal('encore', {
+      existsByMeta: (batch: unknown[]): Promise<boolean[]> => {
+        keys.push(...batch)
+        return Promise.resolve([false])
+      }
+    })
+    render(Detail, {
+      props: {
+        target: {
+          kind: 'remote',
+          chart: remoteChart({ name: '<b>YYZ</b>', charter: TAGGED_CHARTER })
+        },
+        onBack: () => {},
+        onNavigate: () => {}
+      }
+    })
+
+    await waitFor(() => {
+      if (keys.length === 0) throw new Error('no metadata lookup yet')
+    })
+    expect(keys[0]).toEqual({ name: '<b>YYZ</b>', artist: 'Rush', charter: TAGGED_CHARTER })
   })
 })

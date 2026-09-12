@@ -10,7 +10,13 @@
   } from '../../../../shared/schemas'
   import type { ChartPlaySummary, PlayDataStatus } from '../../../../shared/play'
   import { artUrl } from '../../../../shared/art'
-  import { msToTime, instrumentDiff, fallbackChartName, playedOn } from '../../../../shared/format'
+  import {
+    msToTime,
+    instrumentDiff,
+    fallbackChartName,
+    playedOn,
+    stripRichText
+  } from '../../../../shared/format'
   import { cancelScan, scanProgress, startScan } from '../stores/scan'
   import { encore } from '../stores/bridge'
   import { settings } from '../stores/settings'
@@ -237,7 +243,10 @@
    * hundred charts. Empty fields drop out with their separator rather than leaving a gap.
    */
   function metaLine(chart: ChartRecord): string {
-    return [chart.artist, chart.album, chart.genre].filter(Boolean).join(' \u00b7 ')
+    return [chart.artist, chart.album, chart.genre]
+      .map(stripRichText)
+      .filter(Boolean)
+      .join(' \u00b7 ')
   }
 
   function coverFor(chart: ChartRecord): string | null {
@@ -395,6 +404,10 @@
   </div>
   <!-- Every picker is a native <select> holding only values the catalog actually has, so no
        choice can ever return nothing and Chromium's own type-to-jump handles a long list.
+       Only the option's LABEL is stripped: the value is what the query filters on, and the
+       catalog stores what the chart says, so a stripped value would match no row at all. A
+       name that is nothing but tags keeps its raw label, because a blank option in a list of
+       charters is a choice the user cannot tell from the next one.
        Album is the exception and is typed: at 154 distinct albums across 222 charts it is
        close to unique per chart, so a dropdown of them is a dropdown of the library. -->
   <div class="filters">
@@ -406,7 +419,7 @@
     >
       <option value="">Any artist</option>
       {#each withCurrent(facets.artists, $libraryFilter.artist) as artist (artist)}
-        <option value={artist}>{artist}</option>
+        <option value={artist}>{stripRichText(artist) || artist}</option>
       {/each}
     </select>
     <input
@@ -424,7 +437,7 @@
     >
       <option value="">Any genre</option>
       {#each withCurrent(facets.genres, $libraryFilter.genre) as genre (genre)}
-        <option value={genre}>{genre}</option>
+        <option value={genre}>{stripRichText(genre) || genre}</option>
       {/each}
     </select>
     <select
@@ -435,7 +448,7 @@
     >
       <option value="">Any charter</option>
       {#each withCurrent(facets.charters, $libraryFilter.charter) as charter (charter)}
-        <option value={charter}>{charter}</option>
+        <option value={charter}>{stripRichText(charter) || charter}</option>
       {/each}
     </select>
     <!-- Year is a range of pickers rather than one exact year: picking 1994 answers a question
@@ -603,7 +616,7 @@
             <!-- title fallback is the file/folder name, not the full path: paths are unreadable
                  in a list, and a chart can legitimately have no parsed title. -->
             <span class="title" title={chart.path}>
-              {chart.name ?? fallbackChartName(chart.path)}
+              {stripRichText(chart.name) || fallbackChartName(chart.path)}
             </span>
             <!-- Only for an `alternate` verdict already in main's memory. `current` earns no ink
                  in a list, and a chart nobody has checked must not look checked. The words are
@@ -630,7 +643,7 @@
           </span>
           <span class="meta">{metaLine(chart)}</span>
         </span>
-        <span class="charter">{chart.charter ?? ''}</span>
+        <span class="charter">{stripRichText(chart.charter)}</span>
         <!-- One grid child: the each block stays inside this span so the row's five columns
              keep matching .row's five tracks. -->
         <span class="diffs mono">

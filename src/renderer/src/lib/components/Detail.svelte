@@ -1,7 +1,7 @@
 <script lang="ts">
   import { albumArtUrl, INSTRUMENTS, type ChartData, type NoteCount } from '../api/enchor'
   import { artUrl } from '../../../../shared/art'
-  import { msToTime, fallbackChartName } from '../../../../shared/format'
+  import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
   import Icon from './Icon.svelte'
   import { countInstruments, diffMatrix } from '../matrix'
   import { emptyAdvanced, type AdvancedTextField } from '../api/advanced'
@@ -101,12 +101,14 @@
   }
 
   const title = $derived(
-    chart?.name ??
-      record?.name ??
-      (record ? fallbackChartName(record.path) : null) ??
+    stripRichText(chart?.name ?? record?.name) ||
+      (record ? fallbackChartName(record.path) : null) ||
       'Unknown chart'
   )
-  const artist = $derived(chart?.artist ?? record?.artist ?? '')
+  // Stripped before `openArtist` sends it to Explore as well as before it is drawn. The button
+  // says "search for this artist", and the artist the user read is the one the search has to
+  // run: Chorus matches text, and no chart there is filed under a colour tag.
+  const artist = $derived(stripRichText(chart?.artist ?? record?.artist))
 
   // Remote covers come from the Encore CDN, local ones from our own art cache over the
   // encore-art scheme. `artFailed` is a single flag rather than a per-md5 set because this
@@ -161,9 +163,12 @@
     chart?.year?.trim() || (record?.year != null ? String(record.year) : '')
   )
 
+  // Every field this renders is a song.ini string, and a charter can style any of them, so the
+  // markup comes off here rather than at each of the dozen rows. The `title` tooltip on the row
+  // reads the same value, so the two cannot disagree.
   const dash = (value: string | null | undefined): string => {
-    const trimmed = value?.trim()
-    return trimmed ? trimmed : '—'
+    const stripped = stripRichText(value)
+    return stripped ? stripped : '—'
   }
 
   // The catalog stores scan-chart's own enum names. They are jargon on screen, since a player
@@ -267,13 +272,15 @@
   // build here rather than clicking through to a filter nothing honours.
   const chips = $derived.by(() => {
     const out: { field: AdvancedTextField; value: string }[] = []
-    const charter = chart?.charter ?? record?.charter
-    if (charter?.trim()) out.push({ field: 'charter', value: charter.trim() })
+    // Stripped for the same reason the artist button is: the chip's text and the search it runs
+    // are the same string, and it goes to Chorus, not to the local catalog.
+    const charter = stripRichText(chart?.charter ?? record?.charter)
+    if (charter) out.push({ field: 'charter', value: charter })
     if (yearText) out.push({ field: 'year', value: yearText })
-    const album = chart?.album ?? record?.album
-    if (album?.trim()) out.push({ field: 'album', value: album.trim() })
-    const genre = chart?.genre ?? record?.genre
-    if (genre?.trim()) out.push({ field: 'genre', value: genre.trim() })
+    const album = stripRichText(chart?.album ?? record?.album)
+    if (album) out.push({ field: 'album', value: album })
+    const genre = stripRichText(chart?.genre ?? record?.genre)
+    if (genre) out.push({ field: 'genre', value: genre })
     return out
   })
 

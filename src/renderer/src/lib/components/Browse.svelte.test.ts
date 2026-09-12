@@ -7,6 +7,10 @@ import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
 import type { ChartData, SearchResult } from '../api/enchor'
 import type { AdvancedQuery } from '../api/advanced'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT
+} from '../../../../../test/helpers/marked-up-names'
 
 // Browse drives the module-scoped `browseSearch`, which was constructed with the
 // real `fetch` at import time, so stubbing the global afterwards would be too late.
@@ -1032,5 +1036,96 @@ describe('Browse advanced search', () => {
     // Retry belongs to the branch that blames the service, and re-asking a question the service
     // already answered is not the way out of this one.
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+})
+
+/**
+ * Chorus carries a charter's styling verbatim, so Explore's rows get the same markup the
+ * catalog does. Text assertions throughout; jsdom applies no CSS, and nothing here is about how
+ * a row looks.
+ */
+describe('Explore names written in Clone Hero markup', () => {
+  const MARKED: ChartData[] = [
+    {
+      ...chart(9, null, EIGHT_TAG_CHARTER),
+      name: '<color=#8200f3>Everlong</color>',
+      artist: '<b>Foo Fighters</b>',
+      album: '<i>The Colour and the Shape</i>'
+    }
+  ]
+
+  // `browseSearch` is module-scoped and answers a question it has already answered from memory,
+  // so these rows only reach the screen behind a term nothing else in this file uses. Cleared
+  // after, with the store's 300ms debounce waited out, so the run this arms lands here.
+  async function renderMarked(mode: 'list' | 'grid' = 'list'): Promise<void> {
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: MARKED })
+    // Set here rather than left to the afterEach that pins it: run alone, this block would
+    // otherwise get the store's own default, which is grid, and look for a row that is a card.
+    browseSearch.setMode(mode)
+    browseSearch.setQuery('marked-up-charter')
+    renderBrowse()
+    await screen.findByText('Everlong')
+  }
+
+  afterEach(async () => {
+    browseSearch.setMode('list')
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws title, artist, album and charter as text in the list', async () => {
+    await renderMarked('list')
+    const row = document.querySelector('.row')
+    expect(row?.querySelector('.artist')?.textContent?.trim()).toBe(
+      'Foo Fighters · The Colour and the Shape'
+    )
+    expect(row?.querySelector('.charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
+  })
+
+  it('draws them as text in the grid too, which is a separate block of markup', async () => {
+    await renderMarked('grid')
+    const card = document.querySelector('.card')
+    expect(card?.querySelector('.c-artist')?.textContent?.trim()).toBe('Foo Fighters')
+    expect(card?.querySelector('.c-charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
+  })
+
+  it('gives the open button an accessible name that matches what is drawn', async () => {
+    // The point of stripping this one: a screen reader announcing a colour tag while the eye
+    // reads a charter is the two disagreeing about the same chart.
+    await renderMarked()
+    expect(
+      screen.getByRole('button', {
+        name: `Everlong by Foo Fighters, charted by ${EIGHT_TAG_CHARTER_TEXT}`
+      })
+    ).toBeTruthy()
+  })
+
+  it('asks the catalog about the raw name, because that is what the catalog stores', async () => {
+    // The IN LIBRARY badge is a metadata match against rows written from song.ini. Strip this
+    // side of the comparison and a chart the user owns stops being recognised.
+    const keys: MetaKey[] = []
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: MARKED })
+    browseSearch.setQuery('marked-up-charter')
+    browseSearch.setMode('list')
+    settings.set({ ...defaultSettings(), libraryFolders: [{ path: '/music', isDefault: true }] })
+    vi.stubGlobal('IntersectionObserver', StubIntersectionObserver)
+    vi.stubGlobal('encore', {
+      existsByMeta: (batch: MetaKey[]): Promise<boolean[]> => {
+        keys.push(...batch)
+        return Promise.resolve(batch.map(() => false))
+      },
+      downloadAdd
+    })
+    render(Browse, { onOpenChart: () => {} })
+    await screen.findByText('Everlong')
+
+    await waitFor(() => {
+      if (keys.length === 0) throw new Error('no metadata lookup yet')
+    })
+    expect(keys[0]).toEqual({
+      name: '<color=#8200f3>Everlong</color>',
+      artist: '<b>Foo Fighters</b>',
+      charter: EIGHT_TAG_CHARTER
+    })
   })
 })

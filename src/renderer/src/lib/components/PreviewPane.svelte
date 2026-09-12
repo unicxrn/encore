@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { albumArtUrl, chartDownloadUrl } from '../api/enchor'
   import { artUrl } from '../../../../shared/art'
-  import { msToTime, fallbackChartName } from '../../../../shared/format'
+  import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
   import type { LyricLine, LyricLinesResult } from '../../../../main/catalog/lyric-lines'
   import type { MatrixRow, DiffKey } from '../matrix'
   import type { PreviewSource } from '../preview/player'
@@ -119,13 +119,15 @@
     return el ? registerViewport(el) : undefined
   })
 
+  // Both go into `openPreview`, so `nowPlaying` and the player bar reading it get the stripped
+  // name too: the bar and this pane name the same song and must say it the same way.
   const title = $derived(
     target.kind === 'remote'
-      ? target.chart.name
-      : (target.record.name ?? fallbackChartName(target.record.path))
+      ? stripRichText(target.chart.name)
+      : stripRichText(target.record.name) || fallbackChartName(target.record.path)
   )
   const artist = $derived(
-    target.kind === 'remote' ? target.chart.artist : (target.record.artist ?? '')
+    stripRichText(target.kind === 'remote' ? target.chart.artist : target.record.artist)
   )
   // Named `coverUrl` locally so it doesn't shadow the imported `artUrl` helper. Remote charts
   // point at the API's CDN; local ones at the cached-art protocol, which is why the player bar

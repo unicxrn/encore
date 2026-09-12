@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChartRecordSchema, type ChartRecord, type JobProgress } from '../../../../shared/schemas'
 import { assetJobs } from '../stores/assets'
+import { TAGGED_CHARTER, TAGGED_CHARTER_TEXT } from '../../../../../test/helpers/marked-up-names'
 import AssetPicker from './AssetPicker.svelte'
 
 const CHART_PATH = '/library/Rush - YYZ'
@@ -106,5 +107,39 @@ describe('AssetPicker video cancel', () => {
 
     await waitFor(() => expect(screen.getByText('DOWNLOAD CANCELED')).toBeTruthy())
     expect(screen.queryByText(/^ERROR:/)).toBeNull()
+  })
+})
+
+/**
+ * The seeds are the one place in this task where stripping helps the search as well as the
+ * screen: iTunes, YouTube and LRCLIB have never heard of a TextMeshPro tag, so a seed carrying
+ * one returns nothing at all. The box the user reads and the request Encore sends are the same
+ * string, which is what these pin.
+ */
+describe('AssetPicker seeds a search from a name written in Clone Hero markup', () => {
+  const marked = (): ChartRecord =>
+    chart({ name: '<b>YYZ</b>', artist: TAGGED_CHARTER, album: '<i>Moving Pictures</i>' })
+
+  it('seeds the album search with the artist and album as text', () => {
+    vi.stubGlobal('encore', {})
+    render(AssetPicker, { mode: 'art', chart: marked(), onAction: vi.fn() })
+    const box = screen.getByPlaceholderText('Search albums…') as HTMLInputElement
+    expect(box.value).toBe(`${TAGGED_CHARTER_TEXT} Moving Pictures`)
+  })
+
+  it('seeds the video search with the artist and title as text', () => {
+    vi.stubGlobal('encore', {})
+    render(AssetPicker, { mode: 'video', chart: marked(), onAction: vi.fn() })
+    const box = screen.getByPlaceholderText('Search YouTube…') as HTMLInputElement
+    expect(box.value).toBe(`${TAGGED_CHARTER_TEXT} YYZ`)
+  })
+
+  it('seeds the two lyrics boxes as text', () => {
+    vi.stubGlobal('encore', {})
+    render(AssetPicker, { mode: 'lyrics', chart: marked(), onAction: vi.fn() })
+    expect((screen.getByPlaceholderText('Artist') as HTMLInputElement).value).toBe(
+      TAGGED_CHARTER_TEXT
+    )
+    expect((screen.getByPlaceholderText('Track') as HTMLInputElement).value).toBe('YYZ')
   })
 })

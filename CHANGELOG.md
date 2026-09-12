@@ -61,6 +61,19 @@ release.
 
 ### Fixed
 
+- A name written in Clone Hero's own styling markup read as the markup, everywhere Encore drew
+  one. Charters colour their names in the game and song.ini and Chorus carry that verbatim, so one
+  charter arrived as eight colour tags, one per letter. Installed, Explore, a chart's page, Asset
+  Studio, the duplicates report, the preview and the player bar now read every title, artist,
+  album and charter as text, and so do the accessible names beside them. What Encore stores is
+  untouched: the catalogue keeps what the chart says, so search still matches it, and the filter
+  pickers show the name while still filtering on the stored string. The duplicates CSV also keeps
+  the raw name, because it sits next to each copy's path and checksum and exists to be reconciled
+  against a library.
+- A download of a chart whose name carries that markup landed in a folder named after the markup,
+  because the only thing that touched it was the rule that strips characters a filename cannot
+  hold. The tags come off first now, so the folder, and the line for it in the downloads queue,
+  read as a name. Nothing already on disk is renamed.
 - Explore answered an advanced search that matched nothing with "Chorus Encore returned no charts
   at all. It may be having trouble." It now names the filters, which is what an exact charter or
   album taken from an installed chart runs into when that charter or album is not on Chorus.

@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChartRecordSchema, defaultSettings, type ChartRecord } from '../../../../shared/schemas'
 import { settings } from '../stores/settings'
+import { TAGGED_CHARTER, TAGGED_CHARTER_TEXT } from '../../../../../test/helpers/marked-up-names'
 import Assets from './Assets.svelte'
 // Vite's ?raw hands back the component's own bytes, untransformed. jsdom applies no CSS and
 // computes no layout, so reading the stylesheet as text is the only way a test here can see
@@ -158,5 +159,25 @@ describe('Asset Studio chart row', () => {
       `${p.querySelector('svg')?.getAttribute('data-icon')} ${p.textContent?.trim()}`
     expect(pills.map(mark)).toEqual(['check Video', 'plus Art', 'plus Background', 'plus Lyrics'])
     expect(await screen.findByText('3 MISSING')).toBeTruthy()
+  })
+})
+
+/**
+ * Asset Studio draws the same catalog names Installed does, in its list and in its detail pane.
+ * Text assertions; jsdom applies no CSS.
+ */
+describe('Asset Studio names written in Clone Hero markup', () => {
+  it('draws the row title and artist as text', async () => {
+    renderAssets([chart({ name: '<b>YYZ</b>', artist: TAGGED_CHARTER })])
+    const row = await firstRow()
+    expect(row.querySelector('.title')?.textContent?.trim()).toBe('YYZ')
+    expect(row.querySelector('.artist')?.textContent?.trim()).toBe(TAGGED_CHARTER_TEXT)
+  })
+
+  it('draws the detail pane heading and artist as text', async () => {
+    renderAssets([chart({ name: '<b>YYZ</b>', artist: TAGGED_CHARTER })])
+    await fireEvent.click(await firstRow())
+    expect(document.querySelector('.d-title')?.textContent?.trim()).toBe('YYZ')
+    expect(document.querySelector('.d-artist')?.textContent?.trim()).toBe(TAGGED_CHARTER_TEXT)
   })
 })

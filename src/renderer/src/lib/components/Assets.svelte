@@ -3,7 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import type { ChartRecord } from '../../../../shared/schemas'
   import { artUrl } from '../../../../shared/art'
-  import { fallbackChartName } from '../../../../shared/format'
+  import { fallbackChartName, stripRichText } from '../../../../shared/format'
   import { assetJobs } from '../stores/assets'
   import { encore } from '../stores/bridge'
   import { scanProgress } from '../stores/scan'
@@ -288,6 +288,8 @@
     if (!current) return
     let updated = charts.find((r) => r.path === current.path) ?? null
     if (!updated) {
+      // The catalog stores what the chart says, so this one searches on the raw name. Handing
+      // it the stripped name would find nothing for exactly the charts this task is about.
       const rows = await encore().catalogQuery({
         search: current.name ?? '',
         offset: 0,
@@ -433,9 +435,9 @@
           </span>
           <span class="song">
             <span class="title" title={chart.path}
-              >{chart.name ?? fallbackChartName(chart.path)}</span
+              >{stripRichText(chart.name) || fallbackChartName(chart.path)}</span
             >
-            {#if chart.artist}<span class="artist">{chart.artist}</span>{/if}
+            {#if chart.artist}<span class="artist">{stripRichText(chart.artist)}</span>{/if}
           </span>
           <span class="need mono">
             {missingCount(chart) === 0 ? 'COMPLETE' : `${missingCount(chart)} MISSING`}
@@ -473,9 +475,9 @@
       <div class="head">
         <div class="head-text">
           <div class="d-title" title={selected.path}>
-            {selected.name ?? fallbackChartName(selected.path)}
+            {stripRichText(selected.name) || fallbackChartName(selected.path)}
           </div>
-          <div class="d-artist">{selected.artist ?? ''}</div>
+          <div class="d-artist">{stripRichText(selected.artist)}</div>
         </div>
         <button
           class="btn-primary"

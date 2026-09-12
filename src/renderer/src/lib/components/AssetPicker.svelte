@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ChartRecord } from '../../../../shared/schemas'
-  import { msToTime } from '../../../../shared/format'
+  import { msToTime, stripRichText } from '../../../../shared/format'
   import { assetJobs } from '../stores/assets'
   import { encore, type Encore } from '../stores/bridge'
 
@@ -19,7 +19,12 @@
     onAction
   }: { mode: Mode; chart: ChartRecord; onAction: (chartPath: string) => void } = $props()
 
-  const joinSeed = (...parts: (string | null)[]): string => parts.filter(Boolean).join(' ').trim()
+  // Seeds are stripped, and this is one of the places where stripping helps the search rather
+  // than only the screen: iTunes, YouTube and LRCLIB have never heard of a TextMeshPro tag, so
+  // a query carrying one returns nothing. The user sees these in editable inputs, so the box
+  // and the request agree.
+  const joinSeed = (...parts: (string | null)[]): string =>
+    parts.map(stripRichText).filter(Boolean).join(' ').trim()
 
   // A picker instance is created fresh per open (keyed {#if} in Assets), so
   // seeding from the chart prop at init is safe.
@@ -30,9 +35,9 @@
       : joinSeed(chart.artist, chart.name)
   )
   // svelte-ignore state_referenced_locally
-  let lyricsArtist = $state(chart.artist ?? '')
+  let lyricsArtist = $state(stripRichText(chart.artist))
   // svelte-ignore state_referenced_locally
-  let lyricsTrack = $state(chart.name ?? '')
+  let lyricsTrack = $state(stripRichText(chart.name))
 
   let searching = $state(false)
   let searched = $state(false)

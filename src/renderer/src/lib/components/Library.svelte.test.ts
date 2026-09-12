@@ -14,6 +14,12 @@ import { scanProgress } from '../stores/scan'
 import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
 import { settings } from '../stores/settings'
 import { verdicts } from '../stores/updates'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT,
+  TAGGED_CHARTER,
+  TAGGED_CHARTER_TEXT
+} from '../../../../../test/helpers/marked-up-names'
 import Library from './Library.svelte'
 // Vite's ?raw hands back the component's own bytes, untransformed, which is the only way this
 // test can see a stylesheet jsdom never applies. See declaredRowTracks().
@@ -1043,4 +1049,90 @@ describe('Library: play counts', () => {
     expect(badgesOf(row)).toEqual([])
     expect(document.querySelector('.caveat')).toBeNull()
   })
+})
+
+/**
+ * Clone Hero's markup reaches this list from song.ini, so every name the row draws has to be
+ * read as text. The row itself is text assertions and they hold under jsdom; nothing here rests
+ * on layout.
+ */
+describe('Library names written in Clone Hero markup', () => {
+  const marked = (): ChartRecord =>
+    chart({
+      path: '/library/marked',
+      name: `<b><color=#7B0000>Y</color><color=#8E0000>Y</color><color=#A31616>Z</color></b>`,
+      artist: TAGGED_CHARTER,
+      album: '<i>Moving Pictures</i>',
+      genre: 'Prog',
+      charter: EIGHT_TAG_CHARTER
+    })
+
+  it('draws the title, the meta line and the charter as text', async () => {
+    renderLibrary([marked()])
+    const row = await rowTitled('YYZ')
+    expect(row.querySelector('.meta')?.textContent?.trim()).toBe(
+      `${TAGGED_CHARTER_TEXT} · Moving Pictures · Prog`
+    )
+    expect(row.querySelector('.charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
+  })
+
+  it('labels a facet option with the name and filters on what the catalog stores', async () => {
+    // The two halves of the one rule worth pinning here: the user reads a charter, and the
+    // query still carries the raw string the catalog was written with. Strip the value too and
+    // the picker selects a charter that matches no row.
+    const { filters } = renderWithFiltersFor({
+      artists: [],
+      genres: [],
+      charters: [EIGHT_TAG_CHARTER],
+      years: []
+    })
+    const select = await waitFor(() => {
+      const found = screen.getByLabelText('Filter by charter') as HTMLSelectElement
+      if (found.options.length < 2) throw new Error('facets not in yet')
+      return found
+    })
+    const option = select.options[1]
+    expect(option.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
+    expect(option.value).toBe(EIGHT_TAG_CHARTER)
+
+    await fireEvent.change(select, { target: { value: EIGHT_TAG_CHARTER } })
+    const sent = await waitFor(() => {
+      const hit = [...filters].reverse().find((f) => f.charter !== undefined)
+      if (!hit) throw new Error('no charter filter sent')
+      return hit
+    })
+    expect(sent.charter).toBe(EIGHT_TAG_CHARTER)
+  })
+
+  it('keeps a name that is nothing but markup readable in the picker', async () => {
+    // Stripping leaves nothing here, and a blank option is one the user cannot tell from the
+    // next blank one. The raw string is ugly and it is at least a name.
+    renderWithFiltersFor({ artists: [], genres: [], charters: ['<b></b>'], years: [] })
+    const select = await waitFor(() => {
+      const found = screen.getByLabelText('Filter by charter') as HTMLSelectElement
+      if (found.options.length < 2) throw new Error('facets not in yet')
+      return found
+    })
+    expect(select.options[1].textContent?.trim()).toBe('<b></b>')
+  })
+
+  function renderWithFiltersFor(facets: {
+    artists: string[]
+    genres: string[]
+    charters: string[]
+    years: number[]
+  }): { filters: CatalogFilter[] } {
+    const filters: CatalogFilter[] = []
+    vi.stubGlobal('encore', {
+      catalogQuery: (f: CatalogFilter): Promise<ChartRecord[]> => {
+        filters.push(f)
+        return Promise.resolve([])
+      },
+      catalogCount: (): Promise<number> => Promise.resolve(0),
+      catalogFacets: (): Promise<typeof facets> => Promise.resolve(facets),
+      updatesLast: () => Promise.resolve([])
+    })
+    render(Library, { onOpenChart: () => {} })
+    return { filters }
+  }
 })

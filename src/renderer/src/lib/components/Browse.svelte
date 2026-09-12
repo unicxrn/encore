@@ -6,7 +6,7 @@
   import { globalQuery } from '../stores/global-search'
   import { settings } from '../stores/settings'
   import { INSTRUMENTS, DIFFICULTIES, albumArtUrl, type ChartData } from '../api/enchor'
-  import { msToTime, diffDisplay } from '../../../../shared/format'
+  import { msToTime, diffDisplay, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
   import AdvancedSearch from './AdvancedSearch.svelte'
   import type { ChartTarget } from './Home.svelte'
@@ -192,6 +192,9 @@
   // chartIds whose name+artist+charter match a local catalog row. A metadata
   // match means "this song by this charter is in your library", not
   // necessarily this exact chart version.
+  //
+  // Raw names, never stripped: both sides of the comparison are what the chart says, and
+  // stripping one side would make an owned chart look missing.
   const inLibraryIds = new SvelteSet<number>()
   let metaGeneration = 0
 
@@ -288,14 +291,17 @@
   // Every alternate version of a song repeats its title and artist, so a name
   // that stopped at the title would announce them identically. The charter is
   // what distinguishes them.
+  //
+  // Stripped, like the row it names: a screen reader reading out a colour tag while the eye
+  // reads the name is worse than either one alone.
   function openLabel(chart: ChartData): string {
-    const attribution = [
-      chart.artist ? `by ${chart.artist}` : '',
-      chart.charter ? `charted by ${chart.charter}` : ''
-    ]
+    const name = stripRichText(chart.name)
+    const artist = stripRichText(chart.artist)
+    const charter = stripRichText(chart.charter)
+    const attribution = [artist ? `by ${artist}` : '', charter ? `charted by ${charter}` : '']
       .filter(Boolean)
       .join(', ')
-    return attribution ? `${chart.name} ${attribution}` : chart.name
+    return attribution ? `${name} ${attribution}` : name
   }
 
   // The selected rows, and the subset of them a bulk download would actually
@@ -541,7 +547,7 @@
         {/if}
         <span class="c-title">
           <button class="open" aria-label={openLabel(c)} onclick={() => openChart(c)}
-            >{c.name}</button
+            >{stripRichText(c.name)}</button
           >
           {#if alternates > 0 && c.songId !== null}
             <button
@@ -555,9 +561,9 @@
             <span class="alt-badge">OTHER VERSION</span>
           {/if}
         </span>
-        <span class="c-artist">{c.artist}</span>
+        <span class="c-artist">{stripRichText(c.artist)}</span>
         <span class="c-charter">
-          {c.charter}
+          {stripRichText(c.charter)}
           {#if inLibraryIds.has(c.chartId)}
             <span class="lib-badge">IN LIBRARY</span>
           {/if}
@@ -600,7 +606,7 @@
             <span class="song">
               <span class="title">
                 <button class="open" aria-label={openLabel(chart)} onclick={() => openChart(chart)}
-                  >{chart.name}</button
+                  >{stripRichText(chart.name)}</button
                 >
                 {#if hasVersions && chart.songId !== null}
                   <button
@@ -611,10 +617,14 @@
                   >
                 {/if}
               </span>
-              <span class="artist">{chart.artist}{chart.album ? ` · ${chart.album}` : ''}</span>
+              <span class="artist"
+                >{stripRichText(chart.artist)}{chart.album
+                  ? ` · ${stripRichText(chart.album)}`
+                  : ''}</span
+              >
             </span>
             <span class="charter">
-              {chart.charter}
+              {stripRichText(chart.charter)}
               {#if inLibraryIds.has(chart.chartId)}
                 <span class="lib-badge">IN LIBRARY</span>
               {/if}
@@ -641,13 +651,13 @@
                 <span class="song song-indented">
                   <span class="title text-2"
                     ><button class="open" aria-label={openLabel(alt)} onclick={() => openChart(alt)}
-                      >{alt.name}</button
+                      >{stripRichText(alt.name)}</button
                     ></span
                   >
-                  <span class="artist">{alt.charter}</span>
+                  <span class="artist">{stripRichText(alt.charter)}</span>
                 </span>
                 <span class="charter">
-                  {alt.charter}
+                  {stripRichText(alt.charter)}
                   {#if inLibraryIds.has(alt.chartId)}
                     <span class="lib-badge">IN LIBRARY</span>
                   {/if}

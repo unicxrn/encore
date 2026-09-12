@@ -7,6 +7,12 @@ import type {
   VersionGroup,
   AlternateGroup
 } from '../../../../shared/duplicates'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT,
+  TAGGED_CHARTER,
+  TAGGED_CHARTER_TEXT
+} from '../../../../../test/helpers/marked-up-names'
 import Duplicates from './Duplicates.svelte'
 
 /**
@@ -296,5 +302,62 @@ describe('Duplicates: export', () => {
     expect(lines.filter((l) => l.startsWith('identical,'))).toHaveLength(2)
     expect(lines.filter((l) => l.startsWith('versions,'))).toHaveLength(2)
     expect(lines.filter((l) => l.startsWith('alternates,'))).toHaveLength(2)
+  })
+})
+
+/**
+ * The one place in this view where the two halves part company: a name is read as text on
+ * screen, and goes out of the CSV exactly as the chart wrote it.
+ */
+describe('Duplicates names written in Clone Hero markup', () => {
+  const markedVersions = (): VersionGroup => ({
+    ...versions(),
+    name: '<b>YYZ</b>',
+    charter: EIGHT_TAG_CHARTER,
+    copies: [copy('/library/Rush - YYZ', { name: '<b>YYZ</b>', charter: EIGHT_TAG_CHARTER })]
+  })
+
+  it('names a group, and the charter under it, as text', async () => {
+    await open(report({ versions: [markedVersions()] }))
+    expect(screen.getByText('Rush - YYZ')).toBeTruthy()
+    expect(screen.getByText(`charted by ${EIGHT_TAG_CHARTER_TEXT}`)).toBeTruthy()
+  })
+
+  it('names an identical group from the copy it holds, as text', async () => {
+    await open(
+      report({
+        identical: [
+          {
+            checksum: 'a'.repeat(32),
+            copies: [
+              copy('/library/one', { name: TAGGED_CHARTER }),
+              copy('/library/two', { name: TAGGED_CHARTER })
+            ]
+          }
+        ]
+      })
+    )
+    expect(screen.getByText(`Rush - ${TAGGED_CHARTER_TEXT}`)).toBeTruthy()
+  })
+
+  it('exports the name the chart actually carries, markup and all', async () => {
+    // Deliberately not stripped. This file sits next to each copy's path and Clone Hero
+    // checksum so it can be joined against a library, and a name Encore had rewritten on the
+    // way out would match neither the song.ini it came from nor the catalog. The stripper is
+    // lossy, so nothing downstream could put the original back.
+    let written = ''
+    stub(report({ versions: [markedVersions()] }), {
+      saveTextFile: (req: { content: string }): Promise<string | null> => {
+        written = req.content
+        return Promise.resolve('/tmp/encore-duplicates.csv')
+      }
+    })
+    render(Duplicates)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
+
+    await screen.findByText(/SAVED/)
+    expect(written).toContain(EIGHT_TAG_CHARTER)
+    expect(written).not.toContain(`,${EIGHT_TAG_CHARTER_TEXT},`)
   })
 })

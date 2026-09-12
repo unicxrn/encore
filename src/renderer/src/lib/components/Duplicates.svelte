@@ -7,7 +7,7 @@
     type DuplicateReport,
     type DuplicateTierId
   } from '../../../../shared/duplicates'
-  import { fallbackChartName } from '../../../../shared/format'
+  import { fallbackChartName, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
 
   /**
@@ -127,8 +127,8 @@
   }
 
   function copyLabel(copy: DuplicateCopy): string {
-    const title = copy.name?.trim() ?? ''
-    const artist = copy.artist?.trim() ?? ''
+    const title = stripRichText(copy.name)
+    const artist = stripRichText(copy.artist)
     if (title && artist) return `${artist} - ${title}`
     if (title) return title
     // Falls back to reading a name out of the path, the same way the rest of the app does for a
@@ -159,6 +159,11 @@
    * here are a rendering budget rather than a filter the user chose, so a file that stopped at
    * the twenty-fifth group would be missing rows for a reason nobody asked for. The tier is the
    * first column, so the file can be read back without having to infer which list a row was in.
+   *
+   * The names go out raw, unlike everywhere they are drawn. This file is a record of what the
+   * charts say, sat next to their paths and Clone Hero checksums so it can be joined against a
+   * library; a name Encore had quietly rewritten would match neither the song.ini it came from
+   * nor the catalog, and stripRichText cannot be undone to recover the original.
    */
   async function exportCsv(): Promise<void> {
     if (report === null) return
@@ -285,8 +290,9 @@
         {#each shown('versions', report.versions) as group (`${group.artist}/${group.name}/${group.charter}`)}
           <div class="group">
             <div class="g-head">
-              <span class="g-name">{group.artist} - {group.name}</span>
-              <span class="g-charter">charted by {group.charter}</span>
+              <span class="g-name">{stripRichText(group.artist)} - {stripRichText(group.name)}</span
+              >
+              <span class="g-charter">charted by {stripRichText(group.charter)}</span>
               <span class="g-meta mono">
                 {group.copies.length} COPIES
                 {#if group.versionCount > 1}
@@ -328,11 +334,12 @@
         {#each shown('alternates', report.alternates) as group (`${group.artist}/${group.name}`)}
           <div class="group">
             <div class="g-head">
-              <span class="g-name">{group.artist} - {group.name}</span>
+              <span class="g-name">{stripRichText(group.artist)} - {stripRichText(group.name)}</span
+              >
               <span class="g-meta mono">{group.charters.length} CHARTERS</span>
             </div>
             {#each group.charters as charter (charter.charter)}
-              <p class="g-charter-head">{charter.charter}</p>
+              <p class="g-charter-head">{stripRichText(charter.charter)}</p>
               {#each charter.copies as copy (copy.path)}
                 {@render copyRow(copy)}
               {/each}
