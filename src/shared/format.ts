@@ -156,11 +156,16 @@ const RICH_TEXT_TAGS = [
 const RICH_TEXT = new RegExp(`</?(?:${RICH_TEXT_TAGS})(?:[=\\s][^>]*)?>`, 'gi')
 
 /**
- * Clone Hero's own markup out of a name, for display.
+ * Clone Hero's own markup out of a name.
  *
- * Never applied to stored data, only on the way to the screen: the catalogue keeps what the chart
- * actually says, so a search for the raw string still matches and nothing is lost by scanning.
+ * Nothing a chart says is edited: the catalogue stores the raw string exactly as the chart wrote
+ * it and keeps the output of this beside it, because search and sort run over stored data and a
+ * name nobody can see is a name nobody can find. See STRIPPED_COLUMN in main/catalog/db.ts.
  * A name made entirely of tags comes back empty, which the callers' own empty handling covers.
+ *
+ * Changing the rules here restyles every name on screen and dates every stripped column already
+ * in a user's catalog. That is a migration (null the four columns and let the backfill recompute
+ * them), not an edit on its own.
  */
 export function stripRichText(value: string | null | undefined): string {
   if (!value) return ''

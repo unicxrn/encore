@@ -75,11 +75,24 @@ release.
   one. Charters colour their names in the game and song.ini and Chorus carry that verbatim, so one
   charter arrived as eight colour tags, one per letter. Installed, Explore, a chart's page, Asset
   Studio, the duplicates report, the preview and the player bar now read every title, artist,
-  album and charter as text, and so do the accessible names beside them. What Encore stores is
-  untouched: the catalogue keeps what the chart says, so search still matches it, and the filter
-  pickers show the name while still filtering on the stored string. The duplicates CSV also keeps
-  the raw name, because it sits next to each copy's path and checksum and exists to be reconciled
-  against a library.
+  album and charter as text, and so do the accessible names beside them. What a chart says is
+  untouched: the catalogue still keeps the markup exactly as the chart wrote it. The duplicates
+  CSV shows the raw name, because it sits next to each copy's path and checksum and exists to be
+  reconciled against a library.
+- A name written in that markup could not be found by what it reads as, and sorted nowhere near
+  it. Search and sort run over the catalogue, and the catalogue held only the raw string, so a
+  charter who colours every letter of their name was a separate search term per letter and typing
+  the name on screen found nothing, while typing `color` found every styled chart in the library.
+  A title beginning with a tag sorted under `<`, which put it at the top of Installed. The
+  catalogue now keeps a readable form of each chart's title, artist, album and charter beside the
+  raw one, and search, sort and the Installed pickers read that. Pasting a line straight out of
+  song.ini into the search box still finds its chart. Your library is not rescanned for this:
+  Encore fills the new columns from what it has already stored, the first time this build opens
+  your catalogue, measured at 0.13 seconds over a library of 20,000 charts, and the search index
+  it rebuilds in the same pass comes out a fifth smaller than the one it replaces.
+- One charter whose name is styled in one chart and plain in another was two entries in
+  Installed's charter picker, each returning some of their charts. That is one entry now, under
+  the name as it reads. Artists the same.
 - A download of a chart whose name carries that markup landed in a folder named after the markup,
   because the only thing that touched it was the rule that strips characters a filename cannot
   hold. The tags come off first now, so the folder, and the line for it in the downloads queue,

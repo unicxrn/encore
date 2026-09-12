@@ -43,11 +43,21 @@ const V1_SCHEMA = `
 		VALUES (new.id, new.name, new.artist, new.album, new.charter);
 	END;`
 
-/** A row as the pre-M1c scanner wrote it: the path and its change stamp, no metadata. */
+/**
+ * A row as the pre-M1c scanner wrote it: the path and its change stamp, no metadata.
+ *
+ * The four text fields are optional because most of this fixture's users only need a row to
+ * exist. They are here for the migrations that have to move stored text rather than only add a
+ * column, which cannot be exercised by a path-only row.
+ */
 export interface V1Row {
   path: string
   chartType: 'folder' | 'sng'
   folderHash: string
+  name?: string
+  artist?: string
+  album?: string
+  charter?: string
 }
 
 /** Creates and closes a user_version 1 catalog at `file`, seeded with `rows`. */
@@ -57,8 +67,18 @@ export function createV1Catalog(file: string, rows: V1Row[] = []): void {
   db.pragma('user_version = 1')
   db.exec(V1_SCHEMA)
   const insert = db.prepare(
-    `INSERT INTO charts (path, chartType, folderHash, modifiedTime) VALUES (?, ?, ?, ?)`
+    `INSERT INTO charts (path, chartType, folderHash, modifiedTime, name, artist, album, charter)
+		 VALUES (@path, @chartType, @folderHash, @modifiedTime, @name, @artist, @album, @charter)`
   )
-  for (const row of rows) insert.run(row.path, row.chartType, row.folderHash, Date.now())
+  for (const row of rows) {
+    insert.run({
+      name: null,
+      artist: null,
+      album: null,
+      charter: null,
+      ...row,
+      modifiedTime: Date.now()
+    })
+  }
   db.close()
 }

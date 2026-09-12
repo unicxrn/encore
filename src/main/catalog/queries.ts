@@ -5,7 +5,8 @@ import {
   type CatalogSortField,
   type ChartRecord
 } from '../../shared/schemas'
-import type { CatalogDb } from './db'
+import { stripRichText } from '../../shared/format'
+import { readableColumn, STRIPPED_COLUMN, type CatalogDb, type StrippedSource } from './db'
 
 /** The names of every boolean field on ChartRecord, so BOOL_COLUMNS cannot drift from the schema. */
 type BoolKeys = {
@@ -124,10 +125,35 @@ function parseJsonColumn(column: string, value: unknown): unknown {
   }
 }
 
+/**
+ * The stripped twins, written here rather than carried on ChartRecord.
+ *
+ * They are an index over `name`, `artist`, `album` and `charter`, not a field of a chart, and
+ * deriving them at the one write path is what guarantees they cannot disagree with the raw text
+ * they came from. On ChartRecord they would instead be four more strings for the scanner to
+ * remember to set, four more crossing IPC to a renderer that strips for display anyway, and a
+ * row written by any other route could carry a stripped name that was never that chart's name.
+ */
+const DERIVED_COLUMNS = [
+  STRIPPED_COLUMN.name,
+  STRIPPED_COLUMN.artist,
+  STRIPPED_COLUMN.album,
+  STRIPPED_COLUMN.charter
+] as const
+
+/** Null in, null out: an absent name has no stripped form, and '' would claim it has an empty one. */
+function strippedOrNull(value: string | null): string | null {
+  return value === null ? null : stripRichText(value)
+}
+
 function toRow(record: ChartRecord): Record<string, unknown> {
   const row: Record<string, unknown> = { ...record }
   for (const col of BOOL_COLUMNS) row[col] = record[col] ? 1 : 0
   for (const col of JSON_COLUMNS) row[col] = JSON.stringify(record[col])
+  row[STRIPPED_COLUMN.name] = strippedOrNull(record.name)
+  row[STRIPPED_COLUMN.artist] = strippedOrNull(record.artist)
+  row[STRIPPED_COLUMN.album] = strippedOrNull(record.album)
+  row[STRIPPED_COLUMN.charter] = strippedOrNull(record.charter)
   return row
 }
 
@@ -140,9 +166,10 @@ function fromRow(row: Record<string, unknown>): ChartRecord {
 }
 
 // Hoisted: cols/placeholders/updates are invariant, so build the SQL once at module load.
-const UPSERT_COLS = COLUMNS.join(', ')
-const UPSERT_PLACEHOLDERS = COLUMNS.map((c) => `@${c}`).join(', ')
-const UPSERT_UPDATES = COLUMNS.filter((c) => c !== 'path')
+const WRITTEN_COLUMNS: readonly string[] = [...COLUMNS, ...DERIVED_COLUMNS]
+const UPSERT_COLS = WRITTEN_COLUMNS.join(', ')
+const UPSERT_PLACEHOLDERS = WRITTEN_COLUMNS.map((c) => `@${c}`).join(', ')
+const UPSERT_UPDATES = WRITTEN_COLUMNS.filter((c) => c !== 'path')
   .map((c) => `${c} = @${c}`)
   .join(', ')
 const UPSERT_SQL = `INSERT INTO charts (${UPSERT_COLS}) VALUES (${UPSERT_PLACEHOLDERS})
@@ -156,9 +183,15 @@ export function upsertChart(db: CatalogDb, record: ChartRecord): void {
  * Quote each term so FTS5 operators in user input can't break the query.
  * Quotes and NUL bytes are stripped first: either would terminate the quoted
  * phrase early and make FTS5 throw "unterminated string".
+ *
+ * The search text goes through the same stripper as the index. That is what keeps a raw paste out
+ * of song.ini working now that the index holds only the readable form: the quoting below turns
+ * `<color=#8200f3>SirMonkfish</color>` into a phrase of the tag's own tokens with the name buried
+ * among them, and the index holds the name alone. Without this, the one search certain to contain
+ * the name would be the one search that finds nothing.
  */
 function ftsQuery(search: string): string {
-  return search
+  return stripRichText(search)
     .split(/\s+/)
     .map((term) => term.replace(/["\0]/g, '').trim())
     .filter(Boolean)
@@ -245,12 +278,12 @@ function neverPlayedClause(filter: CatalogFilter, prefix = ''): Clause {
  * clears the filter instead of asking for charts whose artist is literally "". NULL columns
  * never match, which they should not: an unknown artist is not the artist you picked.
  *
- * The column name is a literal from the call sites below, never user input.
+ * `expression` is SQL built here or in db.ts, never user input.
  */
-function exactTextClause(column: string, value: string | undefined, prefix: string): Clause {
+function exactTextClause(expression: string, value: string | undefined): Clause {
   const trimmed = value?.trim()
   if (!trimmed) return NO_CLAUSE
-  return { sql: ` AND LOWER(${prefix}${column}) = LOWER(?)`, params: [trimmed] }
+  return { sql: ` AND LOWER(${expression}) = LOWER(?)`, params: [trimmed] }
 }
 
 /**
@@ -269,7 +302,7 @@ function albumClause(filter: CatalogFilter, prefix = ''): Clause {
   const value = filter.album?.trim()
   if (!value) return NO_CLAUSE
   return {
-    sql: ` AND LOWER(${prefix}album) LIKE LOWER(?) ESCAPE '\\'`,
+    sql: ` AND LOWER(${readableColumn('album', prefix)}) LIKE LOWER(?) ESCAPE '\\'`,
     params: [likeContains(value)]
   }
 }
@@ -294,14 +327,22 @@ function rangeClause(
   return joinClauses(parts)
 }
 
-/** Every non-search constraint, in the order they are ANDed onto a WHERE that already has a term. */
+/**
+ * Every non-search constraint, in the order they are ANDed onto a WHERE that already has a term.
+ *
+ * Artist and charter compare the readable form, because that is what `chartFacets` offers and the
+ * two have to agree: a picker listing `SirMonkfish` and a filter matching only
+ * `<color=#8200f3>SirMonkfish</color>` is an option that returns nothing. Genre stays raw. It is
+ * neither searched nor sorted, nothing has ever been seen styling one, and a stripped column
+ * exists for the four fields charters actually write markup into.
+ */
 function constraintClause(filter: CatalogFilter, prefix = ''): Clause {
   return joinClauses([
     missingClause(filter, prefix),
     neverPlayedClause(filter, prefix),
-    exactTextClause('artist', filter.artist, prefix),
-    exactTextClause('genre', filter.genre, prefix),
-    exactTextClause('charter', filter.charter, prefix),
+    exactTextClause(readableColumn('artist', prefix), filter.artist),
+    exactTextClause(`${prefix}genre`, filter.genre),
+    exactTextClause(readableColumn('charter', prefix), filter.charter),
     albumClause(filter, prefix),
     rangeClause('year', filter.yearMin, filter.yearMax, prefix),
     rangeClause('songLength', filter.lengthMinMs, filter.lengthMaxMs, prefix)
@@ -338,8 +379,29 @@ const SORT_COLUMN = {
   length: 'songLength'
 } as const satisfies Record<CatalogSortField, keyof ChartRecord>
 
-/** The sorts whose column holds text, and so need the case-insensitive collation. */
-const TEXT_SORTS: readonly CatalogSortField[] = ['title', 'artist', 'album', 'charter']
+/**
+ * The sorts whose column holds text, mapped to the raw column whose readable form they order by.
+ *
+ * Membership of this map is what decides both the case-insensitive collation and whether the sort
+ * reads the stripped twin, which is right: the two go together, and a text column with no
+ * stripped twin is a column this map must not carry.
+ */
+const TEXT_SORTS = {
+  title: 'name',
+  artist: 'artist',
+  album: 'album',
+  charter: 'charter'
+} as const satisfies Partial<Record<CatalogSortField, StrippedSource>>
+
+/** The SQL a sort orders by, and whether it is text. */
+function sortExpression(sort: CatalogSortField, prefix: string): { sql: string; text: boolean } {
+  const source: StrippedSource | undefined = (
+    TEXT_SORTS as Partial<Record<CatalogSortField, StrippedSource>>
+  )[sort]
+  return source === undefined
+    ? { sql: `${prefix}${SORT_COLUMN[sort]}`, text: false }
+    : { sql: readableColumn(source, prefix), text: true }
+}
 
 /**
  * The ORDER BY body for a page of this filter.
@@ -356,14 +418,19 @@ const TEXT_SORTS: readonly CatalogSortField[] = ['title', 'artist', 'album', 'ch
  *   normal case for every sort but length.
  * - No sort named keeps what each query shape did before: relevance for a search, title order
  *   for the plain list.
+ *
+ * Every text sort orders by the readable form. Sorting the raw one files a title that opens with
+ * a colour tag under `<`, which is to say at the very top of the Installed list, nowhere near
+ * where the name on screen says it belongs.
  */
 function orderClause(filter: CatalogFilter, prefix: string, fallback: string): string {
   const sort = filter.sort
   if (!sort) return fallback
-  const column = `${prefix}${SORT_COLUMN[sort]}`
-  const collate = TEXT_SORTS.includes(sort) ? ' COLLATE NOCASE' : ''
+  const { sql: column, text } = sortExpression(sort, prefix)
+  const collate = text ? ' COLLATE NOCASE' : ''
   const direction = filter.direction === 'desc' ? 'DESC' : 'ASC'
-  return `${column} IS NULL, ${column}${collate} ${direction}, ${prefix}name COLLATE NOCASE, ${prefix}path`
+  const tiebreak = `${readableColumn('name', prefix)} COLLATE NOCASE, ${prefix}path`
+  return `${column} IS NULL, ${column}${collate} ${direction}, ${tiebreak}`
 }
 
 export function queryCharts(db: CatalogDb, filter: CatalogFilter): ChartRecord[] {
@@ -381,7 +448,9 @@ export function queryCharts(db: CatalogDb, filter: CatalogFilter): ChartRecord[]
       })()
     : ((): unknown[] => {
         const constraint = constraintClause(filter)
-        const order = orderClause(filter, '', 'name COLLATE NOCASE, path')
+        // The unsorted Installed list is the default view, so its fallback order is the one a
+        // marked-up title was landing at the top of.
+        const order = orderClause(filter, '', `${readableColumn('name')} COLLATE NOCASE, path`)
         return db
           .prepare(
             `SELECT * FROM charts WHERE 1 = 1${constraint.sql}
@@ -426,20 +495,26 @@ export function countCharts(db: CatalogDb, filter: CatalogFilter): number {
  * Blank and whitespace-only values are dropped. song.ini carries plenty of `genre = ` lines, and
  * an empty option in a dropdown is a choice nobody can read.
  *
+ * Artist and charter group on the readable form, so one charter who styles their name differently
+ * in two charts is one option rather than two that each return half their work. The value offered
+ * is the readable one too, which is what the filter clauses compare against.
+ *
  * No album list, by design: see CatalogFacets.
  */
 export function chartFacets(db: CatalogDb): CatalogFacets {
-  const distinctText = (column: 'artist' | 'genre' | 'charter'): string[] =>
-    (
+  const distinctText = (column: 'artist' | 'genre' | 'charter'): string[] => {
+    const value = column === 'genre' ? column : readableColumn(column)
+    return (
       db
         .prepare(
-          `SELECT ${column} AS v FROM charts
-					 WHERE ${column} IS NOT NULL AND TRIM(${column}) <> ''
-					 GROUP BY ${column} COLLATE NOCASE
-					 ORDER BY ${column} COLLATE NOCASE`
+          `SELECT ${value} AS v FROM charts
+					 WHERE ${value} IS NOT NULL AND TRIM(${value}) <> ''
+					 GROUP BY ${value} COLLATE NOCASE
+					 ORDER BY ${value} COLLATE NOCASE`
         )
         .all() as { v: string }[]
     ).map((r) => r.v)
+  }
   const years = (
     db
       .prepare(`SELECT DISTINCT year AS v FROM charts WHERE year IS NOT NULL ORDER BY year DESC`)

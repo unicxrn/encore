@@ -3,6 +3,12 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createV1Catalog } from '../../../test/helpers/v1-catalog'
 import { openCatalog, SCHEMA_VERSION } from './db'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT,
+  TAGGED_CHARTER,
+  TAGGED_CHARTER_TEXT
+} from '../../../test/helpers/marked-up-names'
 import { tmpDir } from '../../../test/helpers/tmp'
 
 const tmpDb = (): string => join(tmpDir('db'), 'catalog.db')
@@ -140,5 +146,139 @@ describe('full chart data migration', () => {
     const db = openCatalog(file)
     expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION + 1)
     db.close()
+  })
+})
+
+/**
+ * The catalog stores a readable twin of the four text columns Clone Hero renders markup in, and
+ * the interesting half is the state a user is in between installing this build and rescanning.
+ * That state is not a window: nothing starts a scan on its own (only the Scan button, the
+ * onboarding screen, and a filesystem change under a library root), so a catalog left waiting for
+ * a rescan waits indefinitely. Hence the backfill these pin, which runs on open instead.
+ */
+describe('stripped name migration', () => {
+  /** A pre-column catalog holding the two names verbatim, exactly as a user's does. */
+  const makeMarkedUpV1Db = (file: string): void =>
+    createV1Catalog(file, [
+      {
+        path: '/lib/firestarter',
+        chartType: 'folder',
+        folderHash: 'h1',
+        name: `${TAGGED_CHARTER} theme`,
+        artist: 'The Prodigy',
+        charter: EIGHT_TAG_CHARTER
+      },
+      { path: '/lib/plain', chartType: 'folder', folderHash: 'h2', name: 'Everlong' }
+    ])
+
+  const search = (db: Database.Database, term: string): string[] =>
+    (
+      db
+        .prepare(
+          `SELECT charts.path AS p FROM charts_fts JOIN charts ON charts.id = charts_fts.rowid
+					 WHERE charts_fts MATCH ? ORDER BY charts.path`
+        )
+        .all(`"${term}"*`) as { p: string }[]
+    ).map((r) => r.p)
+
+  it('fills the stripped columns for rows that predate them, without touching the raw text', () => {
+    const file = tmpDb()
+    makeMarkedUpV1Db(file)
+    const db = openCatalog(file)
+    const row = db
+      .prepare(`SELECT name, charter, nameStripped, charterStripped FROM charts WHERE path = ?`)
+      .get('/lib/firestarter')
+    expect(row).toEqual({
+      name: `${TAGGED_CHARTER} theme`,
+      charter: EIGHT_TAG_CHARTER,
+      nameStripped: `${TAGGED_CHARTER_TEXT} theme`,
+      charterStripped: EIGHT_TAG_CHARTER_TEXT
+    })
+    db.close()
+  })
+
+  it('rebuilds the search index over the stripped names', () => {
+    const file = tmpDb()
+    makeMarkedUpV1Db(file)
+    const db = openCatalog(file)
+    // The name on screen, which the raw index could not answer: every letter of the charter was
+    // its own token, and `color` was a term the whole library shared.
+    expect(search(db, EIGHT_TAG_CHARTER_TEXT)).toEqual(['/lib/firestarter'])
+    expect(search(db, 'color')).toEqual([])
+    expect(search(db, 'Everlong')).toEqual(['/lib/plain'])
+    db.close()
+  })
+
+  it('leaves a null name with a null stripped twin, and does not rewrite it on every open', () => {
+    const file = tmpDb()
+    createV1Catalog(file, [{ path: '/lib/nameless.sng', chartType: 'sng', folderHash: 'h' }])
+    openCatalog(file).close()
+    const db = openCatalog(file)
+    expect(db.prepare(`SELECT name, nameStripped FROM charts`).get()).toEqual({
+      name: null,
+      nameStripped: null
+    })
+    // A row that keeps matching the backfill's WHERE would be rewritten, and re-indexed, by every
+    // open the user ever performs.
+    expect(db.prepare(`SELECT changes() AS n`).get()).toEqual({ n: 0 })
+    db.close()
+  })
+
+  it('swaps the index onto the view exactly once', () => {
+    const file = tmpDb()
+    makeMarkedUpV1Db(file)
+    openCatalog(file).close()
+    openCatalog(file).close()
+    const db = openCatalog(file)
+    const sql = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'charts_fts'`)
+      .get() as { sql: string }
+    expect(sql.sql).toContain("content='charts_search'")
+    expect(search(db, EIGHT_TAG_CHARTER_TEXT)).toEqual(['/lib/firestarter'])
+    db.close()
+  })
+
+  /**
+   * What a build that predates schema 6 leaves behind if it is installed over one that does not:
+   * rows with a null stripped column in a catalog whose user_version is already 6. A
+   * version-gated backfill would never look at them again.
+   */
+  describe('a row written by an older build', () => {
+    const insertRaw = (file: string): void => {
+      const raw = new Database(file)
+      raw
+        .prepare(
+          `INSERT INTO charts (path, chartType, name, charter, folderHash, modifiedTime)
+					 VALUES (?, 'folder', ?, ?, 'h', 1)`
+        )
+        .run('/lib/late', `${TAGGED_CHARTER} theme`, EIGHT_TAG_CHARTER)
+      raw.close()
+    }
+
+    it('stays searchable by its raw name until the next open', () => {
+      const file = tmpDb()
+      openCatalog(file).close()
+      insertRaw(file)
+      const db = new Database(file)
+      // Not openCatalog: that would backfill. This is the state the user is actually in while
+      // the older build is the one running.
+      expect(search(db, 'SirMonkfish')).toEqual(['/lib/late'])
+      expect(db.prepare(`SELECT nameStripped FROM charts`).get()).toEqual({ nameStripped: null })
+      db.close()
+    })
+
+    it('is repaired by the next open, index included', () => {
+      const file = tmpDb()
+      openCatalog(file).close()
+      insertRaw(file)
+      const db = openCatalog(file)
+      expect(db.prepare(`SELECT nameStripped, charterStripped FROM charts`).get()).toEqual({
+        nameStripped: `${TAGGED_CHARTER_TEXT} theme`,
+        charterStripped: EIGHT_TAG_CHARTER_TEXT
+      })
+      expect(search(db, EIGHT_TAG_CHARTER_TEXT)).toEqual(['/lib/late'])
+      expect(search(db, 'color')).toEqual([])
+      db.close()
+    })
   })
 })
