@@ -1,6 +1,11 @@
 import { render, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { PlayDataStatus, PlayInsights, PlayStats } from '../../../../shared/play'
+import type {
+  LifetimeScores,
+  PlayDataStatus,
+  PlayInsights,
+  PlayStats
+} from '../../../../shared/play'
 import { localDay } from '../play-activity'
 import Stats from './Stats.svelte'
 
@@ -49,31 +54,72 @@ const insights = (over: Partial<PlayInsights> = {}): PlayInsights => ({
 })
 
 /**
+ * Clone Hero's own record, which is the other of the two the page draws from.
+ *
+ * Defaults to the unavailable state, because that is the answer most users get: only the Linux
+ * location has been verified and the other two are Unity convention (see main/play/location.ts).
+ */
+const lifetime = (over: Partial<LifetimeScores> = {}): LifetimeScores => ({
+  status: {
+    available: false,
+    reason: 'noFile',
+    scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
+    scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
+    lastImportAt: null
+  },
+  totals: {
+    charts: 0,
+    lifetimePlays: 0,
+    chartsInLibrary: 0,
+    chartsNotInLibrary: 0,
+    chartsWithUnconfirmedRows: 0,
+    bestScore: null,
+    observedPlays: 0,
+    observedCharts: 0
+  },
+  charts: [],
+  ...over
+})
+
+/**
  * `encore()` reads `window.encore`, and under jsdom `globalThis` *is* `window`. Both aggregate
  * calls are given to every stub whether or not the test expects them to be made, so that "was
  * it called" is a question these tests can ask rather than a crash.
+ *
+ * `playLifetime` is the exception: passing nothing leaves the channel OFF the stub entirely, so
+ * the call throws and the page falls back to Encore's log alone. That is the bridge a build
+ * before the score files were read had, and every test written before this one exercises it.
  */
 function renderStats(
   playStatus: PlayDataStatus,
   playStats: PlayStats = stats(),
-  playInsights: PlayInsights = insights()
+  playInsights: PlayInsights = insights(),
+  playLifetime: LifetimeScores | null = null
 ): {
   playStats: ReturnType<typeof vi.fn>
   playInsights: ReturnType<typeof vi.fn>
   playStatus: ReturnType<typeof vi.fn>
+  playLifetime: ReturnType<typeof vi.fn>
 } {
   const statusFn = vi.fn(() => Promise.resolve(playStatus))
   const statsFn = vi.fn(() => Promise.resolve(playStats))
   const insightsFn = vi.fn(() => Promise.resolve(playInsights))
+  const lifetimeFn = vi.fn(() => Promise.resolve(playLifetime))
   vi.stubGlobal('encore', {
     playStatus: statusFn,
     playStats: statsFn,
     playInsights: insightsFn,
+    ...(playLifetime === null ? {} : { playLifetime: lifetimeFn }),
     // Returns the unsubscribe the component hands back from onMount.
     onPlayRecorded: () => () => {}
   })
   render(Stats)
-  return { playStats: statsFn, playInsights: insightsFn, playStatus: statusFn }
+  return {
+    playStats: statsFn,
+    playInsights: insightsFn,
+    playStatus: statusFn,
+    playLifetime: lifetimeFn
+  }
 }
 
 afterEach(() => {
@@ -559,5 +605,296 @@ describe('Stats: a bridge that cannot answer', () => {
     render(Stats)
 
     expect(await pageText()).toContain('Nothing to show yet')
+  })
+})
+
+/**
+ * Clone Hero's own record, beside Encore's.
+ *
+ * The page's whole problem is that its figures no longer share a span: lifetime plays, charts
+ * ever played and best scores reach back before Encore, and the activity chart, accuracy and the
+ * recent list never will. These pin the mechanism that keeps them apart, which is a source tag
+ * on every section heading plus the sentence that defines the two.
+ *
+ * Not pinnable here: whether the tag is legible beside the heading at a real width, or wraps
+ * intact when the pane is narrow. That is scripts/measure-play-stats.mjs.
+ */
+const owner = lifetime({
+  // The owner's real lifetime numbers, read off their own score files: 101 charts, 144 lifetime
+  // plays, 21 charts carrying a row nobody has decoded, best 665,629. Paired here with the
+  // `populated` log above rather than with the owner's own 15, so that the two records on the
+  // page disagree loudly enough for a test to catch one being drawn in the other's place.
+  status: {
+    available: true,
+    reason: 'ok',
+    scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
+    scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
+    lastImportAt: '2026-09-12T10:00:00.000Z'
+  },
+  totals: {
+    charts: 101,
+    lifetimePlays: 144,
+    chartsInLibrary: 84,
+    chartsNotInLibrary: 17,
+    chartsWithUnconfirmedRows: 21,
+    bestScore: 665_629,
+    observedPlays: 15,
+    observedCharts: 9
+  }
+})
+
+describe('Stats: lifetime beside observed', () => {
+  it('draws both records, each under a heading tagged with the span it covers', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    expect(text).toContain('144')
+    expect(text).toContain('across 101 charts')
+    expect(text).toContain('665,629')
+
+    const tags = [...document.querySelectorAll('.src')].map((t) => t.textContent?.trim())
+    expect(tags).toContain('ALL TIME')
+    // The date the observed record actually starts, in the tag itself, so the span is readable
+    // without hovering anything.
+    expect(tags).toContain(`SINCE ${new Date('2026-03-03T18:04:11.1234567Z').toLocaleDateString()}`)
+  })
+
+  it('tags every section, so no figure on the page is left unattributed', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    // Every section that carries a figure carries a tag. A single untagged block is the hole
+    // this scheme has to not have: the reader would have no way to place its numbers.
+    const sections = [...document.querySelectorAll('.stats section')]
+    expect(sections.length).toBeGreaterThan(4)
+    for (const section of sections) {
+      expect(
+        section.querySelector('.src'),
+        `${section.querySelector('h2')?.textContent ?? '?'} carries no source tag`
+      ).not.toBeNull()
+    }
+  })
+
+  it('tags MOST PLAYED as observed, because it is the heading that reads as lifetime', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    const heading = [...document.querySelectorAll('h2')].find((h) =>
+      h.textContent?.includes('MOST PLAYED')
+    )
+    expect(heading?.querySelector('.src')?.textContent?.trim()).toMatch(/^SINCE /)
+  })
+
+  it('replaces the blanket caveat with the legend for the two tags', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    const caveat = (document.querySelector('.caveat')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(caveat).toContain('Two records feed this page')
+    expect(caveat).toContain('labelled with the record it was drawn from')
+    // The old sentence was true of every number and is now true of only some of them. Leaving
+    // it over a page where the lifetime block is genuinely lifetime is the defect this whole
+    // change exists to avoid.
+    expect(caveat).not.toContain('not your lifetime totals')
+  })
+
+  it('says the observed plays are inside the lifetime count, not beside it', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    expect(text).toContain('already inside the lifetime count above')
+    expect(text).toContain('Adding the two would count them twice')
+    // 144 + 42 is not a number that means anything, and nothing on the page may print it.
+    expect(text).not.toContain('186')
+  })
+
+  it('gives the two best scores different labels, since they come from different records', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    expect(text).toContain('BEST SCORE SEEN')
+    expect(text).toContain('665,629')
+    expect(text).toContain('1,234,567')
+  })
+
+  it('draws no tags at all when Clone Hero has nothing, and keeps the blanket caveat', async () => {
+    renderStats(ok, populated, populatedInsights, lifetime())
+    const text = await pageText()
+
+    expect(document.querySelectorAll('.src')).toHaveLength(0)
+    expect(text).toContain('not your lifetime totals')
+  })
+
+  it('falls back to the Encore log alone when the bridge has no lifetime channel', async () => {
+    // A renderer running against an older main process. The page must draw, not error.
+    renderStats(ok, populated, populatedInsights)
+    const text = await pageText()
+
+    expect(text).toContain('not your lifetime totals')
+    expect(text).not.toMatch(/could not read your play history/)
+  })
+})
+
+describe('Stats: a score Encore cannot read', () => {
+  it('keeps the play count and withholds only the score, without calling it a fault', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    expect(text).toContain('21 of those charts also carry a score of a kind Encore cannot read')
+    expect(text).toContain('The play counts above are unaffected and correct')
+    expect(text).toContain('nothing is wrong with your files')
+    // The best score tile says which rows it is the best of, rather than claiming the table.
+    expect(text).toContain('of the scores Encore can read')
+    // Not an error, and not worded as one.
+    expect(text).not.toMatch(/\b(corrupt|invalid|failed|broken)\b/i)
+  })
+
+  it('says nothing about unreadable scores when every row is one Encore knows', async () => {
+    renderStats(
+      ok,
+      populated,
+      populatedInsights,
+      lifetime({
+        status: { ...owner.status },
+        totals: { ...owner.totals, chartsWithUnconfirmedRows: 0 }
+      })
+    )
+    const text = await pageText()
+
+    expect(text).not.toContain('cannot read')
+    // No hedge on the best score either: with nothing to qualify, qualifying it invents a doubt.
+    expect(text).not.toContain('of the scores Encore can read')
+    expect(text).toContain('highest in the table')
+  })
+})
+
+describe('Stats: charts Clone Hero knows and the library does not', () => {
+  it('counts them, and says how many of the record is still installed', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    expect(text).toContain('84 still in your library')
+  })
+
+  it('says all of them when nothing has been deleted', async () => {
+    renderStats(
+      ok,
+      populated,
+      populatedInsights,
+      lifetime({
+        status: { ...owner.status },
+        totals: { ...owner.totals, chartsInLibrary: 101, chartsNotInLibrary: 0 }
+      })
+    )
+    expect(await pageText()).toContain('all of them still in your library')
+  })
+
+  it('leads the coverage block with Clone Hero and keeps the Encore count beside it', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    const text = await pageText()
+
+    // Both counted out of the same denominator, neither stated as a share of the other.
+    expect(text).toContain(
+      'Of the 4,000 charts in your library Encore can match a play to, Clone Hero has a record of playing 84 and Encore has watched 177 played'
+    )
+    expect(text).toContain("3,916 have nothing in Clone Hero's table")
+    expect(text).toContain('still not the same as never played')
+  })
+})
+
+describe('Stats: Clone Hero has a record and Encore has watched nothing', () => {
+  it('draws the lifetime block and says why the other half is empty', async () => {
+    // The state of every user who installs Encore today having played for years: a full score
+    // table, an empty log. A page of zeroes here, or no page at all, would be the worse answer.
+    renderStats(
+      status({ available: false, reason: 'ok', playCount: 0 }),
+      stats(),
+      insights(),
+      owner
+    )
+    const text = await pageText()
+
+    expect(text).toContain('144')
+    expect(text).toContain('665,629')
+    expect(text).toContain('has recorded no play yet')
+    // No tags: with one record on the page there is nothing to tell apart.
+    expect(document.querySelectorAll('.src')).toHaveLength(0)
+    expect(text).toContain("These are Clone Hero's own counts")
+    // Nothing dated, because nothing in that record has a date.
+    expect(document.querySelector('.chart')).toBeNull()
+  })
+
+  it('still asks for neither aggregate, since the log gate has not opened', async () => {
+    const { playStats, playInsights } = renderStats(
+      status({ available: false, reason: 'ok' }),
+      stats(),
+      insights(),
+      owner
+    )
+    await pageText()
+    expect(playStats).not.toHaveBeenCalled()
+    expect(playInsights).not.toHaveBeenCalled()
+  })
+})
+
+describe('Stats: neither record has anything', () => {
+  it('says where it looked for each, and draws no figure from either', async () => {
+    renderStats(
+      status({ available: false, reason: 'noFile' }),
+      stats(),
+      insights(),
+      lifetime({ status: { ...lifetime().status, reason: 'noFile' } })
+    )
+    const text = await pageText()
+
+    expect(text).toContain('/home/player/.clonehero/scorestats.json')
+    expect(text).toContain('scoredata.bin')
+    expect(text).toContain("Clone Hero's own score table holds what you played before Encore")
+    expect(document.querySelector('.tile')).toBeNull()
+    expect(text).not.toMatch(/failed|error/i)
+  })
+
+  it('names the reason the score files gave, not a generic one', async () => {
+    renderStats(
+      status({ available: false, reason: 'ok' }),
+      stats(),
+      insights(),
+      lifetime({ status: { ...lifetime().status, reason: 'unknownPlatform' } })
+    )
+    expect(await pageText()).toContain('no location for it has been established on this system')
+  })
+
+  it('says nothing about score files when the bridge never asked about them', async () => {
+    // `lifetime` stays null with no channel on the bridge, and reporting on a search that never
+    // happened would be inventing a result.
+    renderStats(status({ available: false, reason: 'noFile' }))
+    const text = await pageText()
+
+    expect(text).toContain('Nothing to show yet')
+    expect(text).not.toContain('scoredata.bin')
+  })
+})
+
+/** The lifetime read is the page's own, and one that fails must not take the page with it. */
+describe('Stats: the lifetime read', () => {
+  it('asks for totals only, never for a row per chart', async () => {
+    const { playLifetime } = renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+    expect(playLifetime).toHaveBeenCalledWith([])
+  })
+
+  it('draws the Encore-only page when the lifetime call rejects', async () => {
+    vi.stubGlobal('encore', {
+      playStatus: () => Promise.resolve(ok),
+      playStats: () => Promise.resolve(populated),
+      playInsights: () => Promise.resolve(populatedInsights),
+      playLifetime: () => Promise.reject(new Error('no handler')),
+      onPlayRecorded: () => () => {}
+    })
+    render(Stats)
+    const text = await pageText()
+
+    expect(text).toContain('not your lifetime totals')
+    expect(document.querySelectorAll('.src')).toHaveLength(0)
   })
 })

@@ -8,7 +8,12 @@ import {
   type ChartRecord,
   type JobProgress
 } from '../../../../shared/schemas'
-import type { ChartPlaySummary, PlayDataStatus } from '../../../../shared/play'
+import type {
+  ChartLifetime,
+  ChartPlaySummary,
+  LifetimeScores,
+  PlayDataStatus
+} from '../../../../shared/play'
 import type { ChartVerdict } from '../../../../shared/updates'
 import { scanProgress } from '../stores/scan'
 import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
@@ -856,13 +861,24 @@ describe('Library: play counts', () => {
   function renderPaged(
     pages: ChartRecord[][],
     summaries: ChartPlaySummary[],
-    status: PlayDataStatus = watching()
-  ): { playSummaries: ReturnType<typeof vi.fn>; playStatus: ReturnType<typeof vi.fn> } {
+    status: PlayDataStatus = watching(),
+    // Null leaves `playLifetime` off the bridge entirely, which is the shape every test written
+    // before the score files were read gives it. Those tests are the regression guard for the
+    // fallback: with no lifetime channel a row's badge is still Encore's own count.
+    lifetimeCharts: ChartLifetime[] | null = null
+  ): {
+    playSummaries: ReturnType<typeof vi.fn>
+    playStatus: ReturnType<typeof vi.fn>
+    playLifetime: ReturnType<typeof vi.fn>
+  } {
     const total = pages.reduce((n, page) => n + page.length, 0)
     const playSummaries = vi.fn((checksums: string[]) =>
       Promise.resolve(summaries.filter((s) => checksums.includes(s.checksum)))
     )
     const playStatus = vi.fn(() => Promise.resolve(status))
+    const playLifetime = vi.fn((checksums: string[]): Promise<LifetimeScores> =>
+      Promise.resolve(scores(lifetimeCharts ?? [], checksums))
+    )
     vi.stubGlobal('encore', {
       catalogQuery: (f: CatalogFilter): Promise<ChartRecord[]> => {
         // The view asks by offset; the page index is the offset over the page size it used.
@@ -874,11 +890,56 @@ describe('Library: play counts', () => {
       catalogCount: (): Promise<number> => Promise.resolve(total),
       updatesLast: () => Promise.resolve([]),
       playStatus,
-      playSummaries
+      playSummaries,
+      ...(lifetimeCharts === null ? {} : { playLifetime })
     })
     render(Library, { onOpenChart: () => {} })
-    return { playSummaries, playStatus }
+    return { playSummaries, playStatus, playLifetime }
   }
+
+  /** One chart as Clone Hero's own table holds it. */
+  const lifetimeChart = (over: Partial<ChartLifetime> & { checksum: string }): ChartLifetime => ({
+    lifetimePlays: 1,
+    observedPlays: 0,
+    everPlayed: true,
+    best: null,
+    unconfirmedRows: 0,
+    ...over
+  })
+
+  const lifetimeBest = (score: number, percent: number): ChartLifetime['best'] => ({
+    variant: 2,
+    difficulty: 3,
+    difficultyName: 'Expert',
+    percent,
+    stars: 5,
+    isFullCombo: false,
+    playbackSpeed: 100,
+    score,
+    scoreWithoutCleanPlayBonus: score - 1000
+  })
+
+  /** The channel's answer: rows narrowed to the request, totals always over everything. */
+  const scores = (rows: ChartLifetime[], checksums: string[]): LifetimeScores => ({
+    status: {
+      available: rows.length > 0,
+      reason: rows.length > 0 ? 'ok' : 'noFile',
+      scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
+      scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
+      lastImportAt: rows.length > 0 ? '2026-09-12T10:00:00.000Z' : null
+    },
+    totals: {
+      charts: rows.length,
+      lifetimePlays: rows.reduce((n, r) => n + r.lifetimePlays, 0),
+      chartsInLibrary: rows.length,
+      chartsNotInLibrary: 0,
+      chartsWithUnconfirmedRows: rows.filter((r) => r.unconfirmedRows > 0).length,
+      bestScore: null,
+      observedPlays: rows.reduce((n, r) => n + r.observedPlays, 0),
+      observedCharts: rows.filter((r) => r.observedPlays > 0).length
+    },
+    charts: rows.filter((r) => checksums.includes(r.checksum))
+  })
 
   function badgesOf(row: HTMLElement): string[] {
     return [...row.querySelectorAll('.badge')].map((b) =>
@@ -1048,6 +1109,251 @@ describe('Library: play counts', () => {
     const row = await rowTitled('One')
     expect(badgesOf(row)).toEqual([])
     expect(document.querySelector('.caveat')).toBeNull()
+  })
+
+  /**
+   * The second record on a row.
+   *
+   * A row is dense enough that a second badge beside the first would be two numbers to tell
+   * apart while scanning, and the obvious reading of two numbers side by side is the one this
+   * feature must not invite: they are not addends. So there is one badge, it prefers Clone
+   * Hero's own count because that is the superset, and the hover says which record answered.
+   */
+  const CHECKSUM_C = 'c'.repeat(32)
+
+  it('badges a chart Encore never watched but Clone Hero has a record of', async () => {
+    // The case that drew nothing at all before: no row in Encore's log, a full record in the
+    // game's own table. This is most of a long-time player's library.
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+    await waitFor(async () => expect(badgesOf(await rowTitled('One'))).toEqual(['40 PLAYS']))
+  })
+
+  it('shows the lifetime count, not the observed one, and never both', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 3 })],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40, observedPlays: 3 })]
+    )
+    const row = await rowTitled('One')
+
+    await waitFor(() => expect(badgesOf(row)).toEqual(['40 PLAYS']))
+    // 40 + 3 is not a number that means anything: Clone Hero counted those three too.
+    expect(badgesOf(row)).not.toContain('43 PLAYS')
+    expect(row.querySelectorAll('.badge.plays')).toHaveLength(1)
+  })
+
+  it('says how many of the count Encore saw, as a share of it rather than beside it', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 3, lastPlayedAt: '2026-09-01T20:00:00Z' })],
+      watching(),
+      [
+        lifetimeChart({
+          checksum: CHECKSUM_A,
+          lifetimePlays: 40,
+          observedPlays: 3,
+          best: lifetimeBest(665_629, 98)
+        })
+      ]
+    )
+    const badge = await waitFor(() => {
+      const found = document.querySelector('.badge.plays')
+      if (!found?.getAttribute('title')?.includes('Clone Hero')) throw new Error('not yet')
+      return found
+    })
+    const title = badge.getAttribute('title') ?? ''
+
+    expect(title).toContain("Clone Hero's own count, over every play you have made")
+    expect(title).toContain('Best score 665,629 at 98%')
+    expect(title).toContain('Encore watched 3 of them happen')
+    expect(title).not.toContain('Encore watched 3 plays.')
+  })
+
+  it('keeps the count and withholds the score for a chart with only an unreadable row', async () => {
+    // The 21 charts in the owner's library that carry a variant nobody has decoded. The play
+    // count is a record of real plays and stands; the score is on a scale nothing has checked.
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [
+        lifetimeChart({
+          checksum: CHECKSUM_A,
+          lifetimePlays: 7,
+          best: null,
+          unconfirmedRows: 1
+        })
+      ]
+    )
+    const badge = await waitFor(() => {
+      const found = document.querySelector('.badge.plays')
+      if (!found) throw new Error('no badge yet')
+      return found
+    })
+
+    expect(badge.textContent?.replace(/\s+/g, ' ').trim()).toBe('7 PLAYS')
+    const title = badge.getAttribute('title') ?? ''
+    expect(title).toContain('on a scale Encore cannot read')
+    expect(title).toContain('The play count is unaffected')
+    expect(title).not.toContain('Best score')
+    // Not a fault in the user's data, and not worded as one.
+    expect(title).not.toMatch(/\b(corrupt|invalid|error|failed)\b/i)
+  })
+
+  it('says PLAYED, never 0 PLAYS, for a record with no count behind it', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 0, everPlayed: true })]
+    )
+    await waitFor(async () => expect(badgesOf(await rowTitled('One'))).toEqual(['PLAYED']))
+  })
+
+  it('falls back to the Encore count for a chart Clone Hero has no record of', async () => {
+    renderPaged(
+      [
+        [
+          chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A }),
+          chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B }),
+          chart({ path: '/library/three', name: 'Three', cloneHeroChecksum: CHECKSUM_C })
+        ]
+      ],
+      [summary({ checksum: CHECKSUM_B, timesPlayed: 2 })],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+
+    await waitFor(async () => expect(badgesOf(await rowTitled('One'))).toEqual(['40 PLAYS']))
+    expect(badgesOf(await rowTitled('Two'))).toEqual(['2 PLAYS'])
+    // Neither record has it, so nothing at all: a zero would be the claim this must not make.
+    expect(badgesOf(await rowTitled('Three'))).toEqual([])
+  })
+
+  it('asks the lifetime channel once per page, with that page in the batch', async () => {
+    const first = [chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]
+    const second = [chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B })]
+    const { playLifetime } = renderPaged([first, second], [], watching(), [
+      lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 }),
+      lifetimeChart({ checksum: CHECKSUM_B, lifetimePlays: 2 })
+    ])
+
+    await rowTitled('One')
+    await waitFor(() => expect(playLifetime).toHaveBeenCalledTimes(1))
+    await fireEvent.click(await screen.findByRole('button', { name: /load more/i }))
+    await rowTitled('Two')
+    await waitFor(() => expect(playLifetime).toHaveBeenCalledTimes(2))
+
+    expect(playLifetime.mock.calls[1][0]).toEqual([CHECKSUM_B])
+    // The first page keeps its badge: appending extends the map rather than replacing it.
+    await waitFor(() =>
+      expect(badgesOf(document.querySelector('.row') as HTMLElement)).toContain('40 PLAYS')
+    )
+  })
+
+  it('asks Clone Hero even when Encore has watched nothing at all', async () => {
+    // The two are separate records with separate statuses. Gating the score files on Encore's
+    // own log would hide a year of counts from exactly the user who just installed Encore.
+    const { playLifetime } = renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching({ available: false, playCount: 0 }),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+
+    await waitFor(() => expect(playLifetime).toHaveBeenCalledTimes(1))
+    await waitFor(async () => expect(badgesOf(await rowTitled('One'))).toEqual(['40 PLAYS']))
+  })
+
+  it('stops asking Clone Hero once it has answered that there is nothing', async () => {
+    const first = [chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]
+    const second = [chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B })]
+    const { playLifetime } = renderPaged([first, second], [], watching(), [])
+
+    await rowTitled('One')
+    await waitFor(() => expect(playLifetime).toHaveBeenCalledTimes(1))
+    await fireEvent.click(await screen.findByRole('button', { name: /load more/i }))
+    await rowTitled('Two')
+    expect(playLifetime).toHaveBeenCalledTimes(1)
+  })
+
+  it('states the right window beside the list for whichever record is answering', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+    const caveat = await waitFor(() => {
+      const found = document.querySelector('.caveat')
+      if (!found?.textContent?.includes('Clone Hero')) throw new Error('not the lifetime one yet')
+      return found
+    })
+    const text = (caveat.textContent ?? '').replace(/\s+/g, ' ')
+
+    expect(text).toContain("Play counts are Clone Hero's own, over every play you have made")
+    // The old sentence was true when Encore's log was the only record and is now false.
+    expect(text).not.toContain('start from when Encore began watching')
+    expect(text).toContain('still not the same as never played')
+  })
+
+  it('tells the never-played filter which records actually answered', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+    await rowTitled('One')
+    await fireEvent.click(screen.getByRole('button', { name: 'No plays recorded' }))
+
+    const text = await waitFor(() => {
+      const found = document.querySelector('.caveat')?.textContent?.replace(/\s+/g, ' ') ?? ''
+      if (!found.includes('score files')) throw new Error('no filter caveat yet')
+      return found
+    })
+    expect(text).toContain('which reach back before Encore was installed')
+    expect(text).not.toContain('could not read')
+  })
+
+  it('warns that the filter is only the Encore log when the score files were not read', async () => {
+    // The unavailable case, which is the normal one: only Linux has a verified location. A
+    // sentence claiming both records here would be the misleading half of the feature.
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      []
+    )
+    await rowTitled('One')
+    await fireEvent.click(screen.getByRole('button', { name: 'No plays recorded' }))
+
+    const text = await waitFor(() => {
+      const found = document.querySelector('.caveat')?.textContent?.replace(/\s+/g, ' ') ?? ''
+      if (!found.includes('score files')) throw new Error('no filter caveat yet')
+      return found
+    })
+    expect(text).toContain("Encore could not read Clone Hero's own score files")
+    expect(text).toContain('before you installed Encore')
+    expect(text).toContain('is in this list too')
+  })
+
+  it('keeps the row shape, because a lifetime badge is the same one badge', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching(),
+      [lifetimeChart({ checksum: CHECKSUM_A, lifetimePlays: 40 })]
+    )
+    const row = await rowTitled('One')
+    await waitFor(() => expect(badgesOf(row)).toEqual(['40 PLAYS']))
+    expect(row.children).toHaveLength(declaredRowTracks())
   })
 })
 

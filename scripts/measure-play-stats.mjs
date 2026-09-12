@@ -11,7 +11,7 @@
  * an offscreen window, which is never shown on any desktop, and reads the boxes back out. Same
  * technique, and same reasons, as measure-explore-append.mjs.
  *
- * Six questions, all of which jsdom answers wrongly by answering zero:
+ * Nine questions, all of which jsdom answers wrongly by answering zero:
  *
  * 1. Does the caveat sit above every figure in LAYOUT, not just in the DOM? DOM order is what the
  *    component test pins; a float or a grid could still paint it under the tiles.
@@ -24,6 +24,20 @@
  *    sideways without it?
  * 6. Does a row that gained a play badge stay exactly as tall as one that did not? The badge is
  *    inside the title line, and a badge that grows the line grows every row in the list.
+ * 7. Does every section heading's source tag stay on the heading's own line, inside the section's
+ *    box, and whole? The tag is how the page says which record a block came from, and a tag that
+ *    is clipped or broken across two lines by a narrow pane says it badly or not at all. The date
+ *    it carries is the widest thing in it, so this is a real risk and not a theoretical one.
+ * 8. Do the lifetime tiles and the observed tiles read as two blocks rather than one run of eight?
+ *    They are separate sections in the DOM, which jsdom can see, but whether the reader sees two
+ *    groups is a question about painted boxes.
+ * 9. Does a row badged from Clone Hero's table stay exactly as tall as one badged from Encore's
+ *    log and one with no badge at all? A lifetime count has more digits, and the badge lives
+ *    inside the title line.
+ *
+ * LIFETIME=0 answers the lifetime channel as unavailable, which is the state most users are in
+ * and the one where the page must fall back to a single source and drop its tags. EMPTYLOG=1 is
+ * the other way round: a full score table and nothing Encore has watched.
  *
  * Touches nothing real: the preload written below answers every call from memory, from a
  * throwaway user-data directory, with no network and no catalogue.
@@ -42,6 +56,14 @@ const [width, height] = (process.env.SIZE || '1280x800').split('x').map(Number)
  * block length it chooses: 120 days is a bar per week, 40 is a bar per day, 2000 is longer.
  */
 const spanDays = Number(process.env.SPAN || 120)
+/** Whether Clone Hero's own score files answer at all. Off is the ordinary state for most users. */
+const lifetimeOn = process.env.LIFETIME !== '0'
+/**
+ * EMPTYLOG=1 empties Encore's own log while leaving the score files full, which is the state of
+ * every user who installs Encore today having played Clone Hero for years. Half the page has no
+ * source, and what is left has to look like a page rather than a gap.
+ */
+const logOn = process.env.EMPTYLOG !== '1'
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'encore-playstats-'))
 const preloadPath = path.join(scratch, 'preload.cjs')
 
@@ -61,6 +83,25 @@ fs.writeFileSync(
   lastSeenVersion: '9.9.9'
 }
 const checksums = ${JSON.stringify(CHECKSUMS)}
+const lifetimeOn = ${lifetimeOn}
+const logOn = ${logOn}
+/**
+ * Clone Hero's own table, using the owner's real totals: 101 charts, 144 lifetime plays, 21 of
+ * them carrying a row nobody has decoded, best 665,629.
+ *
+ * Per chart it covers three of the four rows on Installed, one each of the states a row can be
+ * in: chart 0 has a lifetime count AND plays Encore watched, chart 1 has a lifetime count and an
+ * unreadable score with nothing Encore saw, chart 2 has only what Encore saw, and chart 3 has
+ * nothing at all. Four rows, four badge states, one list to measure them against each other in.
+ */
+const lifetimeCharts = [
+  { checksum: checksums[0], lifetimePlays: 412, observedPlays: 137, everPlayed: true,
+    best: { variant: 2, difficulty: 3, difficultyName: 'Expert', percent: 98, stars: 5,
+      isFullCombo: false, playbackSpeed: 100, score: 665629, scoreWithoutCleanPlayBonus: 664629 },
+    unconfirmedRows: 0 },
+  { checksum: checksums[1], lifetimePlays: 1337, observedPlays: 0, everPlayed: true,
+    best: null, unconfirmedRows: 1 }
+]
 const charts = checksums.map((sum, i) => ({
   path: '/library/Rush - Chart ' + i,
   name: 'Chart ' + i,
@@ -90,13 +131,13 @@ const answers = {
   updatesLast: () => [],
   appUpdateStatus: () => ({ state: 'idle' }),
   playStatus: () => ({
-    available: true,
+    available: logOn,
     reason: 'ok',
     path: '/home/player/.clonehero/scorestats.json',
-    playCount: 412
+    playCount: logOn ? 412 : 0
   }),
   playSummaries: (list) =>
-    (list || [])
+    (logOn ? list || [] : [])
       .filter((sum) => sum === checksums[0] || sum === checksums[2])
       .map((sum, i) => ({
         checksum: sum,
@@ -134,6 +175,26 @@ const answers = {
       isFc: i % 3 === 0,
       isPfc: i === 0
     }))
+  }),
+  playLifetime: (list) => ({
+    status: {
+      available: lifetimeOn,
+      reason: lifetimeOn ? 'ok' : 'noFile',
+      scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
+      scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
+      lastImportAt: lifetimeOn ? '2026-09-12T10:00:00.000Z' : null
+    },
+    totals: {
+      charts: 101,
+      lifetimePlays: 144,
+      chartsInLibrary: 84,
+      chartsNotInLibrary: 17,
+      chartsWithUnconfirmedRows: 21,
+      bestScore: 665629,
+      observedPlays: 15,
+      observedCharts: 9
+    },
+    charts: lifetimeOn ? lifetimeCharts.filter((c) => (list || []).includes(c.checksum)) : []
   }),
   playStats: () => ({
     totalPlays: 412,
@@ -212,7 +273,45 @@ const PAGE = `(() => {
   const panes = [...document.querySelectorAll('.stats > .columns > section')]
   const paneTops = panes.map((el) => round(box(el).top))
   const paneWidths = panes.map((el) => round(box(el).width))
+  // The source tags: the whole of how this page says which record a block is drawn from. A tag
+  // is only doing its job if it is on its heading's line, inside its section, and whole.
+  const sections = [...document.querySelectorAll('.stats section')]
+  const tagged = sections.filter((el) => el.querySelector('.src'))
+  const tags = [...document.querySelectorAll('.src')]
+  const tagState = tags.map((tag) => {
+    const heading = tag.closest('h2')
+    const section = tag.closest('section')
+    return {
+      text: tag.textContent.replace(/\\s+/g, ' ').trim(),
+      // Same top as the heading box means the tag is on the heading's first line. A heading that
+      // wrapped its tag to a second line sits lower than the heading's own top.
+      onHeadingLine: heading ? round(box(tag).top) === round(box(heading).top) : null,
+      // The tag carries a date and is nowrap, so the pane running out of room clips it rather
+      // than breaking it. Positive means it fits with room to spare.
+      clearsSectionEdgeBy: section ? round(box(section).right - box(tag).right) : null,
+      // A heading whose tag dropped to its own line is about twice as tall as the tag. Reported
+      // raw rather than as a verdict, because at a narrow pane wrapping is the RIGHT answer and
+      // the thing to check is that the tag stayed whole when it did.
+      tagHeight: round(box(tag).height),
+      headingHeight: heading ? round(box(heading).height) : null
+    }
+  })
+  // The two tile blocks. Same tile geometry in both, and two boxes rather than one run of eight.
+  const lifeTiles = [...document.querySelectorAll('.tile.lifetime')]
+  const plainTiles = tiles.filter((t) => !t.classList.contains('lifetime'))
+  const blockOf = (el) => (el ? round(box(el.closest('section')).top) : null)
   return {
+    sections: sections.length,
+    sectionsTagged: tagged.length,
+    sectionsUntagged: sections.length - tagged.length,
+    tags: tagState,
+    lifetimeTiles: lifeTiles.length,
+    observedTiles: plainTiles.length,
+    // Different section tops means the reader sees two groups, not one run of tiles.
+    lifetimeBlockTop: blockOf(lifeTiles[0]),
+    observedBlockTop: blockOf(plainTiles[0]),
+    // Both blocks' tiles are the same width, so the two are read as comparable figures.
+    lifetimeTileWidth: lifeTiles.length ? round(box(lifeTiles[0]).width) : null,
     caveatBottom: caveat ? round(box(caveat).bottom) : null,
     // Positive means the caveat finishes before the first figure begins, in painted pixels.
     caveatClearsFiguresBy:
@@ -264,10 +363,25 @@ const LIST = `(() => {
   const badged = rows.filter((r) => r.querySelector('.badge.plays'))
   const bare = rows.filter((r) => !r.querySelector('.badge.plays'))
   const titleOf = (r) => r.querySelector('.title')
+  const badgeOf = (r) => r.querySelector('.badge.plays')
+  // The badge a row carries, whichever record answered for it, with the width it took. A
+  // lifetime count has more digits than an observed one, and the badge sits inside the title
+  // line, so this is where a wider count would start eating the song title.
+  const badges = badged.map((r) => ({
+    text: badgeOf(r).textContent.replace(/\\s+/g, ' ').trim(),
+    width: round(badgeOf(r).getBoundingClientRect().width),
+    height: round(badgeOf(r).getBoundingClientRect().height),
+    rowHeight: round(r.getBoundingClientRect().height),
+    titleWidth: round(titleOf(r).getBoundingClientRect().width),
+    // Two badges on one row is the thing this feature must not do. One, or none.
+    badgesOnRow: r.querySelectorAll('.badge.plays').length,
+    // Clone Hero's own count says so in the hover; Encore's log says so in its own words.
+    fromCloneHero: (badgeOf(r).getAttribute('title') ?? '').includes("Clone Hero's own count")
+  }))
   return {
     rows: rows.length,
     badgedRows: badged.length,
-    badgeText: badged.map((r) => r.querySelector('.badge.plays').textContent.replace(/\\s+/g, ' ').trim()),
+    badges,
     distinctRowHeights: [...new Set(heights)],
     badgedHeight: badged.length ? round(badged[0].getBoundingClientRect().height) : null,
     bareHeight: bare.length ? round(bare[0].getBoundingClientRect().height) : null,
@@ -294,7 +408,9 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  console.log(`window ${width}x${height}, ${spanDays} days of history`)
+  console.log(
+    `window ${width}x${height}, ${spanDays} days of history, lifetime ${lifetimeOn ? 'on' : 'off'}, log ${logOn ? 'on' : 'off'}`
+  )
 
   await waitFor(win, `document.querySelector('.home')`)
   await sleep(300)

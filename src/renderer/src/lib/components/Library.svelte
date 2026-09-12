@@ -8,7 +8,12 @@
     ChartRecord,
     SortDirection
   } from '../../../../shared/schemas'
-  import type { ChartPlaySummary, PlayDataStatus } from '../../../../shared/play'
+  import type {
+    ChartLifetime,
+    ChartPlaySummary,
+    LifetimeScoreStatus,
+    PlayDataStatus
+  } from '../../../../shared/play'
   import { artUrl } from '../../../../shared/art'
   import {
     msToTime,
@@ -123,14 +128,34 @@
    * (PLAY_SUMMARY_MAX, 500) is above this view's page size for the same reason.
    *
    * A checksum with no play is OMITTED from the answer rather than returned as zeroes, so an
-   * absent entry here means "no play on record" and the row simply grows no badge. It also means
-   * "not fetched yet" for the moment between a page landing and its summaries arriving, which is
-   * the same thing on screen: nothing.
+   * absent entry here means Encore has watched no play of that chart. It also means "not fetched
+   * yet" for the moment between a page landing and its summaries arriving, which is the same
+   * thing on screen: nothing. It does NOT mean the row grows no badge, since Clone Hero's own
+   * table is consulted as well; see badgeFor.
    *
    * A SvelteMap rather than a reassigned plain one, so "Load more" adds this page's entries
    * without rebuilding the map the rows already on screen are reading from.
    */
   const plays = new SvelteMap<string, ChartPlaySummary>()
+
+  /**
+   * What Clone Hero's OWN table says about the rows on screen, keyed the same way.
+   *
+   * The second of the two records behind a row's badge, fetched the same way and for the same
+   * reason: one request per page, capped at the same 500. This one reaches back before Encore
+   * was installed, which is why a row can now carry a count for a chart Encore never watched
+   * being played.
+   */
+  const lifetimes = new SvelteMap<string, ChartLifetime>()
+
+  /**
+   * Whether the score files were readable, held once for the visit.
+   *
+   * Its own status rather than `playStatus`, because it is its own source: a machine can have a
+   * full score table and an empty Encore log, or the other way round. Null until the first page
+   * answers, or for good if the channel is not there.
+   */
+  let lifetimeStatus = $state<LifetimeScoreStatus | null>(null)
 
   /**
    * What `playStatus` said, asked once per mount and shared by every page.
@@ -189,8 +214,101 @@
     }
   }
 
+  /**
+   * Clone Hero's own rows for one page, fetched beside the summaries above.
+   *
+   * Not behind `playStatus`: the score files are a separate record with a separate status, and
+   * gating them on Encore's log would hide a year of play counts from exactly the user who has
+   * just installed Encore and has no log at all. Skipped on later pages once the first answer
+   * has said there is nothing to read.
+   */
+  async function loadLifetime(rows: ChartRecord[], append: boolean): Promise<void> {
+    if (lifetimeStatus && !lifetimeStatus.available) return
+    const checksums = [
+      ...new Set(rows.map((row) => row.cloneHeroChecksum).filter((sum) => sum !== null))
+    ]
+    try {
+      // Asked even for a page where no row carries a checksum: the answer's `status` is what the
+      // "No plays recorded" caveat below the filter bar adapts to, and that sentence has to be
+      // right whether or not this particular page had anything to look up.
+      const answer = await encore().playLifetime(checksums)
+      lifetimeStatus = answer.status
+      if (!append) lifetimes.clear()
+      for (const row of answer.charts) lifetimes.set(row.checksum, row)
+    } catch {
+      // Best effort, exactly like the summaries: an addition to a list that is complete without
+      // it. A bridge with no lifetime channel lands here and the rows fall back to the log.
+    }
+  }
+
   function playFor(chart: ChartRecord): ChartPlaySummary | null {
     return chart.cloneHeroChecksum ? (plays.get(chart.cloneHeroChecksum) ?? null) : null
+  }
+
+  function lifetimeFor(chart: ChartRecord): ChartLifetime | null {
+    return chart.cloneHeroChecksum ? (lifetimes.get(chart.cloneHeroChecksum) ?? null) : null
+  }
+
+  /** What a row's badge says, and which of the two records it came from. */
+  interface PlayBadge {
+    /** The count to draw, or null for a record that exists without a number behind it. */
+    count: number | null
+    lifetime: boolean
+    title: string
+  }
+
+  /**
+   * One badge per row, never two.
+   *
+   * A row is already carrying a title, a version badge, a charter, five difficulty cells, a year
+   * and a length. A second count beside the first would be two numbers a reader has to tell
+   * apart at a glance in a list they are scanning, and the obvious reading of two numbers side
+   * by side is the one thing this feature must not invite: they are not addends. The lifetime
+   * count already contains the observed one.
+   *
+   * So the badge shows the LIFETIME count whenever Clone Hero has one, because it is the superset
+   * and the number the user recognises as theirs, and falls back to Encore's log when it does
+   * not. The hover says which record answered and, when both did, how much of the count Encore
+   * saw for itself, worded as a share of the total rather than as a figure beside it.
+   */
+  function badgeFor(chart: ChartRecord): PlayBadge | null {
+    const life = lifetimeFor(chart)
+    const seen = playFor(chart)
+    if (life && life.lifetimePlays > 0) {
+      return { count: life.lifetimePlays, lifetime: true, title: lifetimeTitle(life, seen) }
+    }
+    // A score row with a zero play count: Clone Hero knows the chart and has no number for it.
+    // "0 PLAYS" would be a claim, and dropping the badge would throw away the one thing the
+    // record does say, so the badge says that and no more.
+    if (life?.everPlayed) return { count: null, lifetime: true, title: lifetimeTitle(life, seen) }
+    if (seen) return { count: seen.timesPlayed, lifetime: false, title: playTitle(seen) }
+    return null
+  }
+
+  /** The hover for a badge drawn from Clone Hero's own table. */
+  function lifetimeTitle(life: ChartLifetime, seen: ChartPlaySummary | null): string {
+    const parts: string[] = [
+      life.lifetimePlays > 0
+        ? "Clone Hero's own count, over every play you have made of this chart."
+        : 'Clone Hero has a record of this chart but no play count for it.'
+    ]
+    if (life.best !== null) {
+      parts.push(`Best score ${life.best.score.toLocaleString()} at ${life.best.percent}%.`)
+    }
+    // Said whenever there is one, whether or not a confirmed best was found: a chart with both
+    // kinds of row is showing the best of the ones Encore can read, and a hover that stayed
+    // quiet about that would be presenting a partial best as the whole one.
+    if (life.unconfirmedRows > 0) {
+      parts.push(
+        'Clone Hero also keeps a score for it on a scale Encore cannot read, so no best score is shown for that one. The play count is unaffected.'
+      )
+    }
+    // A share of the count above it, never a second figure beside it.
+    if (life.observedPlays > 0) {
+      parts.push(`Encore watched ${life.observedPlays.toLocaleString()} of them happen.`)
+      if (seen?.lastPlayedAt) parts.push(`The last was ${playedOn(seen.lastPlayedAt)}.`)
+    }
+    return parts.join(' ')
   }
 
   /**
@@ -212,6 +330,11 @@
     parts.push('Counted only from when Encore started watching Clone Hero.')
     return parts.join(' ')
   }
+
+  /** True once either record has answered with something to draw. */
+  const anyPlayRecord = $derived(
+    playStatus?.available === true || lifetimeStatus?.available === true
+  )
 
   /**
    * The three difficulty columns of a row, with the ones this chart does not chart removed.
@@ -278,6 +401,7 @@
       // One batch for the page that just landed, not one per row, and not awaited: the list is
       // complete without badges and must not wait on them to paint.
       void loadPlays(rows, append)
+      void loadLifetime(rows, append)
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
@@ -555,18 +679,36 @@
   {#if $libraryFilter.neverPlayed}
     <!-- The caveat the schema's own comment asks any UI offering this filter to state. It is
          shown beside the list rather than hidden in a tooltip because a user reading a short
-         list has already drawn a conclusion by the time they would hover anything. -->
+         list has already drawn a conclusion by the time they would hover anything.
+
+         Two wordings, because the filter consults two records and the weaker answer is not the
+         one to give when the stronger is available. With the score files read, the list really
+         is "no play on either record". Without them it is only Encore's log, which on a machine
+         where Clone Hero has been played for years is a list of almost everything, and a
+         sentence that did not say so would be the misleading half of the feature. -->
     <p class="caveat">
-      Encore checks its own play log and, where it can read them, Clone Hero's own score files. A
-      chart played on another machine, or one Encore cannot identify, is in this list too.
+      {#if lifetimeStatus?.available}
+        Encore checked its own play log and Clone Hero's own score files, which reach back before
+        Encore was installed. A chart played on another machine, or one Encore cannot identify, is
+        in this list too.
+      {:else}
+        Encore could not read Clone Hero's own score files, so this list is only what Encore's log
+        has seen. A chart you played before you installed Encore, or on another machine, or that
+        Encore cannot identify, is in this list too.
+      {/if}
     </p>
-  {:else if playStatus?.available}
+  {:else if anyPlayRecord}
     <!-- The same fact from the other side, and it earns the same line for the same reason: a
          row with no badge is "no play on record", never "you have never played this". Only one
          of the two is ever on screen, since the filter's wording above already says it. -->
     <p class="caveat">
-      Play counts start from when Encore began watching Clone Hero. A chart you played before that
-      carries no count here.
+      {#if lifetimeStatus?.available}
+        Play counts are Clone Hero's own, over every play you have made. A chart it has no record of
+        carries no count, which is still not the same as never played.
+      {:else}
+        Play counts start from when Encore began watching Clone Hero. A chart you played before that
+        carries no count here.
+      {/if}
     </p>
   {/if}
   <!-- One line of scope, so Installed and Asset Studio don't read as the same list twice. -->
@@ -596,7 +738,7 @@
   <div class="table selectable">
     {#each charts as chart (chart.path)}
       {@const art = coverFor(chart)}
-      {@const play = playFor(chart)}
+      {@const play = badgeFor(chart)}
       <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
         {#if art}
           <!-- Decorative: the title and artist beside it already name the chart, so alt text
@@ -635,9 +777,13 @@
                  many users with no play data at all. Absent when there is no record, so it
                  costs nothing on a row that has none. -->
             {#if play}
-              <span class="badge mono plays" title={playTitle(play)}>
-                {play.timesPlayed.toLocaleString()}
-                {play.timesPlayed === 1 ? 'PLAY' : 'PLAYS'}
+              <span class="badge mono plays" title={play.title}>
+                {#if play.count === null}
+                  PLAYED
+                {:else}
+                  {play.count.toLocaleString()}
+                  {play.count === 1 ? 'PLAY' : 'PLAYS'}
+                {/if}
               </span>
             {/if}
           </span>

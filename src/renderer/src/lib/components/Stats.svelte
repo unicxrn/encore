@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import type {
     CharterPlays,
+    LifetimeScores,
+    LifetimeTotals,
     PlayBreakdown,
     PlayDataStatus,
     PlayInsights,
@@ -14,21 +16,28 @@
   import { encore } from '../stores/bridge'
 
   /**
-   * Encore's own record of what you have played, as a page.
+   * What you have played, as a page, out of two records that do not cover the same span.
    *
-   * The one thing this view exists to get right is that its numbers are NOT the user's lifetime
-   * totals, and a page makes that harder rather than easier: the more of a report a surface
-   * looks like, the more readily it is read as the whole record. Clone Hero's scorestats.json
-   * holds exactly one play, the most recent, so Encore's history begins the first time it saw
-   * that file change and there is no way to recover what came before (see shared/play.ts and
-   * main/play/scorestats.ts).
+   * Clone Hero's scorestats.json holds exactly one play, the most recent, so Encore's history
+   * begins the first time it saw that file change and nothing before it can be recovered. Its
+   * scoredata.bin and scoresext.bin are the other record: a play count and a best score per
+   * chart, kept since long before Encore was installed, with no date on any of it (see
+   * shared/play.ts).
    *
-   * So the window is stated once, in prose, directly under the page title and above every
-   * figure, anchored to `firstPlayedAt` because that is the date the record actually starts.
-   * Once, not per block: a caveat repeated in six sections is a caveat nobody finishes reading.
-   * What each section carries instead is the same distinction where it would otherwise be lost:
-   * "no play on record" is never written as "never played", because they are different claims
-   * and only one of them is supported.
+   * The page used to open with one caveat saying that nothing on it was a lifetime total, which
+   * was true of every figure. It is now true of some of them, and a blanket caveat over a page
+   * where half the numbers really are lifetime is itself the lie it was written to prevent.
+   *
+   * So the distinction is carried structurally instead, by a source tag on every section
+   * heading: ALL TIME for the blocks drawn from Clone Hero's own table, SINCE <date> for the
+   * blocks drawn from Encore's log. One sentence under the title defines the two, and after
+   * that a reader tells which is which by looking at the heading above the number rather than
+   * by remembering a caveat from six sections ago. The tags appear only when both records are
+   * on the page: with one source there is nothing to distinguish, and the single caveat the
+   * page has always shown is the right shape for that state.
+   *
+   * The two counts are never added and the page says so where they sit closest. A chart's
+   * lifetime count ALREADY includes every play Encore watched, so their sum means nothing.
    *
    * Every name drawn here goes through `stripRichText`. Charters style their own names in the
    * game and song.ini carries the markup verbatim; one charter in a real history is eight colour
@@ -38,13 +47,33 @@
   let status = $state<PlayDataStatus | null>(null)
   let stats = $state<PlayStats | null>(null)
   let insights = $state<PlayInsights | null>(null)
+  let lifetime = $state<LifetimeScores | null>(null)
   let loading = $state(true)
   let error = $state<string | null>(null)
 
+  /**
+   * The lifetime read, which fails on its own rather than taking the page with it.
+   *
+   * An empty checksum list rather than no argument at all: this page draws `totals` and nothing
+   * per chart, and omitting the list would ship one row for every chart the score files know
+   * of, for nothing to read. A bridge without the channel lands in the catch and the page draws
+   * what Encore itself watched, which is the page exactly as it was before the files were read.
+   */
+  async function loadLifetime(): Promise<LifetimeScores | null> {
+    try {
+      return await encore().playLifetime([])
+    } catch {
+      return null
+    }
+  }
+
   async function load(): Promise<void> {
     try {
-      const next = await encore().playStatus()
+      // Two independent records, read at once: neither gates the other, and a page that asked
+      // for the second only after the first had answered would take twice as long to draw.
+      const [next, nextLifetime] = await Promise.all([encore().playStatus(), loadLifetime()])
       status = next
+      lifetime = nextLifetime
       // The gate the preload comment asks every consumer to ask first. The two reads below on a
       // machine with no Clone Hero answer with zeroes and empty lists, which is correct and
       // indistinguishable from "installed, played nothing", and those are two different things
@@ -111,6 +140,16 @@
   const percent = (ratio: number | null): string =>
     ratio === null ? EMPTY : `${(ratio * 100).toFixed(1)}%`
 
+  /**
+   * Clone Hero's own totals, or null when there is no lifetime record to draw.
+   *
+   * `available` is main's own "there is something to show" test, not "a file exists": a Clone
+   * Hero that has never finished a song has both files and nothing in them (see main/index.ts).
+   */
+  const lifetimeTotals = $derived.by((): LifetimeTotals | null =>
+    lifetime?.status.available ? lifetime.totals : null
+  )
+
   interface Tile {
     label: string
     value: string
@@ -125,7 +164,13 @@
       {
         label: 'PLAYS RECORDED',
         value: stats.totalPlays.toLocaleString(),
-        note: `across ${stats.chartsPlayed.toLocaleString()} ${stats.chartsPlayed === 1 ? 'chart' : 'charts'}`
+        note: `across ${stats.chartsPlayed.toLocaleString()} ${stats.chartsPlayed === 1 ? 'chart' : 'charts'}`,
+        // The one figure on the page a reader is most likely to try to add to another, so the
+        // hover says what the block below the tiles says: it is a part of the lifetime count,
+        // not a second count beside it.
+        title: lifetimeTotals
+          ? 'Plays Encore watched happen. Clone Hero counted every one of them too, so these are already inside the lifetime total above and are never added to it.'
+          : undefined
       },
       {
         label: 'ACCURACY',
@@ -145,14 +190,60 @@
           'Plays that dropped no note. A perfect full combo hit every note on the front of its window, which Clone Hero records separately.'
       },
       {
-        label: 'BEST SCORE',
+        // Not "BEST SCORE": once the lifetime block is on the page there are two best scores,
+        // drawn from two records, and two tiles with one label is the confusion the tags are
+        // there to prevent. The label carries the distinction even when the tile is read alone.
+        label: 'BEST SCORE SEEN',
         value: count(stats.bestScore),
-        note: 'highest single play'
+        note: 'highest single play Encore watched'
       },
       {
         label: 'LONGEST STREAK',
         value: count(stats.longestStreak),
         note: 'notes without a miss'
+      }
+    ]
+  })
+
+  /**
+   * The lifetime block's figures, from Clone Hero's own table.
+   *
+   * Three tiles, not five: the table holds a play count, a chart count and a score, and there is
+   * no accuracy, no streak and no combo count in it to draw. A tile per missing thing showing a
+   * dash would imply Clone Hero half-recorded them.
+   */
+  const lifetimeTiles = $derived.by((): Tile[] => {
+    const totals = lifetimeTotals
+    if (!totals) return []
+    return [
+      {
+        label: 'LIFETIME PLAYS',
+        value: totals.lifetimePlays.toLocaleString(),
+        note: `across ${totals.charts.toLocaleString()} ${totals.charts === 1 ? 'chart' : 'charts'}`,
+        title:
+          "Clone Hero's own running count for every chart it has a record of, added up. It already includes every play Encore watched, so the two counts on this page are never added together."
+      },
+      {
+        label: 'CHARTS PLAYED',
+        value: totals.charts.toLocaleString(),
+        note:
+          totals.chartsNotInLibrary === 0
+            ? 'all of them still in your library'
+            : `${totals.chartsInLibrary.toLocaleString()} still in your library`,
+        title:
+          'Charts Clone Hero has ever recorded a play for. A chart you have since deleted, moved or never scanned still has its record here.'
+      },
+      {
+        label: 'BEST SCORE',
+        value: count(totals.bestScore),
+        // The qualifier only when there is something to qualify. With no unconfirmed rows this
+        // is simply the best score in the table, and hedging it would invent a doubt.
+        note:
+          totals.chartsWithUnconfirmedRows > 0
+            ? 'of the scores Encore can read'
+            : 'highest in the table',
+        title:
+          'The highest score Clone Hero kept, out of the rows whose scoring Encore has checked against a real play.'
       }
     ]
   })
@@ -226,6 +317,37 @@
   /** Where Encore looked, for the states where saying so is the useful part. */
   const where = $derived(status?.path)
 
+  /** Encore's own log has something to draw. The gate the preload comment asks for. */
+  const observed = $derived(Boolean(stats && status?.available))
+
+  /** Either record has something. Below this the page draws its empty states instead. */
+  const anything = $derived(observed || lifetimeTotals !== null)
+
+  /**
+   * Whether section headings carry a source tag.
+   *
+   * Only with both records on the page. A tag distinguishing one source from nothing is noise,
+   * and the single caveat the page shows in that state already covers every figure on it.
+   */
+  const tagged = $derived(observed && lifetimeTotals !== null)
+
+  /**
+   * The observed tag's text, carrying the date the record actually starts.
+   *
+   * A date rather than the word "recent": the whole point of the tag is that the reader can see
+   * how far back the block beside it reaches without hovering anything.
+   */
+  const observedTag = $derived(since ? `SINCE ${since}` : "ENCORE'S LOG")
+
+  const LIFETIME_HINT =
+    "Clone Hero's own score table. Every play you have made, from before Encore existed, with no date attached to any of it."
+
+  const observedHint = $derived(
+    since
+      ? `Encore's own log, which begins at the first play it saw, on ${since}.`
+      : "Encore's own log of the plays it watched happen."
+  )
+
   /** Charts that carry no Clone Hero checksum, so no play can ever be joined to them. */
   const unidentified = $derived(
     insights ? insights.coverage.inLibrary - insights.coverage.identified : 0
@@ -235,7 +357,68 @@
   const unplayed = $derived(
     insights ? insights.coverage.identified - insights.coverage.withPlay : 0
   )
+
+  /**
+   * Identified charts Clone Hero's own table has never recorded a play for.
+   *
+   * The lifetime counterpart of `unplayed`, and the honest shortfall once the score files are
+   * readable: it is the count that a user who played for a year before installing Encore would
+   * recognise as their own. Still not "never played", for the reason the sentence beside it
+   * gives.
+   */
+  const unrecorded = $derived(
+    insights && lifetimeTotals
+      ? Math.max(insights.coverage.identified - lifetimeTotals.chartsInLibrary, 0)
+      : 0
+  )
 </script>
+
+<!--
+  The source tag a section heading carries once the page draws both records.
+
+  Rendered as a snippet rather than copied into seven headings so the wording cannot drift apart
+  between them, which is the failure mode a labelling scheme has: six sections saying the same
+  thing six slightly different ways stops being a scheme and goes back to being prose.
+-->
+{#snippet source(kind: 'lifetime' | 'observed' | 'both')}
+  {#if tagged}
+    <span
+      class="src {kind}"
+      title={kind === 'lifetime'
+        ? LIFETIME_HINT
+        : kind === 'observed'
+          ? observedHint
+          : `Both records. ${LIFETIME_HINT} ${observedHint}`}
+    >
+      {kind === 'lifetime' ? 'ALL TIME' : kind === 'observed' ? observedTag : 'BOTH RECORDS'}
+    </span>
+  {/if}
+{/snippet}
+
+<!--
+  Why Encore's own log has nothing, in the words the state calls for.
+
+  One copy, rendered either inside the log's own section (when the lifetime block is carrying
+  the page) or on its own (when neither record has anything). None of the four is a fault the
+  user has to fix, so none of them is worded as one.
+-->
+{#snippet logEmpty()}
+  {#if status?.reason === 'unknownPlatform'}
+    Encore has no established location for Clone Hero's score file on this system, so it is not
+    counting plays here.
+  {:else if status?.reason === 'noFile'}
+    Nothing to show yet. Clone Hero writes a score file when it finishes a song, and there is none
+    at
+    <span class="mono path">{where}</span>. Encore starts counting as soon as one appears.
+  {:else if status?.reason === 'unreadable'}
+    Something is at <span class="mono path">{where}</span>
+    but Encore could not read it. A file caught mid-save looks exactly like this and fixes itself on the
+    next song.
+  {:else}
+    Encore is watching <span class="mono path">{where}</span>
+    and has recorded no play yet. Finish a song in Clone Hero and your totals start here.
+  {/if}
+{/snippet}
 
 <div class="stats selectable">
   <h1>Your plays</h1>
@@ -244,11 +427,24 @@
     <p class="status" role="status">LOADING…</p>
   {:else if error}
     <p class="err" role="status">Encore could not read your play history: {error}</p>
-  {:else if stats && status?.available}
+  {:else if anything}
     <!-- Above every number on the page, deliberately. A user who reads one figure and stops has
-         still read this, and a user who reads only this has not been misled about anything. -->
+         still read this, and a user who reads only this has not been misled about anything.
+         Which sentence it is depends on how many records are behind the page: with two, this is
+         the legend for the tags on the headings and nothing more; with one, it is the same
+         blanket caveat the page has always carried, which is correct when everything below it
+         does come from the one place. -->
     <p class="caveat">
-      {#if since}
+      {#if tagged}
+        Two records feed this page and they do not reach back the same distance. Clone Hero keeps
+        its own play counts and best scores from long before Encore existed, and puts no date on any
+        of them. Encore's log knows when you played, and only since {since}. Every block below is
+        labelled with the record it was drawn from.
+      {:else if lifetimeTotals}
+        These are Clone Hero's own counts, kept since long before Encore was installed. They carry
+        no dates, so nothing here can be placed on a calendar. Encore has watched no play of its own
+        yet.
+      {:else if since}
         These are not your lifetime totals. Encore counts a play only while it is running, and your
         first recorded play was {since}, so nothing you played before that is here.
       {:else}
@@ -257,22 +453,74 @@
       {/if}
     </p>
 
-    <section aria-labelledby="stats-totals">
-      <h2 id="stats-totals">TOTALS</h2>
-      <div class="tiles">
-        {#each tiles as tile (tile.label)}
-          <div class="tile" title={tile.title}>
-            <span class="t-label">{tile.label}</span>
-            <span class="t-value mono">{tile.value}</span>
-            <span class="t-note">{tile.note}</span>
-          </div>
-        {/each}
-      </div>
-    </section>
+    {#if lifetimeTotals}
+      <!-- First on the page, because it is the bigger and the older of the two records and the
+           one a reader means by "how much have I played this". -->
+      <section aria-labelledby="stats-lifetime">
+        <h2 id="stats-lifetime">WHAT CLONE HERO KEPT {@render source('lifetime')}</h2>
+        <div class="tiles">
+          {#each lifetimeTiles as tile (tile.label)}
+            <div class="tile lifetime" title={tile.title}>
+              <span class="t-label">{tile.label}</span>
+              <span class="t-value mono">{tile.value}</span>
+              <span class="t-note">{tile.note}</span>
+            </div>
+          {/each}
+        </div>
+        <p class="sub-note">
+          Clone Hero keeps one record per chart: how many times you played it and what you scored.
+          It keeps no dates at all, so none of this can appear in the history below.
+        </p>
+        {#if lifetimeTotals.chartsWithUnconfirmedRows > 0}
+          <!-- Not an error, and the wording works hard not to read as one. The rows are real
+               records of real plays; what Encore cannot do is put a number on them. So the play
+               counts above stand and only the score is withheld, which is the opposite of the
+               usual "something is wrong with your data" note. -->
+          <p class="sub-note">
+            {lifetimeTotals.chartsWithUnconfirmedRows.toLocaleString()} of those charts also carry a score
+            of a kind Encore cannot read. It scores far more per note than Clone Hero's own scoring reaches,
+            which points at a score carried over from a version of the game before the scoring was settled.
+            The play counts above are unaffected and correct. What is left out is a best score Encore
+            cannot vouch for, and nothing is wrong with your files.
+          </p>
+        {/if}
+      </section>
+    {/if}
 
-    {#if chart}
+    {#if stats && observed}
+      <section aria-labelledby="stats-totals">
+        <h2 id="stats-totals">WHAT ENCORE HAS WATCHED {@render source('observed')}</h2>
+        <div class="tiles">
+          {#each tiles as tile (tile.label)}
+            <div class="tile" title={tile.title}>
+              <span class="t-label">{tile.label}</span>
+              <span class="t-value mono">{tile.value}</span>
+              <span class="t-note">{tile.note}</span>
+            </div>
+          {/each}
+        </div>
+        {#if lifetimeTotals}
+          <!-- The sentence that stops the two blocks being added. It sits here, between them,
+               rather than in the caveat at the top, because the addition is a thing a reader
+               does with two figures in front of them. -->
+          <p class="sub-note">
+            These plays are already inside the lifetime count above, not in addition to it: Clone
+            Hero counted every one of them as it happened. Adding the two would count them twice.
+          </p>
+        {/if}
+      </section>
+    {:else}
+      <!-- The lifetime block is carrying the page on its own. Saying why the other half is
+           missing beats leaving a reader to wonder whether the page failed to load. -->
+      <section aria-labelledby="stats-nolog">
+        <h2 id="stats-nolog">WHAT ENCORE HAS WATCHED</h2>
+        <p class="err">{@render logEmpty()}</p>
+      </section>
+    {/if}
+
+    {#if stats && chart}
       <section aria-labelledby="stats-when">
-        <h2 id="stats-when">WHEN YOU PLAY</h2>
+        <h2 id="stats-when">WHEN YOU PLAY {@render source('observed')}</h2>
         <!-- The axis starts at the first recorded play and not a day earlier: an empty week
              before it would be drawing a silence that is Encore's, not the user's. -->
         <p class="sub-note">
@@ -310,9 +558,9 @@
       </section>
     {/if}
 
-    {#if stats.byInstrument.length > 0 || stats.byDifficulty.length > 0}
+    {#if stats && (stats.byInstrument.length > 0 || stats.byDifficulty.length > 0)}
       <section class="two-up" aria-labelledby="stats-what">
-        <h2 id="stats-what">WHAT YOU PLAY</h2>
+        <h2 id="stats-what">WHAT YOU PLAY {@render source('observed')}</h2>
         <div class="columns">
           {#each [{ title: 'Instrument', rows: stats.byInstrument }, { title: 'Difficulty', rows: stats.byDifficulty }] as group (group.title)}
             {#if group.rows.length > 0}
@@ -344,9 +592,12 @@
     {/if}
 
     <div class="columns">
-      {#if stats.topCharts.length > 0}
+      {#if stats && stats.topCharts.length > 0}
         <section aria-labelledby="stats-most">
-          <h2 id="stats-most">MOST PLAYED</h2>
+          <!-- The heading a reader is most likely to take for a lifetime list, and the one the
+               tag beside it is most load-bearing on: these are the charts played most SINCE
+               Encore started watching, which need not be the charts played most. -->
+          <h2 id="stats-most">MOST PLAYED {@render source('observed')}</h2>
           <!-- These names are the ones Clone Hero wrote alongside the play, not the catalog's,
                so a chart deleted since still has its row and its name here. That is on purpose:
                it is history, and dropping it would quietly shrink the user's own record. -->
@@ -372,7 +623,7 @@
 
       {#if insights && insights.recent.length > 0}
         <section aria-labelledby="stats-recent">
-          <h2 id="stats-recent">RECENTLY PLAYED</h2>
+          <h2 id="stats-recent">RECENTLY PLAYED {@render source('observed')}</h2>
           <p class="sub-note">The last plays Encore saw, newest first.</p>
           <ol class="top">
             {#each insights.recent as play (play.checksum + play.playedAt)}
@@ -405,11 +656,16 @@
 
     {#if insights}
       <section aria-labelledby="stats-library">
-        <h2 id="stats-library">YOUR LIBRARY, PLAYED</h2>
+        <h2 id="stats-library">YOUR LIBRARY, PLAYED {@render source('both')}</h2>
         <!-- The one place on this page where the difference between "Encore has not seen you
              play this" and "you have never played this" can be lost, so it is written out. The
              two shortfalls have unrelated causes: one is a chart Encore cannot identify, and no
-             amount of playing fixes it. -->
+             amount of playing fixes it.
+
+             This block's coverage numbers were built when Encore's log was the only record, and
+             with the lifetime one beside it the lead sentence would now be understating the
+             library badly: the owner's log covers 15 plays and Clone Hero's table covers 144.
+             So Clone Hero's count leads and Encore's follows as the subset it is. -->
         <p class="coverage">
           {#if insights.coverage.identified === 0}
             <!-- Nothing scanned, or nothing scanned since Encore started recording Clone Hero's
@@ -417,6 +673,22 @@
                  against a zero would read as "you have played none of your library". -->
             Nothing in your library can be matched to a play yet. Scan your library and the charts you
             play start appearing here.
+          {:else if lifetimeTotals}
+            <!-- Both figures are counted out of `identified` and neither is stated as a share of
+                 the other. They overlap almost entirely and one is almost always the larger, but
+                 "of them" would be a subset claim, and the two counts come from tables nothing
+                 joins. -->
+            Of the
+            <span class="mono">{insights.coverage.identified.toLocaleString()}</span>
+            charts in your library Encore can match a play to, Clone Hero has a record of playing
+            <span class="mono">{lifetimeTotals.chartsInLibrary.toLocaleString()}</span>
+            and Encore has watched
+            <span class="mono">{insights.coverage.withPlay.toLocaleString()}</span>
+            played.
+            {#if unrecorded > 0}
+              The other {unrecorded.toLocaleString()} have nothing in Clone Hero's table, which is still
+              not the same as never played: a play made on another machine reaches neither record.
+            {/if}
           {:else}
             Encore has seen you play
             <span class="mono">{insights.coverage.withPlay.toLocaleString()}</span>
@@ -453,6 +725,10 @@
             From the charts in your library, so a charter you have played but no longer own is not
             listed. The second figure counts every chart of theirs you hold, including any Encore
             cannot match a play to.
+            {#if lifetimeTotals}
+              The counts are Encore's own, not Clone Hero's: its table keeps no charter beside a
+              score, so this is the one block here that cannot reach back before Encore.
+            {/if}
           </p>
           <ul class="charters">
             {#each insights.topCharters as row (row.charter)}
@@ -473,25 +749,29 @@
       </section>
     {/if}
   {:else}
-    <!-- Four ways to have nothing, and they call for four different sentences. None of them is
-         a fault the user has to fix, so none of them is worded as one. -->
-    <p class="err" role="status">
-      {#if status?.reason === 'unknownPlatform'}
-        Encore has no established location for Clone Hero's score file on this system, so it is not
-        counting plays here.
-      {:else if status?.reason === 'noFile'}
-        Nothing to show yet. Clone Hero writes a score file when it finishes a song, and there is
-        none at
-        <span class="mono path">{where}</span>. Encore starts counting as soon as one appears.
-      {:else if status?.reason === 'unreadable'}
-        Something is at <span class="mono path">{where}</span>
-        but Encore could not read it. A file caught mid-save looks exactly like this and fixes itself
-        on the next song.
-      {:else}
-        Encore is watching <span class="mono path">{where}</span>
-        and has recorded no play yet. Finish a song in Clone Hero and your totals start here.
-      {/if}
-    </p>
+    <!-- Neither record has anything, which is the ordinary state for most users rather than a
+         failure. Four ways for Encore's log to be empty and four for the score files, and none
+         of the eight is a fault the user has to fix, so none is worded as one. -->
+    <p class="err" role="status">{@render logEmpty()}</p>
+    {#if lifetime && !lifetime.status.available}
+      <!-- Only when the channel actually answered. A bridge that has no lifetime read at all
+           leaves `lifetime` null, and inventing a sentence about files nothing looked for would
+           be reporting on a search that never happened. -->
+      <p class="sub-note">
+        Clone Hero's own score table holds what you played before Encore, and there is nothing from
+        it either:
+        {#if lifetime.status.reason === 'unknownPlatform'}
+          no location for it has been established on this system.
+        {:else if lifetime.status.reason === 'noFile'}
+          there is none at <span class="mono path">{lifetime.status.scoreDataPath}</span>.
+        {:else if lifetime.status.reason === 'unreadable'}
+          what is at <span class="mono path">{lifetime.status.scoreDataPath}</span>
+          could not be read.
+        {:else}
+          Encore read it and it holds no score yet.
+        {/if}
+      </p>
+    {/if}
   {/if}
 </div>
 
@@ -524,6 +804,36 @@
     text-transform: uppercase;
     color: var(--text-3);
     margin-bottom: 10px;
+  }
+  /* The source tag, which is the whole of how this page says which record a block came from.
+     Same mono micro-caps register as the heading it sits in, boxed so it reads as a label ON
+     the heading rather than as more of the heading. nowrap on the tag and a normal wrap on the
+     heading, so a narrow pane drops the tag to its own line intact instead of breaking the date
+     across two. */
+  .src {
+    display: inline-block;
+    white-space: nowrap;
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 2px 5px;
+    margin-left: 8px;
+    line-height: var(--lh-flat);
+    color: var(--text-3);
+  }
+  /* The lifetime tag takes the accent, the same one the FC tag takes and for the same reason:
+     it is the rarer of the two and the one a reader is scanning the page to find again. The
+     observed tag stays in the hairline register, because it is the page's default and a page
+     where both tags shout has no emphasis left. */
+  .src.lifetime {
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+  /* A second, quieter signal on the figures themselves, for a tile read without its heading in
+     view. One hairline edge, no fill: the tiles have to stay comparable at a glance, and a
+     lifetime block in a different colour would read as a different kind of thing rather than
+     the same kind of thing over a longer span. */
+  .tile.lifetime {
+    border-left: 2px solid var(--accent);
   }
   h3 {
     font-size: var(--fs-secondary);

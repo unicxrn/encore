@@ -24,31 +24,40 @@ release.
   play made while Encore was closed can be picked up, and again whenever the game rewrites either
   file. It is a read; nothing is ever written back to Clone Hero's files. Only the Linux location
   has been verified against a real install. The Windows and macOS paths follow Unity's own
-  convention for where a game keeps this data and are probed rather than assumed.
+  convention for where a game keeps this data and are probed rather than assumed. What it finds is
+  on the Stats tab, as its own block, and on the play count a chart carries in Installed.
 - The "No plays recorded" filter in Installed now also consults Clone Hero's own record, so a chart
   you wore out last year and have not touched since Encore was installed is no longer in the list.
   It is still not a complete answer and does not claim to be: a chart played on another machine, or
   under a Clone Hero whose score files are not the ones Encore found, is unknown either way, and so
-  is a chart Encore cannot compute a Clone Hero checksum for.
+  is a chart Encore cannot compute a Clone Hero checksum for. The sentence beside the list says
+  which records actually answered, so a machine where the score files could not be read is told the
+  list is only what Encore itself has seen rather than left to assume otherwise.
 
-- A Stats tab, holding everything Encore knows about what you have played. Encore has been reading
-  Clone Hero's own score file since 0.2.0 and keeping what it finds, and none of it reached the
-  screen. The page shows plays recorded, charts played, accuracy, full combos, best score and
-  longest streak; the history as a bar per day, week or longer, from your first recorded play to
-  today; which instruments and difficulties those plays were on; the ten charts you have played
-  most and the last few plays themselves, with what each one scored; and how much of your library
-  has a play on record, with the charters behind it. Every figure is prefaced by the date the
-  record starts, because Clone Hero's score file holds only the most recent play: Encore's history
-  begins the first time it saw that file change, and nothing before that can be recovered. These
-  are not lifetime totals and the page says so before it says anything else, and nowhere writes "no
-  play on record" as "never played". When there is nothing yet it says which of the four reasons
-  applies and where it looked, rather than drawing a page of zeroes. Reached from the sidebar or
-  with Ctrl+5, which moves Issues to Ctrl+6 and Settings to Ctrl+7. Home, where the play panel used
-  to sit, is back to being a landing page.
+- A Stats tab, holding everything Encore knows about what you have played, out of both records it
+  has. From Clone Hero's own score table: your lifetime play count, how many charts you have ever
+  played and how many of them you still have, and your best score. From Encore's own log: plays
+  recorded, accuracy, full combos, best score and longest streak; the history as a bar per day,
+  week or longer, from your first recorded play to today; which instruments and difficulties those
+  plays were on; the ten charts you have played most and the last few plays themselves, with what
+  each one scored; and how much of your library has a play on record, with the charters behind it.
+  The two reach back different distances and the page never lets that go unsaid: every block is
+  labelled with the record it was drawn from, ALL TIME or the date Encore's own record starts, and
+  the sentence under the title says which is which. The lifetime count already includes every play
+  Encore watched, so the page says so where the two sit closest and never adds them. Where a chart
+  carries a score Encore cannot read, the play count still stands and only the score is left out,
+  said plainly and not as a fault in your files. Nowhere writes "no play on record" as "never
+  played". With one record, or with neither, the page says which of the reasons applies and where
+  it looked, rather than drawing a page of zeroes. Reached from the sidebar or with Ctrl+5, which
+  moves Issues to Ctrl+6 and Settings to Ctrl+7. Home, where the play panel used to sit, is back to
+  being a landing page.
 - A chart in Installed says how many times it has been played, when there is a play on record for
-  it. The count is a batch read for each page of the list, and a chart with no record carries no
-  badge at all: the list already distinguishes "no plays recorded" from "never played", and a zero
-  would not.
+  it. It is Clone Hero's own lifetime count where the game has one, so a chart you wore out years
+  before Encore existed now says so, and Encore's own count where it does not. One badge either
+  way, never two: the lifetime count already contains what Encore watched, and two numbers side by
+  side invite the one sum that means nothing. The counts are a batch read for each page of the
+  list, and a chart with no record in either place carries no badge at all: the list already
+  distinguishes "no plays recorded" from "never played", and a zero would not.
 - Issues reports what your library holds more than one copy of, in three kinds that are kept
   apart because they mean different things. The same chart file installed twice, where nothing is
   lost by keeping one. The same song by the same charter at more than one version, which is
