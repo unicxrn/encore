@@ -91,3 +91,78 @@ export function playedOn(value: string | null | undefined): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString()
 }
+
+/**
+ * Every TextMeshPro tag Clone Hero renders, so a name written in them reads as text here.
+ *
+ * Charters style their own names in the game (`<color=#7B0000>W</color>...`), and song.ini and
+ * Chorus both carry that styling verbatim. Encore is a table, not the game: the colours were
+ * chosen against Clone Hero's background, several of them are near black, and a list of names in
+ * nine colours is noise where a name is an identifier to scan down.
+ */
+const RICH_TEXT_TAGS = [
+  'align',
+  'allcaps',
+  'alpha',
+  'b',
+  'br',
+  'color',
+  'cspace',
+  'font',
+  'font-weight',
+  'gradient',
+  'i',
+  'indent',
+  'line-height',
+  'line-indent',
+  'link',
+  'lowercase',
+  'margin',
+  'mark',
+  'material',
+  'mspace',
+  'nobr',
+  'noparse',
+  'page',
+  'pos',
+  'quad',
+  'rotate',
+  's',
+  'size',
+  'smallcaps',
+  'space',
+  'sprite',
+  'strikethrough',
+  'style',
+  'sub',
+  'sup',
+  'u',
+  'underline',
+  'uppercase',
+  'voffset',
+  'width'
+].join('|')
+
+/**
+ * A named tag, opening or closing, with or without a value.
+ *
+ * Deliberately stricter than the `<[^>]*>` in `main/catalog/lyric-lines.ts`, which is right for
+ * lyrics and wrong here. That one drops anything between angle brackets, so a title like
+ * `Rock <3 Roll >` loses its middle. A lyric is prose, where a stray `<` is vanishingly rare and a
+ * wrong drop costs one word on screen; a name is an identifier, where a wrong drop silently
+ * renames someone's chart and nobody can tell it happened. So this only drops tags the game
+ * actually renders, and leaves every other angle bracket alone.
+ */
+const RICH_TEXT = new RegExp(`</?(?:${RICH_TEXT_TAGS})(?:[=\\s][^>]*)?>`, 'gi')
+
+/**
+ * Clone Hero's own markup out of a name, for display.
+ *
+ * Never applied to stored data, only on the way to the screen: the catalogue keeps what the chart
+ * actually says, so a search for the raw string still matches and nothing is lost by scanning.
+ * A name made entirely of tags comes back empty, which the callers' own empty handling covers.
+ */
+export function stripRichText(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace(RICH_TEXT, '').replace(/\s+/g, ' ').trim()
+}

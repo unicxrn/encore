@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  msToTime,
   diffDisplay,
+  fallbackChartName,
   formatBytes,
   instrumentDiff,
-  fallbackChartName,
-  playedOn
+  msToTime,
+  playedOn,
+  stripRichText
 } from './format'
 
 describe('msToTime', () => {
@@ -135,5 +136,37 @@ describe('playedOn', () => {
   /** The unguarded form of this renders the literal words "Invalid Date" into the page. */
   it('shows the dash rather than "Invalid Date" for something unparsable', () => {
     expect(playedOn('not a timestamp')).toBe('—')
+  })
+})
+
+describe('stripRichText', () => {
+  it('reads a charter name written in Clone Hero colour tags', () => {
+    // Verbatim from the owner's play history: the FireStarter charter, one tag per letter.
+    const raw =
+      '<b><color=#7B0000>W</color><color=#8E0000>I</color><color=#A31616>l</color>' +
+      '<color=#B82A2A>I</color><color=#CC3F3F>M</color><color=#E05555>a</color>' +
+      '<color=#F5A9A9>y</color><color=#FFFFFF>I</color></b>'
+    expect(stripRichText(raw)).toBe('WIlIMayI')
+  })
+
+  it('reads the simpler single-tag form', () => {
+    expect(stripRichText('<color=#8200f3>SirMonkfish</color>')).toBe('SirMonkfish')
+  })
+
+  it('leaves a name that only looks like markup alone', () => {
+    // The reason this is an allowlist and not <[^>]*>: neither of these is a tag the game renders,
+    // and dropping either would rename someone's chart with nothing on screen to say so.
+    expect(stripRichText('Rock <3 Roll >')).toBe('Rock <3 Roll >')
+    expect(stripRichText('<Unknown>')).toBe('<Unknown>')
+  })
+
+  it('leaves an ordinary name untouched', () => {
+    expect(stripRichText('AbyssalEmmie')).toBe('AbyssalEmmie')
+  })
+
+  it('answers empty for nothing, and for a name that is only tags', () => {
+    expect(stripRichText(null)).toBe('')
+    expect(stripRichText(undefined)).toBe('')
+    expect(stripRichText('<b></b>')).toBe('')
   })
 })
