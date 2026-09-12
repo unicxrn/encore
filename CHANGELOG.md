@@ -10,7 +10,7 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-13
 
 ### Added
 
@@ -34,11 +34,6 @@ release.
   fresh install is never told about an update by the copy that was just installed. The decision is
   made once, after the settings have loaded, which is the moment the other two decide, so a check
   that answers quickly wins nothing it would not otherwise have won.
-
-## [0.3.0] - 2026-09-13
-
-### Added
-
 - Encore reads Clone Hero's own score files, `scoredata.bin` and `scoresext.bin`, so it knows what
   you played before Encore existed. They are the game's high score table: one record per chart, a
   lifetime play count and the best score, kept since long before Encore was installed. What they do
