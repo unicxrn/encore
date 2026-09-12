@@ -32,7 +32,16 @@ export const SETTINGS_DEFAULTS = {
    * has been recorded yet: a fresh install, or an upgrade from a build that predates this field.
    * `whatsNewOnLaunch` in shared/changelog.ts is what tells those two apart.
    */
-  lastSeenVersion: ''
+  lastSeenVersion: '',
+  /**
+   * The folder holding Clone Hero's score files, when the user has pointed Encore at one.
+   *
+   * Empty is the default and means "probe", which is what every user starts on and what clearing
+   * the setting returns to (main/play/location.ts). It is stored only after the folder has been
+   * checked and found to hold at least one score file, so an empty string is the one and only
+   * "no override" value and a stored path is one that was useful when it was chosen.
+   */
+  scoreFolder: ''
 } as const
 
 /** A fresh Settings object; `libraryFolders` is a new array on every call. */

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ScoreFolderSource } from './score-folder'
 
 /**
  * Clone Hero's own play data, as it crosses the IPC boundary.
@@ -339,7 +340,36 @@ export interface LifetimeScoreStatus {
   scoresExtPath: string | null
   /** When the last import ran, by Encore's clock. Null until one has. Not a play date. */
   lastImportAt: string | null
+  /**
+   * Whether the last successful read came from one of Clone Hero's own backup files.
+   *
+   * A separate flag rather than a fifth `reason`, and deliberately: `reason` is
+   * `PlayAvailability`, which the scorestats channel answers with too, and no read of that file
+   * can ever fall back to a backup. Widening the enum would hand every consumer of `playStatus` a
+   * state that channel cannot produce. It is also not an alternative to `ok`: the read succeeded,
+   * and this says only that the numbers are as old as the game's last backup.
+   *
+   * False before any read has succeeded, and false again as soon as one succeeds from the
+   * primaries, so it describes the last successful read rather than the session.
+   */
+  usedBackup: boolean
+  /**
+   * Where the folder came from: the user's setting, or Encore's own probe.
+   *
+   * The paths above say where Encore looked; this says who chose. A user whose override is in
+   * effect and who still sees nothing is looking at their own answer, not at Encore's guess.
+   */
+  folderSource: ScoreFolderSource
 }
+
+/**
+ * What a request to inspect a score folder carries. An empty string means "wherever you look now".
+ *
+ * The report it answers with, and the sentence that describes it, are in `score-folder.ts`: the
+ * renderer draws both and must not pull zod in to do it.
+ */
+export const ScoreFolderRequestSchema = z.object({ folder: z.string() })
+export type ScoreFolderRequest = z.infer<typeof ScoreFolderRequestSchema>
 
 /** The one shape the lifetime channel answers with. */
 export interface LifetimeScores {

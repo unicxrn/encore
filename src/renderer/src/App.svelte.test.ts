@@ -95,6 +95,16 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
     sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),
     windowControl: vi.fn().mockResolvedValue(undefined),
     backupsList: vi.fn().mockResolvedValue({ backups: [], totalBytes: 0 }),
+    // Settings asks where Encore is reading Clone Hero's score files as soon as it mounts, so
+    // the tab can show the search's own answer before anyone decides to override it.
+    scoreFolderReport: vi.fn().mockResolvedValue({
+      folder: null,
+      exists: false,
+      lookedFor: ['scoredata.bin', 'scoresext.bin'],
+      found: [],
+      quarantined: [],
+      usable: false
+    }),
     // The Stats tab asks the gate first and draws its "nothing recorded" sentence on this,
     // which is the answer for a machine with no Clone Hero on it.
     playStatus: vi.fn().mockResolvedValue({

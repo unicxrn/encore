@@ -24,7 +24,9 @@ export const SettingsSchema = z.object({
   // A schema field, not a loose key: this object strips anything it does not name on both the
   // IPC boundary and the save, so a flag written anywhere else would not survive to disk.
   tourSeen: z.boolean().default(SETTINGS_DEFAULTS.tourSeen),
-  lastSeenVersion: z.string().default(SETTINGS_DEFAULTS.lastSeenVersion)
+  lastSeenVersion: z.string().default(SETTINGS_DEFAULTS.lastSeenVersion),
+  // Read only, and only ever by the score-file watcher. Empty means the probe decides.
+  scoreFolder: z.string().default(SETTINGS_DEFAULTS.scoreFolder)
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export { defaultSettings } from './settings-defaults'

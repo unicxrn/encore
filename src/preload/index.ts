@@ -27,6 +27,7 @@ import type {
   PlayInsights,
   PlayStats
 } from '../shared/play'
+import type { ScoreFolderReport } from '../shared/score-folder'
 
 type Unsubscribe = () => void
 
@@ -246,6 +247,11 @@ const api = {
   // already includes the plays the four calls above report: the two are never added.
   playLifetime: (checksums?: string[]): Promise<LifetimeScores> =>
     ipcRenderer.invoke(IPC.playLifetime, checksums === undefined ? {} : { checksums }),
+  // What a folder holds of Clone Hero's score files, by name. Call it with a folder the user has
+  // just picked to find out whether it is any use before storing it, or with '' to be told where
+  // Encore is reading now. It lists names; it opens nothing and writes nothing.
+  scoreFolderReport: (folder: string): Promise<ScoreFolderReport> =>
+    ipcRenderer.invoke(IPC.playScoreFolder, { folder }),
   onDownloadUpdate: subscribe(IPC.evDownloadUpdate),
   onScanProgress: subscribe(IPC.evScanProgress),
   onAssetProgress: subscribe(IPC.evAssetProgress),

@@ -1,11 +1,19 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { tmpDir } from '../../../test/helpers/tmp'
+import { describeScoreFolder } from '../../shared/score-folder'
 import {
+  inspectScoreFolder,
+  resolveScoreDataPaths,
   scoreDataDirCandidates,
   scoreDataPaths,
+  scoreFolderOverride,
   scoreStatsCandidates,
   scoreStatsPath,
+  SCORES_EXT_BACKUP_FILE,
   SCORES_EXT_FILE,
+  SCORE_DATA_BACKUP_FILE,
   SCORE_DATA_FILE,
   SCORE_STATS_FILE
 } from './location'
@@ -133,11 +141,22 @@ describe('scoreDataPaths', () => {
     expect(scoreDataPaths(HOME, 'linux', never)).not.toBeNull()
   })
 
-  it('names both files in the same directory', () => {
+  it('names the primaries and the backups in the same directory', () => {
     expect(scoreDataPaths(HOME, 'linux', always)).toEqual({
       scoreData: join(UNITY_LINUX, SCORE_DATA_FILE),
-      scoresExt: join(UNITY_LINUX, SCORES_EXT_FILE)
+      scoresExt: join(UNITY_LINUX, SCORES_EXT_FILE),
+      scoreDataBackup: join(UNITY_LINUX, SCORE_DATA_BACKUP_FILE),
+      scoresExtBackup: join(UNITY_LINUX, SCORES_EXT_BACKUP_FILE)
     })
+  })
+
+  it('identifies a directory by a backup when the primaries are gone', () => {
+    // The game renames a file it considers damaged out of the way, which can leave a directory
+    // holding only backups. That is still the right directory, and on macOS, where there are two
+    // candidates, taking it or not is the difference between the user's data and the wrong guess.
+    const older = join(HOME, 'Library', 'Application Support', 'com.srylain.CloneHero')
+    const backup = join(older, SCORES_EXT_BACKUP_FILE)
+    expect(scoreDataPaths(HOME, 'darwin', (p) => p === backup)?.scoresExtBackup).toBe(backup)
   })
 
   it('picks a directory holding only one of the two', () => {
@@ -156,5 +175,128 @@ describe('scoreDataPaths', () => {
     expect(scoreDataPaths(HOME, 'darwin', never)?.scoreData).toBe(
       join(HOME, 'Library', 'Application Support', 'srylain Inc_', 'Clone Hero', SCORE_DATA_FILE)
     )
+  })
+})
+
+/**
+ * The user's own answer, and what happens when it is wrong.
+ *
+ * The probe is verified on Linux and inferred everywhere else, so the setting is how a Windows,
+ * macOS or portable install is reached at all. The requirement it exists to meet is not that a
+ * chosen folder works; it is that a chosen folder which does NOT work says so.
+ */
+describe('scoreFolderOverride', () => {
+  it('treats an empty or blank setting as no override', () => {
+    // Empty is the default and is also what clearing the setting writes, so it is the one value
+    // that has to mean "go back to probing".
+    expect(scoreFolderOverride('')).toBeNull()
+    expect(scoreFolderOverride('   ')).toBeNull()
+    expect(scoreFolderOverride(undefined)).toBeNull()
+    expect(scoreFolderOverride(null)).toBeNull()
+  })
+
+  it('keeps a real path, trimmed', () => {
+    expect(scoreFolderOverride(' /mnt/games/CloneHero ')).toBe('/mnt/games/CloneHero')
+  })
+})
+
+describe('resolveScoreDataPaths', () => {
+  const chosen = join('/mnt', 'Slappe_Schijf', 'Games', 'CloneHero')
+
+  it('reads the chosen folder instead of probing', () => {
+    expect(resolveScoreDataPaths(chosen, HOME, 'linux', always)).toEqual({
+      scoreData: join(chosen, SCORE_DATA_FILE),
+      scoresExt: join(chosen, SCORES_EXT_FILE),
+      scoreDataBackup: join(chosen, SCORE_DATA_BACKUP_FILE),
+      scoresExtBackup: join(chosen, SCORES_EXT_BACKUP_FILE)
+    })
+  })
+
+  it('keeps the chosen folder even when nothing is in it any more', () => {
+    // A folder that has gone missing must keep resolving to itself. Sliding back to a probe
+    // would quietly replace the user's answer with a guess, and they would have no way to tell.
+    expect(resolveScoreDataPaths(chosen, HOME, 'linux', never)?.scoreData).toBe(
+      join(chosen, SCORE_DATA_FILE)
+    )
+  })
+
+  it('answers on a platform that has no probe at all', () => {
+    // The whole point on an unrecognised platform: the probe has nothing and the user does.
+    expect(resolveScoreDataPaths(chosen, HOME, 'freebsd', never)).not.toBeNull()
+    expect(resolveScoreDataPaths('', HOME, 'freebsd', never)).toBeNull()
+  })
+
+  it('returns to the probe when the override is cleared', () => {
+    expect(resolveScoreDataPaths('', HOME, 'linux', always)?.scoreData).toBe(
+      join(UNITY_LINUX, SCORE_DATA_FILE)
+    )
+  })
+})
+
+describe('inspectScoreFolder', () => {
+  const folderWith = (names: string[]): string => {
+    const dir = join(tmpDir('score-folder'), 'Clone Hero')
+    mkdirSync(dir, { recursive: true })
+    for (const name of names) writeFileSync(join(dir, name), 'x')
+    return dir
+  }
+
+  it('names what it found in a folder that has the files', () => {
+    const dir = folderWith([SCORE_DATA_FILE, SCORES_EXT_FILE, 'settings.ini'])
+    const report = inspectScoreFolder(dir)
+    expect(report).toMatchObject({ exists: true, usable: true, quarantined: [] })
+    expect(report.found).toEqual([SCORE_DATA_FILE, SCORES_EXT_FILE])
+    expect(describeScoreFolder(report)).toBe(`Found scoredata.bin and scoresext.bin in ${dir}.`)
+  })
+
+  it('counts a folder with only a backup as usable', () => {
+    // One readable file is enough to be worth pointing Encore at: the watcher decides what can
+    // be merged, and a folder holding a backup holds scores.
+    const report = inspectScoreFolder(folderWith([SCORE_DATA_BACKUP_FILE]))
+    expect(report.usable).toBe(true)
+    expect(report.found).toEqual([SCORE_DATA_BACKUP_FILE])
+  })
+
+  it('says what it looked for when a folder holds none of it', () => {
+    // The failure this whole setting exists to prevent is a useless path stored in silence.
+    const dir = folderWith(['settings.ini', 'songcache.bin'])
+    const report = inspectScoreFolder(dir)
+    expect(report).toMatchObject({ exists: true, usable: false, found: [], quarantined: [] })
+    expect(describeScoreFolder(report)).toBe(
+      `No score files in ${dir}. Encore looked for scoredata.bin, scoresext.bin, ` +
+        'scoredata_backup.bin and scoresext_backup.bin, and found none of them.'
+    )
+  })
+
+  it('explains a folder holding only what Clone Hero quarantined', () => {
+    // Not the same as an empty folder, and a user told "nothing here" would go looking for a
+    // different folder when what they have is a Clone Hero that threw its score files away.
+    const dir = folderWith(['scoredata_corrupted_0.bin', 'scoresext_corrupted_12.bin'])
+    const report = inspectScoreFolder(dir)
+    expect(report.usable).toBe(false)
+    expect(report.quarantined).toEqual(['scoredata_corrupted_0.bin', 'scoresext_corrupted_12.bin'])
+    expect(describeScoreFolder(report)).toContain('found only scoredata_corrupted_0.bin')
+    expect(describeScoreFolder(report)).toContain('cannot read it')
+  })
+
+  it('says so when there is no folder there at all', () => {
+    const missing = join(tmpDir('score-folder'), 'not-here')
+    const report = inspectScoreFolder(missing)
+    expect(report).toMatchObject({ exists: false, usable: false })
+    expect(describeScoreFolder(report)).toBe(`There is no folder at ${missing}.`)
+  })
+
+  it('matches the names case insensitively, and reports the spelling on disk', () => {
+    // Windows and macOS filesystems usually fold case, and a Scoredata.bin the game reads fine
+    // must not be reported as missing. The name in the message is the one the user can see.
+    const report = inspectScoreFolder(folderWith(['ScoreData.BIN']))
+    expect(report.usable).toBe(true)
+    expect(report.found).toEqual(['ScoreData.BIN'])
+  })
+
+  it('has an answer for a platform with no location and no override', () => {
+    const report = inspectScoreFolder(null)
+    expect(report).toMatchObject({ folder: null, exists: false, usable: false })
+    expect(describeScoreFolder(report)).toContain('Choose the folder yourself')
   })
 })

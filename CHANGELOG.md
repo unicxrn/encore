@@ -22,10 +22,20 @@ release.
   reported separately: the lifetime count for a chart already includes every play Encore recorded,
   and adding them would count those twice. The import runs at startup, which is the only moment a
   play made while Encore was closed can be picked up, and again whenever the game rewrites either
-  file. It is a read; nothing is ever written back to Clone Hero's files. Only the Linux location
-  has been verified against a real install. The Windows and macOS paths follow Unity's own
-  convention for where a game keeps this data and are probed rather than assumed. What it finds is
-  on the Stats tab, as its own block, and on the play count a chart carries in Installed.
+  file. It is a read; nothing is ever written back to Clone Hero's files. The Linux and
+  Windows locations have both been verified against a real install. The macOS path follows
+  Unity's own convention for where a game keeps this data and is probed rather than assumed. What it finds is
+  on the Stats tab, as its own block, and on the play count a chart carries in Installed. Settings
+  shows where Encore looked, and lets you point it at the folder yourself when the search is
+  wrong, which is also the answer for a portable install or a Clone Hero on another drive. A
+  folder with no score files in it is refused there and then, naming what was looked for and what
+  was in the folder instead, rather than being stored to go on finding nothing. Encore never
+  writes into that folder, whoever chose it.
+- When one of Clone Hero's score files refuses to parse, Encore reads the copy the game keeps
+  beside it rather than reporting nothing, and says when the figures came from one: a backup is a
+  save behind by definition, so it is only ever read when the live file cannot be, and a readable
+  pair is never passed over for older numbers. The files Clone Hero has renamed as damaged are
+  never read at all, because the game renamed them precisely because it could not read them.
 - The "No plays recorded" filter in Installed now also consults Clone Hero's own record, so a chart
   you wore out last year and have not touched since Encore was installed is no longer in the list.
   It is still not a complete answer and does not claim to be: a chart played on another machine, or

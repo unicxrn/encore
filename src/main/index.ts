@@ -27,7 +27,13 @@ import { ScanRunner } from './catalog/scan-runner'
 import { cancelLibraryScan, scanChart, scanLibrary, type ScanSummary } from './catalog/scanner'
 import { cancelIssueScan, scanIssues, lastIssueReport } from './catalog/issues'
 import { LibraryWatcher } from './catalog/watcher'
-import { scoreDataPaths, scoreStatsPath } from './play/location'
+import type { ScoreFolderSource } from '../shared/score-folder'
+import {
+  inspectScoreFolder,
+  resolveScoreDataPaths,
+  scoreFolderOverride,
+  scoreStatsPath
+} from './play/location'
 import { chartPlaySummaries, countPlays, playInsights, playStats, recordPlay } from './play/store'
 import {
   chartLifetimes,
@@ -323,10 +329,25 @@ function wireIpc(): {
    * subscribe to in order to learn the same thing.
    */
   const scoreFiles = new ScoreFileWatcher({
-    paths: scoreDataPaths(homedir(), process.platform, existsSync),
+    paths: resolveScoreDataPaths(
+      loadSettings(settingsPath).scoreFolder,
+      homedir(),
+      process.platform,
+      existsSync
+    ),
     importCharts: (charts) => importScoreBests(db, charts),
     onImport: () => send(IPC.evPlayRecorded, undefined)
   })
+
+  /**
+   * Whether the folder above came from the user or from the probe.
+   *
+   * Kept here rather than read from settings on every status call, which is a call a whole page
+   * of chart rows can make: the only thing that changes it is the settings handler below, and it
+   * changes it there.
+   */
+  let scoreFolderSource: ScoreFolderSource =
+    scoreFolderOverride(loadSettings(settingsPath).scoreFolder) === null ? 'probe' : 'override'
 
   // Named because two things need it: the sidecar manager installs into it, and locateFfmpeg
   // looks in it for the managed copy after PATH has been tried.
@@ -486,6 +507,18 @@ function wireIpc(): {
         watcher.start(s.libraryFolders.map((f) => f.path)).catch((err: unknown) => {
           console.error('LibraryWatcher restart failed:', err)
         })
+      }
+      // Same treatment for the score folder, and for a sharper reason: this setting exists for
+      // users the probe cannot help, and telling them to restart before they find out whether
+      // the folder they just picked worked would put the silence back.
+      if (s.scoreFolder !== prev.scoreFolder) {
+        scoreFolderSource = scoreFolderOverride(s.scoreFolder) === null ? 'probe' : 'override'
+        scoreFiles
+          .retarget(resolveScoreDataPaths(s.scoreFolder, homedir(), process.platform, existsSync))
+          .then(() => send(IPC.evPlayRecorded, undefined))
+          .catch((err: unknown) => {
+            console.error('ScoreFileWatcher retarget failed:', err)
+          })
       }
     },
     queryCharts: (f) => queryCharts(db, f),
@@ -767,11 +800,18 @@ function wireIpc(): {
         reason: scoreFiles.reason,
         scoreDataPath: scoreFiles.watchedPaths?.scoreData ?? null,
         scoresExtPath: scoreFiles.watchedPaths?.scoresExt ?? null,
-        lastImportAt: scoreFiles.lastImportAt
+        lastImportAt: scoreFiles.lastImportAt,
+        usedBackup: scoreFiles.usedBackup,
+        folderSource: scoreFolderSource
       },
       totals: lifetimeTotals(db),
       charts: chartLifetimes(db, checksums)
     }),
+    // An empty folder means the one being watched, which is how Settings shows the probe's own
+    // answer. Both cases are a listing of names and nothing else: Encore never opens a file here
+    // and never writes into the folder, whoever chose it.
+    scoreFolderReport: ({ folder }) =>
+      inspectScoreFolder(scoreFolderOverride(folder) ?? scoreFiles.watchedFolder),
     // saveTextFile: the user explicitly chose the destination path via the
     // system dialog, so we write there directly. There is no library containment
     // guard here: this is the intentional user-chosen exception to the write policy.
