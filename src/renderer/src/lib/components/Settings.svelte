@@ -14,6 +14,7 @@
   import { encore } from '../stores/bridge'
   import { formatBytes } from '../../../../shared/format'
   import { APP_VERSION } from '../../../../shared/constants'
+  import { describeScoreFolder, type ScoreFolderReport } from '../../../../shared/score-folder'
 
   interface SidecarStatus {
     installed: boolean
@@ -43,6 +44,50 @@
     await patchSettings({
       libraryFolders: $settings.libraryFolders.map((f) => ({ ...f, isDefault: f.path === path }))
     })
+  }
+
+  // ── Clone Hero's score folder ──────────────────────────────────────────────
+  /**
+   * Where Encore reads Clone Hero's score files, and the user's own answer when the search is
+   * wrong.
+   *
+   * Only the Linux location has ever been seen; Windows and macOS follow Unity's convention and
+   * nobody has confirmed them, and a portable install or a game on a second drive is in neither
+   * place. So the search is shown rather than assumed correct: a user can see where Encore is
+   * looking before deciding whether to point it somewhere else.
+   *
+   * A chosen folder is checked before it is stored, and a folder with no score files in it is
+   * refused with what was looked for and what was there. Storing it and saying nothing is the
+   * failure this whole setting exists to prevent, and it would look exactly like the bug it is
+   * meant to fix.
+   */
+  let scoreFolder = $state<ScoreFolderReport | null>(null)
+  let scoreFolderError = $state<string | null>(null)
+
+  // Asks about the folder in use, whether that is the user's or the search's. Main answers from
+  // the watcher, so this is where Encore is reading, not where it would read if restarted.
+  async function loadScoreFolder(): Promise<void> {
+    scoreFolder = await encore().scoreFolderReport('')
+  }
+
+  const chooseScoreFolder = async (): Promise<void> => {
+    const path = await encore().pickFolder()
+    if (!path) return
+    const report = await encore().scoreFolderReport(path)
+    if (!report.usable) {
+      // Refused, not stored. The message names the four files and what the folder held instead.
+      scoreFolderError = describeScoreFolder(report)
+      return
+    }
+    scoreFolderError = null
+    await patchSettings({ scoreFolder: path })
+    await loadScoreFolder()
+  }
+
+  const clearScoreFolder = async (): Promise<void> => {
+    scoreFolderError = null
+    await patchSettings({ scoreFolder: '' })
+    await loadScoreFolder()
   }
 
   // ── sidecar tools ──────────────────────────────────────────────────────────
@@ -210,6 +255,7 @@
   onMount(() => {
     void loadSidecarStatus()
     void loadBackups()
+    void loadScoreFolder()
     // A read of what main already concluded, not a second check. The startup one has usually
     // finished by the time anyone opens Settings, and asking GitHub again on every visit to this
     // tab would spend a request to be told the same thing.
@@ -256,6 +302,41 @@
       <p class="hint">Add your Clone Hero Songs folder. Downloads and scans need one.</p>
     {/if}
     <button class="btn-primary add" onclick={() => void addFolder()}>Add folder</button>
+  </section>
+
+  <section aria-labelledby="settings-scores">
+    <h2 id="settings-scores">Clone Hero scores</h2>
+    <p class="hint prose">
+      Encore reads Clone Hero's own score files to show what you played before Encore was installed.
+      It reads them and nothing else: nothing is ever written into this folder.
+    </p>
+    <p class="score-folder">{scoreFolder ? describeScoreFolder(scoreFolder) : '—'}</p>
+    {#if $settings.scoreFolder}
+      <p class="hint prose">
+        You chose this folder. Clearing it puts Encore back on its own search, which is right on
+        Linux and a good guess everywhere else.
+      </p>
+    {:else}
+      <p class="hint prose">
+        This is where Encore looked. Only the Linux location has been confirmed against a real
+        install, so if your scores are somewhere else, say where.
+      </p>
+    {/if}
+    {#if scoreFolderError}
+      <!-- The refusal. Nothing was stored, and this says what was looked for and what was in
+           the folder instead. -->
+      <p class="tool-error" role="alert">{scoreFolderError}</p>
+    {/if}
+    <div class="score-actions">
+      <button class="btn-primary" onclick={() => void chooseScoreFolder()}>
+        Choose score folder
+      </button>
+      {#if $settings.scoreFolder}
+        <button class="hairline sentence" onclick={() => void clearScoreFolder()}>
+          Use Encore's search
+        </button>
+      {/if}
+    </div>
   </section>
 
   <section aria-labelledby="settings-downloads">
@@ -640,6 +721,27 @@
   .hint {
     font-size: var(--fs-caption);
     color: var(--text-3);
+  }
+  /* A sentence rather than a label, so it wraps as prose instead of running under the card. */
+  .prose {
+    max-width: 68ch;
+    line-height: var(--lh-prose);
+  }
+  /* The path and the file names are the content of this line, so it is mono like every other
+     path in Settings, and it breaks anywhere: these paths are long and nested. */
+  .score-folder {
+    font-family: var(--font-mono);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+    line-height: var(--lh-prose);
+    margin: 10px 0;
+    overflow-wrap: anywhere;
+  }
+  .score-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
   }
   .tool-row {
     display: flex;

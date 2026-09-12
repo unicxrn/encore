@@ -24,13 +24,16 @@ import type { AppUpdateStatus } from '../shared/app-update'
 import {
   LifetimeScoreRequestSchema,
   PlaySummaryRequestSchema,
+  ScoreFolderRequestSchema,
   type ChartPlaySummary,
   type LifetimeScoreRequest,
   type LifetimeScores,
   type PlayDataStatus,
   type PlayInsights,
-  type PlayStats
+  type PlayStats,
+  type ScoreFolderRequest
 } from '../shared/play'
+import type { ScoreFolderReport } from '../shared/score-folder'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import { UpdateCheckRequestSchema } from '../shared/updates'
 import type { SidecarName, SidecarStatus } from './sidecars/manager'
@@ -235,6 +238,16 @@ export interface IpcDeps {
    * to a rendered page; the totals ignore it on purpose (see shared/play.ts).
    */
   playLifetime: (req: LifetimeScoreRequest) => LifetimeScores
+  /**
+   * What a folder holds of Clone Hero's score files, by name.
+   *
+   * The setting that overrides the probe is stored only after this has said the folder is of some
+   * use, which is the whole reason the call exists: a stored path that holds nothing would fail
+   * silently for as long as the user left it there. An empty `folder` asks about wherever Encore
+   * is reading now, so the same call answers "where are you looking" for a user who has not
+   * overridden anything.
+   */
+  scoreFolderReport: (req: ScoreFolderRequest) => ScoreFolderReport
 }
 
 const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
@@ -465,6 +478,11 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   // rejected.
   ipcMain.handle(IPC.playLifetime, (_e, raw) =>
     deps.playLifetime(LifetimeScoreRequestSchema.parse(raw ?? {}))
+  )
+  // A path from the renderer, and the one thing done with it is a directory listing. Nothing
+  // here opens a file, and nothing anywhere writes into the folder: see play/read-only.test.ts.
+  ipcMain.handle(IPC.playScoreFolder, (_e, raw) =>
+    deps.scoreFolderReport(ScoreFolderRequestSchema.parse(raw ?? { folder: '' }))
   )
   ipcMain.handle(IPC.saveTextFile, (e, raw) => {
     const { defaultName, content } = SaveTextFileSchema.parse(raw)

@@ -165,7 +165,9 @@ const deps = (): IpcDeps => ({
       reason: 'ok',
       scoreDataPath: '/home/u/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
       scoresExtPath: '/home/u/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
-      lastImportAt: '2026-09-12T09:00:00.000Z'
+      lastImportAt: '2026-09-12T09:00:00.000Z',
+      usedBackup: false,
+      folderSource: 'probe'
     },
     totals: {
       charts: 2,
@@ -178,6 +180,14 @@ const deps = (): IpcDeps => ({
       observedCharts: 2
     },
     charts: []
+  }),
+  scoreFolderReport: vi.fn().mockReturnValue({
+    folder: '/home/u/.config/unity3d/srylain Inc_/Clone Hero',
+    exists: true,
+    lookedFor: ['scoredata.bin', 'scoresext.bin', 'scoredata_backup.bin', 'scoresext_backup.bin'],
+    found: ['scoredata.bin', 'scoresext.bin'],
+    quarantined: [],
+    usable: true
   })
 })
 
@@ -1048,6 +1058,21 @@ describe('registerIpc', () => {
     // for the rows of no charts, which is what a page showing nothing wants.
     await ipc.invoke(IPC.playLifetime, { checksums: [] })
     expect(d.playLifetime).toHaveBeenCalledWith({ checksums: [] })
+  })
+
+  it('routes play:score-folder, and treats an absent payload as the folder in use', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.playScoreFolder, { folder: '/mnt/games/CloneHero' })
+    expect(d.scoreFolderReport).toHaveBeenCalledWith({ folder: '/mnt/games/CloneHero' })
+    // No payload, and an empty folder, are the same question: where are you reading now. The
+    // renderer asks it on mount, before the user has chosen anything.
+    await ipc.invoke(IPC.playScoreFolder, undefined)
+    expect(d.scoreFolderReport).toHaveBeenLastCalledWith({ folder: '' })
+    // Not a string is not a folder. The payload crosses the boundary from the renderer like any
+    // other and is parsed rather than trusted.
+    await expect(ipc.invoke(IPC.playScoreFolder, { folder: 42 })).rejects.toThrow()
   })
 
   it('validates checksums at the play:summaries boundary', async () => {

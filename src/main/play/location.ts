@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import type { ScoreFolderReport } from '../../shared/score-folder'
 
 /**
  * Where Clone Hero keeps the files Encore reads: `scorestats.json`, and the two score files.
@@ -127,10 +128,64 @@ export const SCORE_DATA_FILE = 'scoredata.bin'
 /** The companion file holding the score the game actually reports. See play/scoredata.ts. */
 export const SCORES_EXT_FILE = 'scoresext.bin'
 
-/** The pair, which is only ever read together: neither file alone decodes into anything. */
+/**
+ * The copy Clone Hero keeps of each file, one save behind.
+ *
+ * The game writes these itself, beside the primaries, and Encore reads one only when the primary
+ * it belongs to refuses to parse (play/score-watcher.ts). A backup is older than its primary by
+ * definition, so it is never preferred; it is what there is when the alternative is nothing.
+ */
+export const SCORE_DATA_BACKUP_FILE = 'scoredata_backup.bin'
+export const SCORES_EXT_BACKUP_FILE = 'scoresext_backup.bin'
+
+/**
+ * Every name Encore reads, in the order a user should be told about them.
+ *
+ * The game's own metadata names three more: `scores.bin`, which predates the pair above and which
+ * nothing here decodes, and the two quarantine names below. None of the three is read, and a
+ * folder holding only those is not a folder Encore can use.
+ */
+export const SCORE_FILE_NAMES = [
+  SCORE_DATA_FILE,
+  SCORES_EXT_FILE,
+  SCORE_DATA_BACKUP_FILE,
+  SCORES_EXT_BACKUP_FILE
+]
+
+/**
+ * What Clone Hero renames a score file to when it decides the file is damaged.
+ *
+ * `scoredata_corrupted_0.bin`, `scoresext_corrupted_1.bin`, and so on. Encore never reads one,
+ * and the reason is not squeamishness: the game renamed the file because IT could not read it,
+ * which makes it the least likely of anything in the folder to parse; the index carries no
+ * ordering anyone has documented, so "the newest quarantined file" is not a thing that can be
+ * picked; and a number recovered from one would be presented beside live ones with nothing to
+ * say it came from a file the game threw away. They are reported to the user, so a folder that
+ * holds only these can be explained rather than called empty, and that is the whole of their use.
+ */
+const CORRUPTED_SCORE_FILE = /^score(?:data|sext)_corrupted_.*\.bin$/i
+
+/**
+ * The files read as a set: the pair, and the backup of each.
+ *
+ * `scoreData` and `scoresExt` are the primaries and are what the UI reports as "where Encore
+ * looked". The two backups are Clone Hero's own and are only read when their primary refuses.
+ */
 export interface ScoreDataPaths {
   scoreData: string
   scoresExt: string
+  scoreDataBackup: string
+  scoresExtBackup: string
+}
+
+/** The four paths inside one directory. The only place the set is composed. */
+export function scoreDataPathsIn(dir: string): ScoreDataPaths {
+  return {
+    scoreData: join(dir, SCORE_DATA_FILE),
+    scoresExt: join(dir, SCORES_EXT_FILE),
+    scoreDataBackup: join(dir, SCORE_DATA_BACKUP_FILE),
+    scoresExtBackup: join(dir, SCORES_EXT_BACKUP_FILE)
+  }
 }
 
 /**
@@ -193,10 +248,11 @@ export function scoreDataDirCandidates(home: string, platform: NodeJS.Platform):
  * when none does, for the same reason `scoreStatsPath` does: most machines running Encore have no
  * Clone Hero at all, and the watcher still needs a directory to watch in case one appears.
  *
- * Either file rather than both, because one of them is enough to identify the directory and the
- * two are not always in step: `scoresext.bin` is the newer of the pair, so an install that has
- * not written it yet has the right directory and only one file in it. What to do about a half
- * present pair is the reader's problem, not the locator's (play/score-watcher.ts refuses it).
+ * Any of the four files rather than all of them, because one is enough to identify the directory
+ * and they are not always in step: `scoresext.bin` is the newer of the pair, so an install that
+ * has not written it yet has the right directory and only one file in it, and an install whose
+ * primary the game has quarantined may have only a backup left. What to do about a half present
+ * set is the reader's problem, not the locator's (play/score-watcher.ts).
  */
 export function scoreDataPaths(
   home: string,
@@ -205,8 +261,96 @@ export function scoreDataPaths(
 ): ScoreDataPaths | null {
   const dirs = scoreDataDirCandidates(home, platform)
   if (dirs.length === 0) return null
-  const dir =
-    dirs.find((d) => exists(join(d, SCORE_DATA_FILE)) || exists(join(d, SCORES_EXT_FILE))) ??
-    dirs[0]
-  return { scoreData: join(dir, SCORE_DATA_FILE), scoresExt: join(dir, SCORES_EXT_FILE) }
+  const dir = dirs.find((d) => SCORE_FILE_NAMES.some((name) => exists(join(d, name)))) ?? dirs[0]
+  return scoreDataPathsIn(dir)
+}
+
+/**
+ * The folder the user pointed Encore at, or null when they have not.
+ *
+ * One rule in one place, because two callers need the same answer: the resolver below, and the
+ * status that says whether a user is looking at their own choice or at Encore's probe. Trimmed
+ * because a path that is only whitespace is somebody's cleared setting, not a folder.
+ */
+export function scoreFolderOverride(setting: string | null | undefined): string | null {
+  const trimmed = (setting ?? '').trim()
+  return trimmed === '' ? null : trimmed
+}
+
+/**
+ * Where to read the score files, honouring the user's setting over the probe.
+ *
+ * The override wins outright and is not probed for plausibility: it was checked when it was
+ * chosen (`inspectScoreFolder`), and a folder that has since gone missing must keep resolving to
+ * itself rather than silently sliding back to a guess. Clearing the setting returns to the probe,
+ * which is the only way back.
+ *
+ * This is also the answer for a portable Windows install and for a Clone Hero on a second drive,
+ * neither of which any probe can find: the user says where it is.
+ */
+export function resolveScoreDataPaths(
+  override: string | null | undefined,
+  home: string,
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean = existsSync
+): ScoreDataPaths | null {
+  const chosen = scoreFolderOverride(override)
+  if (chosen !== null) return scoreDataPathsIn(chosen)
+  return scoreDataPaths(home, platform, exists)
+}
+
+/**
+ * List a directory, or null when there is nothing there to list.
+ *
+ * Null covers both "no such directory" and "cannot be read": either way the folder is no use and
+ * the report says so. A read that throws for any other reason would be a bug worth seeing, but
+ * there is nothing a user could do about it here either, so it is the same answer.
+ */
+function listDir(dir: string): string[] | null {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What one folder holds, so a user can be told before Encore commits to it.
+ *
+ * Reads names, never contents: this answers "is this folder any use" and the parse is the
+ * watcher's job. Matching is case insensitive because Windows and macOS filesystems usually are,
+ * and a `Scoredata.bin` that the game reads fine must not be reported as missing; the name put in
+ * the report is the one on disk, so a user is never told about a file spelled differently from
+ * the one they can see.
+ *
+ * `list` is injected for the same reason `exists` is above: the states worth testing are a folder
+ * that does not exist and a folder holding only quarantined files, and neither needs a real one.
+ */
+export function inspectScoreFolder(
+  folder: string | null,
+  list: (dir: string) => string[] | null = listDir
+): ScoreFolderReport {
+  const report: ScoreFolderReport = {
+    folder,
+    exists: false,
+    lookedFor: [...SCORE_FILE_NAMES],
+    found: [],
+    quarantined: [],
+    usable: false
+  }
+  if (folder === null) return report
+  const entries = list(folder)
+  if (entries === null) return report
+  report.exists = true
+  const wanted = new Set(SCORE_FILE_NAMES.map((name) => name.toLowerCase()))
+  for (const entry of entries) {
+    const lower = entry.toLowerCase()
+    if (wanted.has(lower)) report.found.push(entry)
+    else if (CORRUPTED_SCORE_FILE.test(entry)) report.quarantined.push(entry)
+  }
+  // Sorted so the message does not change with the order the filesystem happened to return.
+  report.found.sort()
+  report.quarantined.sort()
+  report.usable = report.found.length > 0
+  return report
 }

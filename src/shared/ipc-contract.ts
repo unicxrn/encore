@@ -86,6 +86,11 @@ export const IPC = {
   // rows. Lifetime numbers and observed ones are separately named in the payload: the lifetime
   // count already includes every play Encore watched, so adding them double counts.
   playLifetime: 'play:lifetime',
+  // What a folder holds of Clone Hero's score files, so the setting that overrides the probe can
+  // say what it found before anything is stored. An empty folder in the request means "report on
+  // wherever you are reading now", which is how the probe's own answer reaches Settings without a
+  // second channel. Reads names, never contents, and writes nothing.
+  playScoreFolder: 'play:score-folder',
   // Asks Chorus whether it holds a different version of the given charts (all of them when the
   // list is empty). Never runs on its own: each request costs API budget against a 50-per-minute
   // limit, so it is always something the user asked for. updatesLast replays the session's

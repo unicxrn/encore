@@ -2,11 +2,14 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { get } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppUpdateStatus } from '../../../../shared/app-update'
+import type { ScoreFolderReport } from '../../../../shared/score-folder'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import { appUpdate } from '../stores/app-update'
 import { closeWhatsNew, whatsNew } from '../stores/whats-new'
 import { APP_VERSION } from '../../../../shared/constants'
 import { finishTour, tourOpen } from '../stores/tour'
+import { settings } from '../stores/settings'
+import { defaultSettings } from '../../../../shared/settings-defaults'
 import Settings from './Settings.svelte'
 
 /**
@@ -21,6 +24,22 @@ import Settings from './Settings.svelte'
 
 const SIDECAR = { installed: false, version: null, path: '/s/bin' }
 
+const SCORE_DIR = '/home/u/.config/unity3d/srylain Inc_/Clone Hero'
+const LOOKED_FOR = [
+  'scoredata.bin',
+  'scoresext.bin',
+  'scoredata_backup.bin',
+  'scoresext_backup.bin'
+]
+const SCORE_FOLDER_FOUND: ScoreFolderReport = {
+  folder: SCORE_DIR,
+  exists: true,
+  lookedFor: LOOKED_FOR,
+  found: ['scoredata.bin', 'scoresext.bin'],
+  quarantined: [],
+  usable: true
+}
+
 const APPIMAGE_STATUS: AppUpdateStatus = {
   currentVersion: '0.1.0',
   target: 'appimage',
@@ -31,7 +50,8 @@ const APPIMAGE_STATUS: AppUpdateStatus = {
 
 function stubEncore(over: Record<string, unknown> = {}): void {
   vi.stubGlobal('encore', {
-    settingsGet: () => Promise.resolve({ libraryFolders: [] }),
+    settingsGet: () => Promise.resolve({ libraryFolders: [], scoreFolder: '' }),
+    scoreFolderReport: () => Promise.resolve(SCORE_FOLDER_FOUND),
     sidecarStatus: () => Promise.resolve(SIDECAR),
     backupsList: (): Promise<{ backups: FixBackup[]; totalBytes: number }> =>
       Promise.resolve({ backups: [], totalBytes: 0 }),
@@ -79,6 +99,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   appUpdate.set(null)
   closeWhatsNew()
+  settings.set(defaultSettings())
 })
 
 /**
@@ -386,5 +407,124 @@ describe('Settings: what is new', () => {
     renderWith({ ...APPIMAGE_STATUS, state: { kind: 'current' } })
     await screen.findByText('0.1.0 · UP TO DATE')
     expect(screen.queryByRole('button', { name: /What is new in Encore/ })).toBeNull()
+  })
+})
+
+/**
+ * The score folder row.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing below says anything about how the row
+ * looks or where it sits in the page; that is desktop QA, and this section is a visual change
+ * nobody has seen yet. What is pinned here is the behaviour the setting exists for: the search's
+ * own answer is on screen before anyone decides whether to override it, a folder with no score
+ * files in it is refused out loud rather than stored, and clearing goes back to the search.
+ */
+describe('Settings: Clone Hero score folder', () => {
+  const reportOf = (over: Partial<ScoreFolderReport>): ScoreFolderReport => ({
+    ...SCORE_FOLDER_FOUND,
+    ...over
+  })
+
+  it('shows where Encore is reading before anyone chooses anything', async () => {
+    // The probe is verified on Linux only. A user whose scores are somewhere else can only tell
+    // that from seeing where Encore looked.
+    stubEncore()
+    render(Settings)
+    expect(
+      await screen.findByText(`Found scoredata.bin and scoresext.bin in ${SCORE_DIR}.`)
+    ).toBeTruthy()
+  })
+
+  it('refuses a folder with no score files, and stores nothing', async () => {
+    // The failure this setting exists to prevent. A stored path that holds nothing would go on
+    // finding nothing for as long as the user left it there, with no way to tell why.
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    const empty = reportOf({
+      folder: '/mnt/games/CloneHero',
+      found: [],
+      usable: false
+    })
+    stubEncore({
+      settingsSet,
+      pickFolder: () => Promise.resolve('/mnt/games/CloneHero'),
+      scoreFolderReport: (folder: string) =>
+        Promise.resolve(folder === '' ? SCORE_FOLDER_FOUND : empty)
+    })
+    render(Settings)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Choose score folder' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('No score files in /mnt/games/CloneHero')
+    // Named, so the user can go and look for them rather than guess what Encore wanted.
+    expect(alert.textContent).toContain('scoredata.bin, scoresext.bin, scoredata_backup.bin')
+    expect(settingsSet).not.toHaveBeenCalled()
+  })
+
+  it('explains a folder holding only what Clone Hero quarantined', async () => {
+    // Not the same as an empty folder: it is the right folder, and the game threw the files away.
+    stubEncore({
+      settingsSet: vi.fn().mockResolvedValue(undefined),
+      pickFolder: () => Promise.resolve('/mnt/games/CloneHero'),
+      scoreFolderReport: (folder: string) =>
+        Promise.resolve(
+          folder === ''
+            ? SCORE_FOLDER_FOUND
+            : reportOf({
+                folder: '/mnt/games/CloneHero',
+                found: [],
+                quarantined: ['scoredata_corrupted_0.bin'],
+                usable: false
+              })
+        )
+    })
+    render(Settings)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Choose score folder' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('scoredata_corrupted_0.bin')
+  })
+
+  it('stores a folder that has the files, and reads the new one back', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    const chosen = reportOf({ folder: '/mnt/games/CloneHero' })
+    stubEncore({
+      settingsSet,
+      pickFolder: () => Promise.resolve('/mnt/games/CloneHero'),
+      scoreFolderReport: () => Promise.resolve(chosen)
+    })
+    render(Settings)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Choose score folder' }))
+
+    await waitFor(() => {
+      expect(settingsSet).toHaveBeenCalledWith(
+        expect.objectContaining({ scoreFolder: '/mnt/games/CloneHero' })
+      )
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(
+      await screen.findByText(`Found scoredata.bin and scoresext.bin in /mnt/games/CloneHero.`)
+    ).toBeTruthy()
+  })
+
+  it('offers the way back only once a folder has been chosen, and clearing empties it', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({ settingsSet })
+    render(Settings)
+    expect(screen.queryByRole('button', { name: "Use Encore's search" })).toBeNull()
+
+    settings.set({ ...defaultSettings(), scoreFolder: '/mnt/games/CloneHero' })
+    await fireEvent.click(await screen.findByRole('button', { name: "Use Encore's search" }))
+    await waitFor(() => {
+      expect(settingsSet).toHaveBeenCalledWith(expect.objectContaining({ scoreFolder: '' }))
+    })
+  })
+
+  it('says so when the platform has no location and nothing has been chosen', async () => {
+    // Windows and macOS are Unity convention; anything else has no candidate at all, and the
+    // honest answer is that the user has to say where.
+    stubEncore({
+      scoreFolderReport: () =>
+        Promise.resolve(reportOf({ folder: null, exists: false, found: [], usable: false }))
+    })
+    render(Settings)
+    expect(await screen.findByText(/Choose the folder yourself/)).toBeTruthy()
   })
 })
