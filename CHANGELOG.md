@@ -10,7 +10,7 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-13
 
 ### Added
 
@@ -226,4 +226,6 @@ The first release.
 - The deb and the snap were inspected, not installed.
 - x86_64 only.
 
+[0.3.0]: https://github.com/unicxrn/encore/releases/tag/v0.3.0
+[0.2.0]: https://github.com/unicxrn/encore/releases/tag/v0.2.0
 [0.1.0]: https://github.com/unicxrn/encore/releases/tag/v0.1.0

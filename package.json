@@ -1,6 +1,6 @@
 {
   "name": "encore",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "GPL-3.0-or-later",
   "description": "Manage a Clone Hero song library: browse and download charts from Chorus Encore, scan local songs, and attach album art, video, backgrounds and synced lyrics.",
   "main": "./out/main/index.js",
