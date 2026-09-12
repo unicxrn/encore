@@ -305,15 +305,11 @@
    * against the live service: a loose album match on "Utopia" also returns "Dystopia: Road to
    * Utopia" and "Black Utopia", while the exact one returns the album the user pointed at.
    *
-   * The plain search term is cleared as part of this. `/search/advanced` ignores it (see
-   * `searchCharts`), so a term left in a visible box would be describing results it had no part
-   * in. `setQuery` is called here rather than left to Explore's own mount effect so that the
-   * effect finds the query already answered: otherwise it would schedule a second request for the
-   * rows `applyAdvanced` is fetching, against a budget of 50 a minute.
+   * The plain search term is cleared as part of this, by `applyAdvanced` rather than here:
+   * `/search/advanced` ignores the term (see `searchCharts`), so emptying the box is half of the
+   * one rule the store keeps, the other half being that typing a term drops the filters.
    */
   const searchTag = (field: AdvancedTextField, value: string): void => {
-    globalQuery.set('')
-    browseSearch.setQuery('')
     const query = emptyAdvanced()
     query.text[field] = { value, exact: true, exclude: false }
     browseSearch.setAdvancedDraft(query)

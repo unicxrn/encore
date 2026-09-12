@@ -69,6 +69,20 @@ release.
   page after the first ever arrived on its own. It now fills the box on its own and keeps going
   as the end of the list stays in view, so the button at the bottom is there for the keyboard and
   for the 500 chart ceiling rather than for every page.
+- Settings could hang on the two tools it manages. Reading yt-dlp's or ffmpeg's version waited on
+  the binary forever, so one that never exited left both rows on their placeholder for the rest of
+  the session, and `yt-dlp -U` on a stalled connection left the Update button disabled with
+  nothing to press. The version check now gives up after 5 seconds and the self-update after 2
+  minutes, stops the process either way, and says so. A tool that is installed but did not answer
+  reads VERSION UNKNOWN rather than NOT INSTALLED, which is what it used to claim about a file
+  sitting on disk next to an Update button.
+- Typing in the title bar's search box while Explore had advanced filters applied changed the
+  results without searching for what was typed: Chorus Encore's advanced endpoint takes no search
+  term, so the term was discarded. Explore's own box knew this and turned itself off; the title
+  bar's did not. Now a search term clears the applied filters instead, so both boxes do what they
+  look like they do and neither is disabled. Explore says how many filters the search cleared and
+  offers to put them back. The panel keeps every field either way, so they are one press of Search
+  away whether or not the note is still on screen.
 
 ## [0.2.0] - 2026-09-11
 

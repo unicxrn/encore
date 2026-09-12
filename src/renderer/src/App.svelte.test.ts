@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { readable } from 'svelte/store'
+import { get, readable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from '../../shared/settings-defaults'
 import { APP_VERSION } from '../../shared/constants'
 import { ChartRecordSchema, type Settings } from '../../shared/schemas'
 import App from './App.svelte'
 import { settings, settingsLoaded } from './lib/stores/settings'
+import { browseSearch } from './lib/stores/search'
+import { globalQuery } from './lib/stores/global-search'
+import { emptyAdvanced } from './lib/api/advanced'
 import { runtimeError } from './lib/stores/runtime-errors'
 import { finishTour } from './lib/stores/tour'
 
@@ -26,6 +29,19 @@ vi.mock('./lib/components/Tools.svelte', () => ({
     boom.remaining -= 1
     throw new Error('Tools exploded')
   }
+}))
+
+/**
+ * Explore's own search, which App mounts as soon as anything is typed in the title bar.
+ *
+ * Mocked at the module the way Browse's tests mock it: `browseSearch` was built with the real
+ * `fetch` at import time, so nothing stubbed afterwards reaches it, and an unmocked run here is a
+ * test that talks to api.enchor.us.
+ */
+const searchCharts = vi.fn()
+vi.mock('./lib/api/enchor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/enchor')>()),
+  searchCharts: (...args: unknown[]) => searchCharts(...args) as Promise<unknown>
 }))
 
 // Home's latest-charts row fetches from the Enchor API on mount. Stubbed at the store, as
@@ -97,6 +113,7 @@ async function navigate(name: string): Promise<void> {
 
 beforeEach(() => {
   boom.remaining = Infinity
+  searchCharts.mockResolvedValue({ found: 0, out_of: 0, page: 1, data: [] })
   stubEncore()
   // `settingsLoaded` false leaves Home deliberately empty, which is the quietest starting
   // point: nothing else in the pane can throw while a boundary test is running.
@@ -345,6 +362,64 @@ describe('App keyboard shortcuts', () => {
  * The welcome tour, as App wires it: when it opens on its own, what closing writes, and how it
  * sits in the dismiss order with the shortcut sheet.
  */
+/**
+ * The title bar's search box, which is the one that had no idea Explore's advanced filters
+ * existed. It set the query, Explore re-ran the search, and `/search/advanced` threw the term
+ * away, so the results moved for reasons unrelated to what was typed.
+ *
+ * The rule it now obeys lives in the store rather than here, which is why this file needs no
+ * change to `onSearchInput`: both boxes write `globalQuery`, and `setQuery` is where a plain term
+ * and the applied filters are reconciled. These tests are that the title bar really does reach it.
+ */
+describe('App title bar search against advanced filters', () => {
+  afterEach(async () => {
+    browseSearch.clearAdvanced()
+    globalQuery.set('')
+    browseSearch.setQuery('')
+    // The store debounces 300ms, so the run that reset arms is waited out here rather than
+    // landing in the middle of another test.
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  /** Applies one filter the way a chart Detail's tag chip does. */
+  function applyCharterFilter(): void {
+    const query = emptyAdvanced()
+    query.text.charter.value = 'Harmonix'
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+  }
+
+  it('clears the applied filters, and runs the term that was typed', async () => {
+    render(App)
+    // Held before typing: typing routes to Explore, which puts a second box of the same name on
+    // screen, and this test is about the one in the title bar.
+    const box = screen.getByRole('textbox', { name: 'Search charts' })
+    applyCharterFilter()
+    expect(get(browseSearch.advancedCount)).toBe(1)
+
+    await fireEvent.input(box, { target: { value: 'everlong' } })
+
+    await waitFor(() => expect(get(browseSearch.advancedCount)).toBe(0))
+    await waitFor(() =>
+      expect((searchCharts.mock.calls.at(-1)?.[0] as { search: string }).search).toBe('everlong')
+    )
+  })
+
+  it('leaves the panel draft intact, so the filter set is not destroyed', async () => {
+    render(App)
+    const box = screen.getByRole('textbox', { name: 'Search charts' })
+    applyCharterFilter()
+
+    await fireEvent.input(box, { target: { value: 'yyz' } })
+    await waitFor(() => expect(get(browseSearch.advancedCount)).toBe(0))
+
+    // The whole safety property: what was applied is gone, what was typed into the panel is not.
+    expect(get(browseSearch.advancedDraftCount)).toBe(1)
+    expect(get(browseSearch.advancedDraft).text.charter.value).toBe('Harmonix')
+    expect(get(browseSearch.advancedDropped)).toBe(1)
+  })
+})
+
 describe('App welcome tour', () => {
   const TOUR = 'What Encore does'
   const SHEET = 'Keyboard shortcuts'

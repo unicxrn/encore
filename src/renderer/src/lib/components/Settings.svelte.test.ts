@@ -81,6 +81,47 @@ afterEach(() => {
   closeWhatsNew()
 })
 
+/**
+ * The sidecar rows' third state.
+ *
+ * `installed` and `version` are separate answers, and a binary that is on disk but did not answer
+ * the version probe (non-zero exit, no output, or killed for running past the probe's timeout)
+ * is both installed and version-less. That used to render as NOT INSTALLED, beside an Update
+ * button that only exists because it is installed.
+ *
+ * jsdom applies no CSS, so this says nothing about where the line sits or how it reads next to
+ * the row; it pins the text and which button is offered.
+ */
+describe('Settings: sidecar version states', () => {
+  const statusFor = (over: Record<string, unknown>): Record<string, unknown> => ({
+    installed: true,
+    version: null,
+    path: '/s/bin',
+    ...over
+  })
+
+  it('names an installed tool that did not answer the version probe', async () => {
+    stubEncore({
+      sidecarStatus: (name: string) =>
+        Promise.resolve(statusFor(name === 'ytdlp' ? {} : { version: 'ffmpeg version 6.1' }))
+    })
+    render(Settings)
+
+    expect(await screen.findAllByText('VERSION UNKNOWN')).toHaveLength(1)
+    // Still installed, so the button that acts on an installed tool is the one offered.
+    expect(screen.queryByRole('button', { name: 'Install yt-dlp' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Update yt-dlp' })).toBeTruthy()
+  })
+
+  it('still says NOT INSTALLED when the file is genuinely absent', async () => {
+    stubEncore({ sidecarStatus: () => Promise.resolve(statusFor({ installed: false })) })
+    render(Settings)
+
+    expect(await screen.findAllByText('NOT INSTALLED')).toHaveLength(2)
+    expect(screen.queryByText('VERSION UNKNOWN')).toBeNull()
+  })
+})
+
 describe('Settings: undo history', () => {
   it('says there is nothing to undo, and offers no button, on a fresh install', async () => {
     stubEncore()
