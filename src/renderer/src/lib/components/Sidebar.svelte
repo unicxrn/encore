@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type ViewId = 'home' | 'browse' | 'library' | 'assets' | 'tools' | 'settings'
+  export type ViewId = 'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'settings'
 </script>
 
 <script lang="ts">
@@ -56,6 +56,15 @@
           // The view id is unchanged; this is a label-only rename.
           label: 'Asset Studio',
           d: 'M12 3v10.5M9.5 12.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM12 6c2 0 3-1 5-1v4c-2 0-3 1-5 1'
+        },
+        {
+          view: 'stats',
+          // Last in this group rather than next to Installed, which reads better and costs
+          // more: `Mod+1…7` follows this order, so a row inserted higher up would move every
+          // digit below it. Here it takes the next free digit and only Issues and Settings
+          // shift, which is the smallest change that still puts it where it belongs.
+          label: 'Stats',
+          d: 'M4 19.5h16M7 19V11m5 8V5.5m5 13.5v-6'
         }
       ]
     },

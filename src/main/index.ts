@@ -28,7 +28,7 @@ import { cancelLibraryScan, scanChart, scanLibrary, type ScanSummary } from './c
 import { cancelIssueScan, scanIssues, lastIssueReport } from './catalog/issues'
 import { LibraryWatcher } from './catalog/watcher'
 import { scoreStatsPath } from './play/location'
-import { chartPlaySummaries, countPlays, playStats, recordPlay } from './play/store'
+import { chartPlaySummaries, countPlays, playInsights, playStats, recordPlay } from './play/store'
 import { PlayWatcher } from './play/watcher'
 import { runDownload } from './downloads/download'
 import { DownloadManager } from './downloads/manager'
@@ -730,6 +730,7 @@ function wireIpc(): {
     },
     playSummaries: (checksums) => chartPlaySummaries(db, checksums),
     playStats: () => playStats(db),
+    playInsights: () => playInsights(db),
     // saveTextFile: the user explicitly chose the destination path via the
     // system dialog, so we write there directly. There is no library containment
     // guard here: this is the intentional user-chosen exception to the write policy.

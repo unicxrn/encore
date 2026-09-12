@@ -95,6 +95,15 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
     sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),
     windowControl: vi.fn().mockResolvedValue(undefined),
     backupsList: vi.fn().mockResolvedValue({ backups: [], totalBytes: 0 }),
+    // The Stats tab asks the gate first and draws its "nothing recorded" sentence on this,
+    // which is the answer for a machine with no Clone Hero on it.
+    playStatus: vi.fn().mockResolvedValue({
+      available: false,
+      reason: 'noFile',
+      path: '/home/u/.clonehero/scorestats.json',
+      playCount: 0
+    }),
+    onPlayRecorded: vi.fn(() => () => {}),
     ...over
   }
   vi.stubGlobal('encore', api)
@@ -266,8 +275,9 @@ describe('App keyboard shortcuts', () => {
     ['Digit2', 'Explore'],
     ['Digit3', 'Installed'],
     ['Digit4', 'Asset Studio'],
-    ['Digit5', 'Issues'],
-    ['Digit6', 'Settings']
+    ['Digit5', 'Stats'],
+    ['Digit6', 'Issues'],
+    ['Digit7', 'Settings']
   ])('Ctrl+%s goes to %s', async (code, label) => {
     render(App)
     press(document.body, { key: 'x', code, ctrlKey: true })

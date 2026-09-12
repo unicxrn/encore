@@ -1,22 +1,28 @@
 /**
- * Measure Home's play panel and Installed's play badge in a real browser engine, without a window.
+ * Measure the Stats page and Installed's play badge in a real browser engine, without a window.
  *
  *     npm run build
- *     node_modules/electron/dist/electron scripts/measure-play-panel.mjs
- *     SIZE=1280x800 node_modules/electron/dist/electron scripts/measure-play-panel.mjs
+ *     node_modules/electron/dist/electron scripts/measure-play-stats.mjs
+ *     SIZE=1280x800 node_modules/electron/dist/electron scripts/measure-play-stats.mjs
  *
  * The jsdom tests cannot answer any of this: they apply no CSS and compute no layout, so the tile
- * grid has no columns, the caveat has no position on a page and a badged row has no height to
- * compare against an unbadged one. This runs the built renderer in an offscreen window, which is
- * never shown on any desktop, and reads the boxes back out. Same technique, and same reasons, as
- * measure-explore-append.mjs.
+ * grid has no columns, the activity bars have no height, the caveat has no position on a page and
+ * a badged row has no height to compare against an unbadged one. This runs the built renderer in
+ * an offscreen window, which is never shown on any desktop, and reads the boxes back out. Same
+ * technique, and same reasons, as measure-explore-append.mjs.
  *
- * Three questions, all of which jsdom answers wrongly by answering zero:
+ * Six questions, all of which jsdom answers wrongly by answering zero:
  *
  * 1. Does the caveat sit above every figure in LAYOUT, not just in the DOM? DOM order is what the
  *    component test pins; a float or a grid could still paint it under the tiles.
- *    2. Do five tiles fit the width, and how do they wrap when they do not?
- *    3. Does a row that gained a play badge stay exactly as tall as one that did not? The badge is
+ * 2. Do five tiles fit the width, and how do they wrap when they do not?
+ * 3. Do the activity bars have height in proportion to their counts, and does the busiest one
+ *    reach the top of the chart box?
+ * 4. Do the two lists sit side by side at a normal window and stack under a narrow one? That is a
+ *    container query, which answers about the pane rather than the window.
+ * 5. Is Home free of the panel that used to sit under its hero, and does it still not scroll
+ *    sideways without it?
+ * 6. Does a row that gained a play badge stay exactly as tall as one that did not? The badge is
  *    inside the title line, and a badge that grows the line grows every row in the list.
  *
  * Touches nothing real: the preload written below answers every call from memory, from a
@@ -31,7 +37,12 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 const [width, height] = (process.env.SIZE || '1280x800').split('x').map(Number)
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'encore-playpanel-'))
+/**
+ * How many days of history the fake bridge answers with, so the chart can be measured at each
+ * block length it chooses: 120 days is a bar per week, 40 is a bar per day, 2000 is longer.
+ */
+const spanDays = Number(process.env.SPAN || 120)
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'encore-playstats-'))
 const preloadPath = path.join(scratch, 'preload.cjs')
 
 /** Four installed charts, two of which have a play on record. */
@@ -96,6 +107,34 @@ const answers = {
         everFc: true,
         lastPlayedAt: '2026-09-01T20:00:00.0000000Z'
       })),
+  playInsights: () => ({
+    // 120 days of history ending today, so the chart is drawn at week blocks with a partial
+    // last one, which is the shape most users will see.
+    days: Array.from({ length: Math.ceil(${spanDays} / 2) }, (_, i) => ({
+      day: new Date(Date.now() - (${spanDays} - 1 - i * 2) * 86400000).toISOString().slice(0, 10),
+      plays: 1 + ((i * 7) % 9)
+    })),
+    coverage: { inLibrary: 4210, identified: 4000, withPlay: 177, playsOffLibrary: 6 },
+    topCharters: Array.from({ length: 12 }, (_, i) => ({
+      charter: i === 0 ? 'A charter with a deliberately long name that has to ellipsise' : 'Charter ' + i,
+      owned: 40 - i,
+      played: 12 - i,
+      plays: 31 - i * 2
+    })),
+    recent: Array.from({ length: 8 }, (_, i) => ({
+      checksum: String(i).repeat(32).slice(0, 32),
+      playedAt: new Date(Date.now() - i * 3600000).toISOString(),
+      songName: i === 0 ? 'A song with a deliberately long title that has to ellipsise' : 'Chart ' + i,
+      artistName: 'Rush',
+      charterName: 'someone',
+      instrument: 'Guitar',
+      difficulty: 'Expert',
+      score: 1234567 - i * 1000,
+      accuracy: 0.9812,
+      isFc: i % 3 === 0,
+      isPfc: i === 0
+    }))
+  }),
   playStats: () => ({
     totalPlays: 412,
     chartsPlayed: 177,
@@ -150,28 +189,69 @@ async function waitFor(win, expression, timeoutMs = 20000) {
   }
 }
 
-/** The panel, as layout has it. */
-const PANEL = `(() => {
+/** The Stats page, as layout has it. */
+const PAGE = `(() => {
   const round = (n) => Math.round(n)
+  const box = (el) => el.getBoundingClientRect()
   const caveat = document.querySelector('.caveat')
   const tiles = [...document.querySelectorAll('.tile')]
   const rows = [...document.querySelectorAll('.top-row')]
-  const home = document.querySelector('.home')
-  const tops = [...new Set(tiles.map((t) => round(t.getBoundingClientRect().top)))]
+  const recent = [...document.querySelectorAll('.recent-row')]
+  const charters = [...document.querySelectorAll('.ch-row')]
+  const page = document.querySelector('.stats')
+  const chart = document.querySelector('.chart')
+  const fills = [...document.querySelectorAll('.chart .fill')]
+  const tops = [...new Set(tiles.map((t) => round(box(t).top)))]
+  // Every figure on the page, not only the tiles: the caveat has to clear all of them.
+  const figures = [...document.querySelectorAll('.tile, .chart, .top, .charters')]
+  const lowestFigureTop = figures.length ? Math.min(...figures.map((f) => round(box(f).top))) : null
+  const heights = fills.map((f) => round(box(f).height))
+  // The two lists live in one .columns grid. Their SECTIONS are what the grid places; the
+  // lists inside them start at different heights because their notes wrap differently, so
+  // asking the lists would answer about the prose above them.
+  const panes = [...document.querySelectorAll('.stats > .columns > section')]
+  const paneTops = panes.map((el) => round(box(el).top))
+  const paneWidths = panes.map((el) => round(box(el).width))
   return {
-    caveatBottom: caveat ? round(caveat.getBoundingClientRect().bottom) : null,
-    firstTileTop: tiles.length ? round(tiles[0].getBoundingClientRect().top) : null,
+    caveatBottom: caveat ? round(box(caveat).bottom) : null,
     // Positive means the caveat finishes before the first figure begins, in painted pixels.
-    caveatClearsFiguresBy: caveat && tiles.length
-      ? round(tiles[0].getBoundingClientRect().top - caveat.getBoundingClientRect().bottom)
-      : null,
+    caveatClearsFiguresBy:
+      caveat && lowestFigureTop !== null ? lowestFigureTop - round(box(caveat).bottom) : null,
     tiles: tiles.length,
     tileRows: tops.length,
-    tileWidth: tiles.length ? round(tiles[0].getBoundingClientRect().width) : null,
+    tileWidth: tiles.length ? round(box(tiles[0]).width) : null,
     // Any tile whose text spills its box is a number the user cannot read.
     tilesOverflowing: tiles.filter((t) => t.scrollWidth > t.clientWidth + 1).length,
+    chartHeight: chart ? round(box(chart).height) : null,
+    bars: fills.length,
+    barWidth: fills.length ? Number(box(fills[0]).width.toFixed(2)) : null,
+    tallestBar: heights.length ? Math.max(...heights) : null,
+    shortestBar: heights.length ? Math.min(...heights) : null,
+    // Two panes at the same y are side by side; two different tops are stacked.
+    paneTops,
+    paneWidths,
+    listsSideBySide: paneTops.length === 2 && paneTops[0] === paneTops[1],
     topRows: rows.length,
-    topRowHeight: rows.length ? round(rows[0].getBoundingClientRect().height) : null,
+    topRowHeight: rows.length ? round(box(rows[0]).height) : null,
+    recentRows: recent.length,
+    charterRows: charters.length,
+    // A row whose name column has run out of room is a row of ellipses.
+    narrowestName: charters.length
+      ? Math.min(...charters.map((r) => round(box(r.querySelector('.name')).width)))
+      : null,
+    pageScrollsSideways: page ? page.scrollWidth > page.clientWidth + 1 : null
+  }
+})()`
+
+/** Home, which used to carry the panel and now carries none of it. */
+const HOME = `(() => {
+  const home = document.querySelector('.home')
+  const first = home ? home.children[1] : null
+  return {
+    playTiles: document.querySelectorAll('.tile').length,
+    caveats: document.querySelectorAll('.caveat').length,
+    firstBlockUnderHero: first ? (first.querySelector('h2')?.textContent ?? '').trim() : null,
+    blocks: home ? home.children.length : null,
     pageScrollsSideways: home ? home.scrollWidth > home.clientWidth + 1 : null
   }
 })()`
@@ -214,10 +294,18 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
+  console.log(`window ${width}x${height}, ${spanDays} days of history`)
+
+  await waitFor(win, `document.querySelector('.home')`)
+  await sleep(300)
+  console.log('home       ', JSON.stringify(await evalIn(win, HOME), null, 1))
+
+  const statsTab = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Stats')`
+  await waitFor(win, statsTab)
+  await evalIn(win, `${statsTab}.click(), 1`)
   await waitFor(win, `document.querySelector('.tile')`)
   await sleep(500)
-  console.log(`window ${width}x${height}`)
-  console.log('home panel ', JSON.stringify(await evalIn(win, PANEL), null, 1))
+  console.log('stats page ', JSON.stringify(await evalIn(win, PAGE), null, 1))
 
   const installed = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Installed')`
   await waitFor(win, installed)
