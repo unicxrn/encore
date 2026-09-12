@@ -20,7 +20,7 @@ import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
 import type { VideoSearchResult } from '../main/sidecars/ytdlp'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import type { AppUpdateStatus } from '../shared/app-update'
-import type { ChartPlaySummary, PlayDataStatus, PlayStats } from '../shared/play'
+import type { ChartPlaySummary, PlayDataStatus, PlayInsights, PlayStats } from '../shared/play'
 
 type Unsubscribe = () => void
 
@@ -227,13 +227,17 @@ const api = {
     ipcRenderer.invoke(IPC.playSummaries, checksums),
   // Every aggregate a stats view needs, in one call.
   playStats: (): Promise<PlayStats> => ipcRenderer.invoke(IPC.playStats),
+  // The rest of what the Stats tab draws: the history by day, how much of the library has a play
+  // on record, the charters behind those plays, and the last few plays. Behind the same gate as
+  // the other three, and the only one that also reads the catalog.
+  playInsights: (): Promise<PlayInsights> => ipcRenderer.invoke(IPC.playInsights),
   onDownloadUpdate: subscribe(IPC.evDownloadUpdate),
   onScanProgress: subscribe(IPC.evScanProgress),
   onAssetProgress: subscribe(IPC.evAssetProgress),
   onUpdateProgress: subscribe(IPC.evUpdateProgress),
   onAppUpdate: subscribe(IPC.evAppUpdate),
   // Fires when a NEW play is recorded, never for the repeated reads of an unchanged file. Carries
-  // no payload: re-read whichever of the three calls above you are drawing.
+  // no payload: re-read whichever of the four calls above you are drawing.
   onPlayRecorded: subscribe(IPC.evPlayRecorded)
 }
 

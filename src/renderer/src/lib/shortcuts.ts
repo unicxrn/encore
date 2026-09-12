@@ -25,7 +25,7 @@
  *
  * - `Mod+K`: focus search. Already the app's binding, and already advertised on
  *   the search field itself. Kept, not moved.
- * - `Mod+1…6`: the six sidebar views in sidebar order. Digits are read off
+ * - `Mod+1…7`: the seven sidebar views in sidebar order. Digits are read off
  *   `code`, not `key`: on AZERTY the unshifted digit row produces `&`, `é`, `"`,
  *   so a `key`-based match would leave these unreachable for those users.
  *   Letters stay on `key`, where the mnemonic matters more than the position.
@@ -46,8 +46,8 @@
  * a shortcut.
  */
 
-/** The six sidebar views, in sidebar order, which is the order `Mod+1…6` follows. */
-export type ShortcutView = 'home' | 'browse' | 'library' | 'assets' | 'tools' | 'settings'
+/** The seven sidebar views, in sidebar order, which is the order `Mod+1…7` follows. */
+export type ShortcutView = 'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'settings'
 
 export type ShortcutId =
   'focus-search' | 'toggle-play' | 'dismiss' | 'show-shortcuts' | `go:${ShortcutView}`
@@ -90,6 +90,7 @@ export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
   'browse',
   'library',
   'assets',
+  'stats',
   'tools',
   'settings'
 ]
@@ -104,6 +105,7 @@ const VIEW_LABELS: Record<ShortcutView, string> = {
   browse: 'Explore',
   library: 'Installed',
   assets: 'Asset Studio',
+  stats: 'Stats',
   tools: 'Issues',
   settings: 'Settings'
 }

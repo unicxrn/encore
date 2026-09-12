@@ -124,3 +124,86 @@ export interface PlayStats {
   /** Most-played charts, longest first. Capped by the query; see main/play/store.ts. */
   topCharts: TopChart[]
 }
+
+/**
+ * One day of the play history, as a count.
+ *
+ * `day` is `YYYY-MM-DD` in the machine's own timezone, not UTC: a play finished at 00:30 local
+ * belongs to the evening the user remembers, and a chart of "when do I play" bucketed by UTC
+ * would move a whole timezone's late nights onto the next day. The conversion happens in SQL,
+ * once, so the bucket and the boundary agree (see main/play/store.ts).
+ *
+ * Only days that HAVE a play appear. The days between are zero by definition and sending a row
+ * for each would make the payload a function of the calendar rather than of the history.
+ */
+export interface PlayDay {
+  day: string
+  plays: number
+}
+
+/**
+ * How much of the library has a play on record, and how much of it could ever have one.
+ *
+ * Three numbers rather than one ratio, because the shortfall has two unrelated causes and a
+ * single "12% played" would hide both. `identified` is the charts Encore holds a Clone Hero
+ * checksum for; a chart without one can never be matched to a play however much it was played,
+ * and the fix is a rescan, not more playing. `withPlay` is how many of those Encore has actually
+ * seen played, which is NOT how many the user has ever played: the history starts when Encore
+ * did (see the module comment above).
+ */
+export interface PlayCoverage {
+  /** Charts in the catalog, whatever their state. */
+  inLibrary: number
+  /** Charts carrying a Clone Hero checksum, so a play can be joined to them. */
+  identified: number
+  /** Identified charts with at least one recorded play. */
+  withPlay: number
+  /** Recorded plays matching no chart in the catalog: deleted, moved, or never scanned. */
+  playsOffLibrary: number
+}
+
+/** One charter, with what the library holds of theirs beside what has been played. */
+export interface CharterPlays {
+  /** Clone Hero's markup already removed, because the merging below is done on this name. */
+  charter: string
+  /** Charts by this charter in the catalog. */
+  owned: number
+  /** How many of those have a recorded play. */
+  played: number
+  /** Recorded plays across all of them. */
+  plays: number
+}
+
+/** One play, as the history recorded it. The only place a single play is visible. */
+export interface RecentPlay {
+  /** Clone Hero's chart identity plus the timestamp: together, the row's identity. */
+  checksum: string
+  playedAt: string
+  songName: string | null
+  artistName: string | null
+  charterName: string | null
+  instrument: string | null
+  difficulty: string | null
+  score: number | null
+  /** notes_hit / total_notes for this play, 0-1, or null when notes were not recorded. */
+  accuracy: number | null
+  isFc: boolean
+  isPfc: boolean
+}
+
+/**
+ * The cuts of the play history a page has room for and a panel did not.
+ *
+ * Separate from `PlayStats` rather than folded into it: `playStats` is the cheap aggregate any
+ * consumer can ask for, and three of the four reads below touch the `charts` table as well,
+ * which nothing asking for a total should have to pay for.
+ */
+export interface PlayInsights {
+  /** Every day with a play, oldest first. */
+  days: PlayDay[]
+  coverage: PlayCoverage
+  /** Charters with at least one recorded play, most played first. Capped by the query. */
+  topCharters: CharterPlays[]
+  /** The last few plays, newest first. Capped by the query. */
+  recent: RecentPlay[]
+}

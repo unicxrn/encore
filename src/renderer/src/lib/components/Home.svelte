@@ -23,7 +23,6 @@
   import { cancelScan, scanProgress, startScan } from '../stores/scan'
   import { settings } from '../stores/settings'
   import { libraryGap } from '../empty-state'
-  import PlayPanel from './PlayPanel.svelte'
   import type { ViewId } from './Sidebar.svelte'
 
   let {
@@ -174,11 +173,6 @@
       </div>
     </div>
   </section>
-
-  <!-- First block under the hero, because it is the only thing on this page about the user
-       rather than about a catalog. It owns its own gate, its own empty states and its own
-       caveat; Home neither fetches for it nor knows whether it has anything to draw. -->
-  <PlayPanel />
 
   <!-- Each row is a labelled region. A <section> with no accessible name is not
        a landmark at all, so without this the page is one undifferentiated run of

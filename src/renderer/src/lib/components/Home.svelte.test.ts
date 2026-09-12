@@ -80,29 +80,34 @@ describe('Home: cancelling a scan', () => {
 })
 
 /**
- * The play panel is Home's first block under the hero, and it owns everything about itself:
- * its own gate, its own fetches, its own empty states. All this checks is that Home mounts it,
- * and that a Home whose bridge cannot answer the play calls still renders the rest of the page.
- * What the panel says in each state is PlayPanel.svelte.test.ts's business.
+ * The play data moved to its own tab. What is left to check here is that Home does not reach
+ * for it any more: the panel owned a bridge subscription and three calls, and a Home that still
+ * made one of them would be spending a read on a block it no longer draws.
  */
-describe('Home: the play panel', () => {
-  it('mounts the panel above the chart rows', async () => {
+describe('Home: no longer the place the play data lives', () => {
+  it('draws no play panel, and asks the bridge for nothing about plays', async () => {
+    const playStatus = vi.fn()
+    const playStats = vi.fn()
+    const onPlayRecorded = vi.fn()
     renderHome({
-      catalogQuery: () => Promise.resolve([]),
-      playStatus: () =>
-        Promise.resolve({ available: false, reason: 'noFile', path: '/scores.json', playCount: 0 }),
-      onPlayRecorded: () => () => {}
+      catalogQuery: () => Promise.resolve([chart('/library/YYZ', 'YYZ')]),
+      playStatus,
+      playStats,
+      onPlayRecorded
     })
 
-    const plays = await screen.findByText('YOUR PLAYS')
-    const latest = await screen.findByText('LATEST CHARTS')
-    expect(plays.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    expect(screen.queryByText('YOUR PLAYS')).toBeNull()
+    expect(playStatus).not.toHaveBeenCalled()
+    expect(playStats).not.toHaveBeenCalled()
+    expect(onPlayRecorded).not.toHaveBeenCalled()
   })
 
-  it('keeps the rest of Home when the bridge has no play calls at all', async () => {
-    renderHome({ catalogQuery: () => Promise.resolve([chart('/library/YYZ', 'YYZ')]) })
+  it('opens with the chart rows, which are now the first thing under the hero', async () => {
+    renderHome({ catalogQuery: () => Promise.resolve([]) })
 
-    expect(await screen.findByText('YYZ')).toBeTruthy()
-    expect(await screen.findByText('YOUR PLAYS')).toBeTruthy()
+    const latest = await screen.findByText('LATEST CHARTS')
+    const library = await screen.findByText('IN YOUR LIBRARY')
+    expect(latest.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

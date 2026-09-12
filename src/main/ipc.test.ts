@@ -152,6 +152,12 @@ const deps = (): IpcDeps => ({
     byInstrument: [{ key: 'Guitar', plays: 3 }],
     byDifficulty: [{ key: 'Expert', plays: 3 }],
     topCharts: []
+  }),
+  playInsights: vi.fn().mockReturnValue({
+    days: [{ day: '2026-09-10', plays: 3 }],
+    coverage: { inLibrary: 4, identified: 3, withPlay: 2, playsOffLibrary: 1 },
+    topCharters: [{ charter: 'Mech', owned: 2, played: 1, plays: 3 }],
+    recent: []
   })
 })
 
@@ -985,12 +991,15 @@ describe('registerIpc', () => {
     expect(d.detectLibraries).toHaveBeenCalledTimes(1)
   })
 
-  it('routes the three play reads to deps', async () => {
+  it('routes the four play reads to deps', async () => {
     const ipc = fakeIpc()
     const d = deps()
     registerIpc(ipc as never, d)
     expect(await ipc.invoke(IPC.playStatus)).toMatchObject({ available: true, reason: 'ok' })
     expect(await ipc.invoke(IPC.playStats)).toMatchObject({ totalPlays: 3 })
+    expect(await ipc.invoke(IPC.playInsights)).toMatchObject({
+      coverage: { inLibrary: 4, identified: 3, withPlay: 2, playsOffLibrary: 1 }
+    })
     await ipc.invoke(IPC.playSummaries, ['e54e9a0521444e81bd1fed4f3f3a3201'])
     expect(d.playSummaries).toHaveBeenCalledWith(['e54e9a0521444e81bd1fed4f3f3a3201'])
   })

@@ -23,13 +23,14 @@ Search and download new ones without leaving the app.
 Encore reads the chart folders you already have, in both shapes Clone Hero uses: plain folders and
 `.sng` archives. Everything below works on either.
 
-|                  |                                                                                                                                                           |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Installed**    | Your scanned library, with per-instrument difficulty tiers, album art and a preview player that renders the note highway.                                 |
-| **Explore**      | Search the Chorus Encore catalogue as a grid of covers or a dense list. Filter by instrument and difficulty, tick several charts, download them together. |
-| **Issues**       | Scan for charting and metadata problems, grouped by severity and exportable as CSV. Four kinds it can repair in place.                                    |
-| **Asset Studio** | Add missing album art, background video, backgrounds and synced lyrics, one chart at a time or as a batch.                                                |
-| **Downloads**    | A parallel, resumable, cancellable queue with retry.                                                                                                      |
+|                  |                                                                                                                                                                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Installed**    | Your scanned library, with per-instrument difficulty tiers, album art and a preview player that renders the note highway.                                                                                                                                                                                                              |
+| **Explore**      | Search the Chorus Encore catalogue as a grid of covers or a dense list. Filter by instrument and difficulty, tick several charts, download them together.                                                                                                                                                                              |
+| **Issues**       | Scan for charting and metadata problems, grouped by severity and exportable as CSV. Four kinds it can repair in place.                                                                                                                                                                                                                 |
+| **Asset Studio** | Add missing album art, background video, backgrounds and synced lyrics, one chart at a time or as a batch.                                                                                                                                                                                                                             |
+| **Stats**        | What Encore has recorded of your playing: totals, the history by day, instruments and difficulties, your most played and most recent charts, and how much of your library has a play on record. Clone Hero keeps only the last play in its score file, so this record starts when Encore did, and the page says so above every figure. |
+| **Downloads**    | A parallel, resumable, cancellable queue with retry.                                                                                                                                                                                                                                                                                   |
 
 ### Repairs that cannot break multiplayer
 

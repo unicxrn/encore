@@ -14,14 +14,20 @@ release.
 
 ### Added
 
-- Your plays, on Home. Encore has been reading Clone Hero's own score file since 0.2.0 and keeping
-  what it finds, and none of it reached the screen. The panel shows plays recorded, charts played,
-  accuracy, full combos, best score, longest streak and the ten charts you have played most. Every
-  figure is prefaced by the date the record starts, because Clone Hero's score file holds only the
-  most recent play: Encore's history begins the first time it saw that file change, and nothing
-  before that can be recovered. These are not lifetime totals and the panel says so before it says
-  anything else. When there is nothing yet it says which of the four reasons applies and where it
-  looked, rather than drawing a grid of zeroes.
+- A Stats tab, holding everything Encore knows about what you have played. Encore has been reading
+  Clone Hero's own score file since 0.2.0 and keeping what it finds, and none of it reached the
+  screen. The page shows plays recorded, charts played, accuracy, full combos, best score and
+  longest streak; the history as a bar per day, week or longer, from your first recorded play to
+  today; which instruments and difficulties those plays were on; the ten charts you have played
+  most and the last few plays themselves, with what each one scored; and how much of your library
+  has a play on record, with the charters behind it. Every figure is prefaced by the date the
+  record starts, because Clone Hero's score file holds only the most recent play: Encore's history
+  begins the first time it saw that file change, and nothing before that can be recovered. These
+  are not lifetime totals and the page says so before it says anything else, and nowhere writes "no
+  play on record" as "never played". When there is nothing yet it says which of the four reasons
+  applies and where it looked, rather than drawing a page of zeroes. Reached from the sidebar or
+  with Ctrl+5, which moves Issues to Ctrl+6 and Settings to Ctrl+7. Home, where the play panel used
+  to sit, is back to being a landing page.
 - A chart in Installed says how many times it has been played, when there is a play on record for
   it. The count is a batch read for each page of the list, and a chart with no record carries no
   badge at all: the list already distinguishes "no plays recorded" from "never played", and a zero

@@ -25,6 +25,7 @@ import {
   PlaySummaryRequestSchema,
   type ChartPlaySummary,
   type PlayDataStatus,
+  type PlayInsights,
   type PlayStats
 } from '../shared/play'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
@@ -198,8 +199,8 @@ export interface IpcDeps {
     sender: unknown
   ) => Promise<string | null>
   /**
-   * Clone Hero's own play data. All three are synchronous reads of a small local table, so none
-   * of them returns a promise and none can fail in a way the caller has to handle.
+   * Clone Hero's own play data. All four are synchronous reads of the local catalog file, so
+   * none of them returns a promise and none can fail in a way the caller has to handle.
    *
    * `playStatus` is the gate: it answers "is there anything here at all", and its `available:
    * false` is an ordinary state for most users rather than an error (see shared/play.ts). A
@@ -210,10 +211,15 @@ export interface IpcDeps {
    * `playSummaries` takes checksums rather than chart paths: the checksum is what the play table
    * is keyed by, it is on every ChartRecord already, and taking paths would make this a second
    * place that has to know how a chart is identified.
+   *
+   * `playInsights` is the Stats tab's second read, and the only one of the four that also
+   * touches `charts`: the history by day, how much of the library has a play on record, the
+   * charters behind those plays, and the last few plays themselves.
    */
   playStatus: () => PlayDataStatus
   playSummaries: (checksums: string[]) => ChartPlaySummary[]
   playStats: () => PlayStats
+  playInsights: () => PlayInsights
 }
 
 const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
@@ -430,13 +436,14 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   // No payload on the status or the aggregate: which file is watched and what is in the table
   // are main's to know, and there is nothing here for the renderer to name.
   ipcMain.handle(IPC.playStatus, () => deps.playStatus())
-  // The only one of the three that takes anything. Each entry is checked to be a 32-character
+  // The only one of the four that takes anything. Each entry is checked to be a 32-character
   // hex digest and the list is capped at PLAY_SUMMARY_MAX, so a hostile or buggy caller cannot
   // turn one page render into an unbounded IN clause.
   ipcMain.handle(IPC.playSummaries, (_e, raw) =>
     deps.playSummaries(PlaySummaryRequestSchema.parse(raw))
   )
   ipcMain.handle(IPC.playStats, () => deps.playStats())
+  ipcMain.handle(IPC.playInsights, () => deps.playInsights())
   ipcMain.handle(IPC.saveTextFile, (e, raw) => {
     const { defaultName, content } = SaveTextFileSchema.parse(raw)
     return deps.saveTextFile({ defaultName, content }, e.sender)

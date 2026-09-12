@@ -70,10 +70,14 @@ export const IPC = {
   // Hero install on this machine and the honest answer is "nothing to show", which is a state to
   // draw rather than an error (see shared/play.ts). `playSummaries` is the per-chart read a
   // Library row or detail panel makes, batched because the caller is a whole page of rows.
-  // `playStats` is the one-call aggregate a stats view needs.
+  // `playStats` is the one-call aggregate a stats view needs, and `playInsights` is the rest of
+  // what the Stats tab draws: the history by day, how much of the library has been played, the
+  // charters behind it, and the last few plays. Split from `playStats` because it also reads
+  // `charts`, which a caller after a total should not pay for.
   playStatus: 'play:status',
   playSummaries: 'play:summaries',
   playStats: 'play:stats',
+  playInsights: 'play:insights',
   // Asks Chorus whether it holds a different version of the given charts (all of them when the
   // list is empty). Never runs on its own: each request costs API budget against a 50-per-minute
   // limit, so it is always something the user asked for. updatesLast replays the session's

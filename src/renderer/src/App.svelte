@@ -9,6 +9,7 @@
   import Library from './lib/components/Library.svelte'
   import RuntimeErrorBar from './lib/components/RuntimeErrorBar.svelte'
   import Settings from './lib/components/Settings.svelte'
+  import Stats from './lib/components/Stats.svelte'
   import PlayerBar from './lib/components/PlayerBar.svelte'
   import ShortcutSheet from './lib/components/ShortcutSheet.svelte'
   import Sidebar, { type ViewId } from './lib/components/Sidebar.svelte'
@@ -43,6 +44,7 @@
     browse: 'Explore',
     library: 'Installed',
     assets: 'Asset Studio',
+    stats: 'Stats',
     tools: 'Issues',
     settings: 'Settings'
   }
@@ -83,7 +85,7 @@
    * Navigating closes the downloads panel.
    *
    * Keyed on `viewKey` rather than wired into each caller, because the callers are many and
-   * scattered: the sidebar, `Mod+1-6`, the search field, Home's links, every card that opens a
+   * scattered: the sidebar, `Mod+1-7`, the search field, Home's links, every card that opens a
    * chart, Detail's Back and the error fallback's Go to Home. One of those forgetting to close
    * the panel would be the bug this exists to prevent, so the closing is attached to the one
    * thing every one of them does: change what the content pane shows.
@@ -337,6 +339,8 @@
               <Library onOpenChart={(target) => (detailChart = target)} />
             {:else if view === 'assets'}
               <Assets />
+            {:else if view === 'stats'}
+              <Stats />
             {:else if view === 'tools'}
               <Tools />
             {:else if view === 'settings'}
