@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChartData, SearchResult } from '../api/enchor'
 import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 import { AUTO_APPEND_CAP, createSearch, groupBySong } from './search'
+import { globalQuery } from './global-search'
 
 const makeChart = (
   chartId: number,
@@ -776,6 +777,11 @@ describe('advanced search', () => {
     // Explore is destroyed by every navigation and by opening a chart Detail. An applied query
     // that did not survive would leave the narrowed rows on screen under a form that says nothing
     // is narrowing them.
+    //
+    // The empty string is what a remount actually re-applies once filters are on: `applyAdvanced`
+    // empties the plain term, because the endpoint it routes to ignores one. A remount handing
+    // back a term would be a user typing it, and typing now drops the filters, which is the case
+    // below this one.
     const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
     const search = createSearch({ fetchFn, debounceMs: 5 })
     search.setQuery('x')
@@ -785,12 +791,116 @@ describe('advanced search', () => {
     await new Promise((r) => setTimeout(r, 20))
     const spent = fetchFn.mock.calls.length
 
-    search.setQuery('x')
+    search.setQuery('')
     await new Promise((r) => setTimeout(r, 20))
 
     expect(fetchFn).toHaveBeenCalledTimes(spent)
     expect(get(search.advancedCount)).toBe(1)
     expect(get(search.advanced).text.artist.value).toBe('Foo Fighters')
+  })
+
+  /**
+   * The one rule both search boxes obey, kept here because it is the store that reconciles them.
+   *
+   * `/search/advanced` ignores `search` outright, so a term and the filters cannot both narrow one
+   * query. The title bar's box used to set a term anyway, and the endpoint threw it away while
+   * the results moved for unrelated reasons.
+   */
+  describe('a plain term and the applied filters', () => {
+    const applied = async (): Promise<ReturnType<typeof createSearch>> => {
+      const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+      const search = createSearch({ fetchFn, debounceMs: 5 })
+      search.setAdvancedDraft(draftWith((q) => (q.text.charter.value = 'Harmonix')))
+      search.applyAdvanced()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(get(search.advancedCount)).toBe(1)
+      return search
+    }
+
+    it('drops what was applied, and asks the plain question instead', async () => {
+      const search = await applied()
+
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(get(search.advancedCount)).toBe(0)
+      expect(get(search.advanced)).toEqual(emptyAdvanced())
+    })
+
+    it('leaves the draft alone, so one press of Search asks the same question again', async () => {
+      // The property the whole rule rests on. A keystroke in the title bar must not be able to
+      // destroy a filter set someone spent time building.
+      const search = await applied()
+
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(get(search.advancedDraft).text.charter.value).toBe('Harmonix')
+      expect(get(search.advancedDraftCount)).toBe(1)
+
+      search.applyAdvanced()
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(get(search.advancedCount)).toBe(1)
+      expect(get(search.advanced).text.charter.value).toBe('Harmonix')
+    })
+
+    it('says how many it dropped, and stops saying it once they are back', async () => {
+      // A count falling from one to zero with nothing else on screen is not the user being told.
+      const search = await applied()
+      expect(get(search.advancedDropped)).toBe(0)
+
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(get(search.advancedDropped)).toBe(1)
+
+      // Typing more must not reset the report to zero: the news is still news.
+      search.setQuery('everlong b')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(get(search.advancedDropped)).toBe(1)
+
+      search.restoreAdvanced()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(get(search.advancedDropped)).toBe(0)
+      expect(get(search.advancedCount)).toBe(1)
+    })
+
+    it('can be dismissed without the filters coming back', async () => {
+      const search = await applied()
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+
+      search.dismissAdvancedDropped()
+
+      expect(get(search.advancedDropped)).toBe(0)
+      expect(get(search.advancedCount)).toBe(0)
+    })
+
+    it('reports nothing when there was nothing applied to drop', async () => {
+      const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+      const search = createSearch({ fetchFn, debounceMs: 5 })
+
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(get(search.advancedDropped)).toBe(0)
+    })
+
+    it('sends the wildcard once filters are applied, not the term that was there', async () => {
+      // The other half of the rule, and the reason neither box has to be disabled: the box is
+      // emptied rather than left showing a word the answer had no part in.
+      const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+      const search = createSearch({ fetchFn, debounceMs: 5 })
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 20))
+
+      search.setAdvancedDraft(draftWith((q) => (q.text.charter.value = 'Harmonix')))
+      search.applyAdvanced()
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(lastBody(fetchFn)).toMatchObject({ search: '*' })
+      expect(get(globalQuery)).toBe('')
+    })
   })
 
   it('keeps a draft that was typed but never searched', async () => {

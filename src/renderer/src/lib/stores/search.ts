@@ -1,6 +1,7 @@
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store'
 import { searchCharts, type ChartData } from '../api/enchor'
 import { advancedCount, cloneAdvanced, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
+import { globalQuery } from './global-search'
 
 export interface SearchConfig {
   fetchFn?: typeof fetch
@@ -131,6 +132,17 @@ export interface SearchStore {
   advancedDraft: Readable<AdvancedQuery>
   /** How many advanced fields are narrowing the results right now. 0 when none are. */
   advancedCount: Readable<number>
+  /** How many the panel is holding, applied or not. What `restoreAdvanced` would put back. */
+  advancedDraftCount: Readable<number>
+  /**
+   * How many applied filters the last plain search dropped, or 0 with nothing to report.
+   *
+   * A search term and the advanced filters cannot both narrow one query (see `setQuery`), so
+   * typing drops the filters. Results changing under a user for a reason they did not ask for is
+   * the whole defect, and a count that silently falls to zero is not telling them; this is what
+   * Explore says it out loud from. Reset by applying or clearing, and by the user dismissing it.
+   */
+  advancedDropped: Readable<number>
   /** Whether the panel is open. Survives a remount for the same reason `mode` does. */
   advancedOpen: Readable<boolean>
   /**
@@ -154,6 +166,10 @@ export interface SearchStore {
   applyAdvanced: () => void
   /** Empties both the draft and the applied query, and re-runs if anything was narrowing. */
   clearAdvanced: () => void
+  /** Puts the draft back as the applied query. The same act as pressing Search in the panel. */
+  restoreAdvanced: () => void
+  /** Stops reporting the drop. Changes no results; the filters stay dropped. */
+  dismissAdvancedDropped: () => void
   setAdvancedOpen: (open: boolean) => void
   toggleExpanded: (songId: number) => void
   toggleSelected: (chartId: number) => void
@@ -196,6 +212,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const advancedDraft = writable<AdvancedQuery>(emptyAdvanced())
   const advancedOpen = writable(false)
   const activeCount = derived(advancedApplied, advancedCount)
+  const draftCount = derived(advancedDraft, advancedCount)
+  const advancedDropped = writable(0)
   // Raised a cap's worth at a time by an explicit loadMore; see AUTO_APPEND_CAP and loadMore.
   const autoCap = writable(AUTO_APPEND_CAP)
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
@@ -293,6 +311,21 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     // rate-limited client stays rate-limited. retry() is the one path that
     // forces a fresh run, and the error card's Retry button is the way to it.
     if (next === lastRan) return
+    // A term and the advanced filters are alternatives, not a pair. `/search/advanced` ignores
+    // `search` outright (measured; see `searchCharts`), so with filters applied a typed term
+    // changed nothing about the answer while the results moved for unrelated reasons. Typing
+    // wins, because it is the thing the user just did, and it is the one of the two that has no
+    // other way to be expressed.
+    //
+    // Only what is APPLIED is dropped. `advancedDraft` is left exactly as it was, so the panel
+    // still holds every field the user filled in and one press of Search (or of Restore, below)
+    // asks the same question again. A rule that destroyed the form instead would make an
+    // accidental keystroke in the title bar cost a filter set someone built.
+    const dropping = get(activeCount)
+    if (dropping > 0) {
+      advancedApplied.set(emptyAdvanced())
+      advancedDropped.set(dropping)
+    }
     search(next)
   }
 
@@ -387,16 +420,35 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
 
   function applyAdvanced(): void {
     advancedApplied.set(cloneAdvanced(get(advancedDraft)))
+    advancedDropped.set(0)
+    // The other half of the rule in `setQuery`, and the reason neither search box has to be
+    // disabled: the endpoint about to answer ignores the term, so the box is emptied rather than
+    // left showing a word that had no part in the results. `lastRan` moves with it, so Explore's
+    // mount effect finds the wildcard already answered instead of spending a second request on
+    // the rows this run is fetching.
+    query = '*'
+    lastRan = '*'
+    globalQuery.set('')
     page = 1
     // A press of Search, like a filter change, is a click rather than typing.
     if (timer) clearTimeout(timer)
     void run(false)
   }
 
+  function restoreAdvanced(): void {
+    applyAdvanced()
+  }
+
+  function dismissAdvancedDropped(): void {
+    advancedDropped.set(0)
+  }
+
   function clearAdvanced(): void {
     const wasNarrowed = get(activeCount) > 0
     advancedApplied.set(emptyAdvanced())
     advancedDraft.set(emptyAdvanced())
+    // Cleared on purpose, so there is nothing left to offer to put back.
+    advancedDropped.set(0)
     // Clearing a form that was not narrowing anything changes no answer, and re-asking the same
     // question would spend one of the 50 requests a minute to get the rows already on screen.
     if (!wasNarrowed) return
@@ -423,6 +475,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     advanced: { subscribe: advancedApplied.subscribe },
     advancedDraft: { subscribe: advancedDraft.subscribe },
     advancedCount: activeCount,
+    advancedDraftCount: draftCount,
+    advancedDropped: { subscribe: advancedDropped.subscribe },
     advancedOpen: { subscribe: advancedOpen.subscribe },
     hasMore,
     atAutoCap,
@@ -431,6 +485,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     setAdvancedDraft,
     applyAdvanced,
     clearAdvanced,
+    restoreAdvanced,
+    dismissAdvancedDropped,
     setAdvancedOpen,
     toggleExpanded,
     toggleSelected,

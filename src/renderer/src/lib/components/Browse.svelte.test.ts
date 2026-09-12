@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { browseSearch } from '../stores/search'
+import { globalQuery } from '../stores/global-search'
 import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
 import type { ChartData, SearchResult } from '../api/enchor'
@@ -146,9 +147,9 @@ afterEach(async () => {
   // most of this file asserts on list rows, and `Browse grid view` switches for itself.
   browseSearch.setMode('list')
   browseSearch.clearSelected()
-  // Same singleton again. An advanced query one test applies disables the next test's search box
-  // and routes its request to a different endpoint, and an open panel puts thirty more controls
-  // on screen for every getByRole after it.
+  // Same singleton again. An advanced query one test applies routes the next test's request to a
+  // different endpoint, and an open panel puts thirty more controls on screen for every getByRole
+  // after it.
   browseSearch.clearAdvanced()
   browseSearch.setAdvancedOpen(false)
   browseSearch.saveScroll(0)
@@ -854,20 +855,132 @@ describe('Browse advanced search', () => {
     await screen.findByRole('button', { name: 'Advanced search' })
   })
 
-  it('turns the search box off and says why, because the endpoint takes no term', async () => {
-    // Measured against the live service: a term sent to /search/advanced answers with the whole
-    // catalog. A box that still took typing would look broken rather than being off.
-    await openPanel()
-    const box = screen.getByLabelText('Search charts') as HTMLInputElement
-    expect(box.disabled).toBe(false)
+  /**
+   * A term and the advanced filters cannot both narrow one query, because `/search/advanced`
+   * ignores the term outright. The box used to be turned off and a paragraph put beside it to say
+   * so. It is not any more: typing drops the filters, so both this box and the title bar's do
+   * what they look like they do, and what that owes the user is the note these tests are about.
+   *
+   * jsdom applies no CSS, so nothing here says where the note sits or how it reads beside the
+   * box. It pins what it says, what it offers, and that the form behind it survives.
+   */
+  describe('a plain term against applied filters', () => {
+    // Typing leaves `globalQuery` set, and it is module-scoped the way the store is: a term left
+    // behind is what the next test's first paint reads, and the empty-state test below branches
+    // on whether there is a term at all. `setQuery` goes with it so `lastRan` cannot leave the
+    // next mount asking a question this one already answered, and the wait is the store's 300ms
+    // debounce, so the run that reset arms lands here rather than in another test's call count.
+    afterEach(async () => {
+      if (get(globalQuery) === '') return
+      globalQuery.set('')
+      browseSearch.setQuery('')
+      await new Promise((r) => setTimeout(r, 400))
+    })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    /** Applies one filter from the open panel and waits for the count to say so. */
+    async function applyModchart(): Promise<void> {
+      await fireEvent.click(screen.getByRole('button', { name: 'Modchart' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+      await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+    }
 
-    await waitFor(() =>
-      expect((screen.getByLabelText('Search charts') as HTMLInputElement).disabled).toBe(true)
-    )
-    expect(screen.getByText(/does not take a search term/)).toBeTruthy()
+    const lastParams = (): { search: string; advanced: AdvancedQuery } =>
+      searchCharts.mock.calls.at(-1)?.[0] as { search: string; advanced: AdvancedQuery }
+
+    it('leaves the box usable, and says nothing, while filters are applied', async () => {
+      await openPanel()
+      await applyModchart()
+
+      // The one thing the old behaviour got wrong in the other direction: an enabled box the
+      // endpoint ignored. Now it is enabled because typing in it does something.
+      expect((screen.getByLabelText('Search charts') as HTMLInputElement).disabled).toBe(false)
+      // Nothing has been dropped yet, so there is nothing to explain.
+      expect(screen.queryByText(/Searching cleared/)).toBeNull()
+    })
+
+    it('drops the applied filters and runs the term that was typed', async () => {
+      await openPanel()
+      await applyModchart()
+
+      await fireEvent.input(screen.getByLabelText('Search charts'), {
+        target: { value: 'everlong' }
+      })
+
+      await waitFor(() => expect(lastParams().search).toBe('everlong'))
+      expect(lastParams().advanced.flags.modchart).toBe(false)
+      expect(get(browseSearch.advancedCount)).toBe(0)
+      await screen.findByRole('button', { name: 'Advanced search' })
+    })
+
+    it('says how many it dropped, rather than letting the count fall silently to zero', async () => {
+      await openPanel()
+      await applyModchart()
+
+      await fireEvent.input(screen.getByLabelText('Search charts'), {
+        target: { value: 'ramble on' }
+      })
+
+      expect(await screen.findByText(/Searching cleared 1 advanced filter\./)).toBeTruthy()
+    })
+
+    it('keeps the panel holding every field, across the unmount a chart opens', async () => {
+      // The whole rule rests on this. Clearing what was APPLIED while leaving the DRAFT alone is
+      // what makes an accidental keystroke in the title bar recoverable instead of expensive.
+      await openPanel()
+      await fireEvent.input(screen.getByLabelText('Charter'), { target: { value: 'Harmonix' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+      await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+
+      await fireEvent.input(screen.getByLabelText('Search charts'), { target: { value: 'yyz' } })
+      await screen.findByRole('button', { name: 'Advanced search' })
+
+      remount()
+
+      // Not the panel's own component state: this one was destroyed and built again, so the value
+      // came back from the store's draft.
+      expect(((await screen.findByLabelText('Charter')) as HTMLInputElement).value).toBe('Harmonix')
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+      await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+      expect(lastParams().advanced.text.charter.value).toBe('Harmonix')
+      // The other half of the rule: the endpoint about to answer ignores the term, so the box is
+      // emptied rather than left showing a word that had no part in the results.
+      expect((screen.getByLabelText('Search charts') as HTMLInputElement).value).toBe('')
+    })
+
+    it('offers the filters back from the note itself', async () => {
+      await openPanel()
+      await applyModchart()
+
+      await fireEvent.input(screen.getByLabelText('Search charts'), {
+        target: { value: 'black dog' }
+      })
+      await screen.findByText(/Searching cleared 1 advanced filter\./)
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Restore filters' }))
+
+      await screen.findByRole('button', { name: 'Advanced search, 1 filter applied' })
+      expect(lastParams().advanced.flags.modchart).toBe(true)
+      // Put back, so there is no longer anything to report.
+      expect(screen.queryByText(/Searching cleared/)).toBeNull()
+    })
+
+    it('can be dismissed without putting the filters back', async () => {
+      await openPanel()
+      await applyModchart()
+
+      await fireEvent.input(screen.getByLabelText('Search charts'), {
+        target: { value: 'kashmir' }
+      })
+      await screen.findByText(/Searching cleared 1 advanced filter\./)
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+      await waitFor(() => expect(screen.queryByText(/Searching cleared/)).toBeNull())
+      expect(get(browseSearch.advancedCount)).toBe(0)
+      expect(screen.getByRole('button', { name: 'Advanced search' })).toBeTruthy()
+    })
   })
 
   it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {

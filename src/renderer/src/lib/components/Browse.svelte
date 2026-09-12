@@ -20,8 +20,8 @@
   const search = browseSearch
   const { results, groups, found, loading, error, searched, expanded, mode, selected } = search
   const { advancedCount, advancedOpen, hasMore, atAutoCap } = search
+  const { advancedDropped, advancedDraftCount } = search
   let inputEl = $state<HTMLInputElement | null>(null)
-  let advToggleEl = $state<HTMLButtonElement | null>(null)
   // Seeded from the shared store so a remount restores the chips the user set.
   let instrument = $state<string | null>(get(search.filters).instrument)
   let difficulty = $state<string | null>(get(search.filters).difficulty)
@@ -247,10 +247,7 @@
   }
 
   export function focusSearch(): void {
-    // The box is disabled while advanced filters are on, and a disabled input cannot take focus,
-    // so this would otherwise do nothing at all. The panel is where a title goes in that state.
-    if (inputEl?.disabled) advToggleEl?.focus()
-    else inputEl?.focus()
+    inputEl?.focus()
   }
 
   function openChart(chart: ChartData): void {
@@ -380,21 +377,38 @@
         value={$globalQuery}
         placeholder="Search charts…"
         aria-label="Search charts"
-        disabled={$advancedCount > 0}
-        aria-describedby={$advancedCount > 0 ? 'adv-takeover' : undefined}
         oninput={(e) => onQueryInput(e.currentTarget.value)}
       />
       <span class="count">
         {#if $loading}SEARCHING…{:else if $found}{$found.toLocaleString()} RESULTS{/if}
       </span>
     </div>
-    <!-- Said rather than left to be worked out. Chorus Encore's advanced endpoint takes no search
-         term (measured: a term sent with it answers with the whole catalog), so a box that still
-         accepted typing would look broken instead of being off. -->
-    {#if $advancedCount > 0}
-      <p class="takeover" id="adv-takeover">
-        Advanced filters are on, and Chorus Encore does not take a search term alongside them. Put a
-        title in the panel's Name field, or clear the filters.
+    <!-- The box used to be disabled while filters were applied, with a paragraph here explaining
+         the takeover. It is not any more: typing drops the filters instead (see `setQuery`), so
+         both search boxes now do what they look like they do. What that owes the user is this
+         note. Results changing under someone for a reason they did not ask for is the failure
+         this whole rule exists to avoid, and a filter count falling quietly to zero is not a
+         reason anyone can see.
+
+         role="status" rather than "alert": it follows something the user just did and is not an
+         interruption, and Restore is the way back rather than a warning to heed. -->
+    {#if $advancedDropped > 0}
+      <p class="dropped" role="status">
+        <span>
+          Searching cleared {$advancedDropped}
+          {$advancedDropped === 1 ? 'advanced filter' : 'advanced filters'}. Chorus Encore does not
+          take a search term alongside them.
+        </span>
+        {#if $advancedDraftCount > 0}
+          <!-- The panel still holds every field, so this is the same act as opening it and
+               pressing Search, offered where the news is. -->
+          <button class="dropped-action" onclick={() => search.restoreAdvanced()}>
+            Restore filters
+          </button>
+        {/if}
+        <button class="dropped-action" onclick={() => search.dismissAdvancedDropped()}>
+          Dismiss
+        </button>
       </p>
     {/if}
     <div class="filters">
@@ -422,7 +436,6 @@
            of the time and a list narrowed by filters nobody can see is a list that looks wrong.
            Clear sits beside it for the same reason: the way out has to be where the evidence is. -->
       <button
-        bind:this={advToggleEl}
         class="adv"
         class:on={$advancedCount > 0}
         aria-expanded={$advancedOpen}
@@ -1277,17 +1290,41 @@
     line-height: 16px;
     text-align: center;
   }
-  /* Full width under the search box, so it lands against the control it is about. */
-  .takeover {
+  /* Under the search box, so it lands against the control it is about. A wrapping flex row rather
+     than a paragraph with buttons after it: measured offscreen at 1280x800, the sentence fills the
+     68ch cap over two lines and the two actions wrap onto a third, 20px tall and both on screen.
+     The row is what keeps them attached to the note at any width, since this note is the only
+     account the user gets of why the results changed. */
+  .dropped {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
     margin: 0 16px 8px;
     max-width: 68ch;
     font-size: var(--fs-caption);
     line-height: var(--lh-prose);
     color: var(--text-3);
   }
-  input:disabled {
-    opacity: 0.5;
-    cursor: default;
+  .dropped-action {
+    appearance: none;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-size: var(--fs-caption);
+    font-family: var(--font-ui);
+    color: var(--text-2);
+    padding: 2px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+  .dropped-action:hover,
+  .dropped-action:focus {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
   }
   /* Off screen rather than `display: none`, which takes an element out of the accessibility tree
      along with the layout and would silence the live region entirely. */

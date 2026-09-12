@@ -55,6 +55,13 @@ release.
   minutes, stops the process either way, and says so. A tool that is installed but did not answer
   reads VERSION UNKNOWN rather than NOT INSTALLED, which is what it used to claim about a file
   sitting on disk next to an Update button.
+- Typing in the title bar's search box while Explore had advanced filters applied changed the
+  results without searching for what was typed: Chorus Encore's advanced endpoint takes no search
+  term, so the term was discarded. Explore's own box knew this and turned itself off; the title
+  bar's did not. Now a search term clears the applied filters instead, so both boxes do what they
+  look like they do and neither is disabled. Explore says how many filters the search cleared and
+  offers to put them back. The panel keeps every field either way, so they are one press of Search
+  away whether or not the note is still on screen.
 
 ## [0.2.0] - 2026-09-11
 
