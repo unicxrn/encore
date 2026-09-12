@@ -32,6 +32,12 @@ release.
   stays shut until you open it, and once filters are applied the button that opens it says how
   many, with a way to clear them.
 
+### Changed
+
+- Windows has now been run. The 0.1.0 notes below record that nothing had been, because at the
+  time nothing had: the installer was cross-compiled and inspected rather than executed. It
+  installs and runs. It is still not code signed, so SmartScreen warns once.
+
 ### Fixed
 
 - Explore answered an advanced search that matched nothing with "Chorus Encore returned no charts
