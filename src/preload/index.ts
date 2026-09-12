@@ -8,6 +8,7 @@ import type {
   QueuedDownload,
   Settings
 } from '../shared/schemas'
+import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from '../main/assets/art'
 import type { LibraryCandidate } from '../main/catalog/detect-library'
 import type { ChartIssueRow } from '../main/catalog/issues'
@@ -60,6 +61,12 @@ const api = {
   // current filter: narrowing the lists as filters are applied would take options away the moment
   // they were used.
   catalogFacets: (): Promise<CatalogFacets> => ipcRenderer.invoke(IPC.catalogFacets),
+  // What the library holds more than one copy of, in three separate relationships: the same
+  // chart file installed twice, several versions of one charter's chart, and the same song by
+  // different charters. The third is not a fault and is labelled so. Read straight out of the
+  // catalog, so it answers in a few tens of milliseconds on a library of any size and needs no
+  // scan first; charts the scanner has not reached are simply not in it.
+  catalogDuplicates: (): Promise<DuplicateReport> => ipcRenderer.invoke(IPC.catalogDuplicates),
   downloadAdd: (r: DownloadRequest): Promise<void> => ipcRenderer.invoke(IPC.downloadAdd, r),
   downloadCancel: (md5: string): Promise<void> => ipcRenderer.invoke(IPC.downloadCancel, md5),
   downloadRetry: (md5: string): Promise<void> => ipcRenderer.invoke(IPC.downloadRetry, md5),
@@ -75,6 +82,9 @@ const api = {
     chartType: 'folder' | 'sng'
   }): Promise<{ fileName: string; data: Uint8Array }[]> =>
     ipcRenderer.invoke(IPC.chartReadFiles, req),
+  // Opens the system file manager with this chart selected. Changes nothing on disk. Rejects
+  // for a path outside the configured library folders.
+  chartReveal: (path: string): Promise<void> => ipcRenderer.invoke(IPC.chartReveal, path),
   chartLyricLines: (req: {
     path: string
     chartType: 'folder' | 'sng'

@@ -12,6 +12,7 @@ import {
   Settings,
   SettingsSchema
 } from '../shared/schemas'
+import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from './assets/art'
 import type { LyricsSearchResult } from './assets/lyrics'
 import type { LyricLinesResult } from './catalog/lyric-lines'
@@ -41,6 +42,26 @@ export interface IpcDeps {
    * the lists describe the whole catalog, so narrowing them by the filter currently applied
    * would take options away as soon as they were used. */
   chartFacets: () => CatalogFacets
+  /**
+   * What the library holds more than one copy of, in three separate relationships that are not
+   * equally interesting (see shared/duplicates.ts). Synchronous: it is two grouped queries over
+   * the catalog, so there is no job to start, nothing to cancel and no progress to report.
+   *
+   * Takes no arguments, and deliberately returns the whole report rather than a page of it. The
+   * caller is drawing a summary of the library as a whole, and a paged answer could not say how
+   * many groups there are without a second call that asks the same question again.
+   */
+  duplicateCharts: () => DuplicateReport
+  /**
+   * Show one chart in the system file manager. The only thing the duplicates report offers to
+   * DO about a duplicate, and it is deliberately the smallest such thing: it opens a window,
+   * changes nothing, and hands the decision to the user in the place where they can act on it.
+   *
+   * Refuses a path outside the configured library folders, on the same containment check the
+   * writers use. A reveal cannot damage anything, but the path arrives from the renderer, and
+   * handing an arbitrary one to the desktop shell is not a thing to do on trust.
+   */
+  revealChart: (path: string) => void
   startScan: () => void
   /**
    * Abort the running library scan, if there is one. Resolves as soon as the signal has been
@@ -306,6 +327,13 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     deps.chartsExistByMeta(ExistsByMetaSchema.parse(raw))
   )
   ipcMain.handle(IPC.catalogFacets, () => deps.chartFacets())
+  // No payload: the report describes the whole catalog. There is nothing here for the renderer
+  // to name and so nothing to validate.
+  ipcMain.handle(IPC.catalogDuplicates, () => deps.duplicateCharts())
+  // The path goes to the desktop shell, so it is checked for containment in main before it gets
+  // there (see `revealChart` in index.ts). The non-empty check catches a caller sending nothing
+  // at all, which would otherwise mean "open the file manager on ''".
+  ipcMain.handle(IPC.chartReveal, (_e, raw) => deps.revealChart(z.string().min(1).parse(raw)))
   ipcMain.handle(IPC.downloadAdd, (_e, raw) => deps.addDownload(DownloadRequestSchema.parse(raw)))
   ipcMain.handle(IPC.downloadCancel, (_e, raw) => deps.cancelDownload(z.string().parse(raw)))
   ipcMain.handle(IPC.downloadRetry, (_e, raw) => deps.retryDownload(z.string().parse(raw)))

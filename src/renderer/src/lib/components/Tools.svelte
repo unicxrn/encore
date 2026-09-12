@@ -20,6 +20,7 @@
   import { takeFocus, wrapTab } from '../focus-trap'
   import { assetJobs } from '../stores/assets'
   import { encore } from '../stores/bridge'
+  import Duplicates from './Duplicates.svelte'
 
   // A row plus its human explanation. The raw code stays on the row so it can still be
   // read off the screen and exported.
@@ -800,6 +801,12 @@
     Hero cannot play, and song.ini values it rejects or shows wrong. Results are grouped by what
     went wrong, so you know which charts to fix or download again.
   </p>
+
+  <!-- Above the issue report and outside it, because it answers a different question from a
+       different source: the issue scan walks the filesystem on a button press, and this reads the
+       catalogue on mount. It is one line until it is opened, so the view still leads with the
+       scan. -->
+  <Duplicates />
 
   {#if progressLine}
     <p class="progress mono">{progressLine}</p>

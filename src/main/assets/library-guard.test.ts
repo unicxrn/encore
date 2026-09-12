@@ -1,7 +1,7 @@
 import { mkdirSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { assertUnderLibrary } from './library-guard'
+import { assertUnderLibrary, isUnderLibrary } from './library-guard'
 import { tmpDir } from '../../../test/helpers/tmp'
 
 describe('assertUnderLibrary', () => {
@@ -66,5 +66,48 @@ describe('assertUnderLibrary', () => {
     expect(() =>
       assertUnderLibrary(join(second, 'Chart'), [{ path: library }, { path: second }])
     ).not.toThrow()
+  })
+})
+
+/**
+ * The same containment question, asked by a caller that is not a write.
+ *
+ * `chart:reveal` hands a path to the desktop's file manager, so it has to refuse exactly what
+ * the writers refuse while saying so in words that are true of it. These pin that the two agree,
+ * which is the only reason the predicate was split out in the first place.
+ */
+describe('isUnderLibrary', () => {
+  let root: string
+  let library: string
+  let outside: string
+
+  beforeEach(() => {
+    root = tmpDir('reveal-guard')
+    library = join(root, 'library')
+    outside = join(root, 'outside')
+    mkdirSync(library, { recursive: true })
+    mkdirSync(outside, { recursive: true })
+  })
+
+  const folders = (): { path: string }[] => [{ path: library }]
+
+  it('agrees with assertUnderLibrary on a chart inside the library', () => {
+    const chart = join(library, 'Rush - YYZ')
+    expect(isUnderLibrary(chart, folders())).toBe(true)
+    expect(() => assertUnderLibrary(chart, folders())).not.toThrow()
+  })
+
+  it('agrees with assertUnderLibrary on a path outside it', () => {
+    expect(isUnderLibrary(outside, folders())).toBe(false)
+    expect(() => assertUnderLibrary(outside, folders())).toThrow()
+  })
+
+  it('refuses a ..-escape, and a sibling whose name starts with the library folder', () => {
+    expect(isUnderLibrary(join(library, '..', 'outside', 'Chart'), folders())).toBe(false)
+    expect(isUnderLibrary(`${library}-evil`, folders())).toBe(false)
+  })
+
+  it('refuses everything when no library folder is configured', () => {
+    expect(isUnderLibrary(join(library, 'Rush - YYZ'), [])).toBe(false)
   })
 })

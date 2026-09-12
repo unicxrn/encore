@@ -39,14 +39,26 @@ function isUnder(path: string, root: string): boolean {
 }
 
 /**
+ * Whether the canonicalized target lives inside one of the configured library folders.
+ *
+ * The question `assertUnderLibrary` asks, without the answer it gives. Split out for the one
+ * caller that is not a write: `chart:reveal` hands a path to the system file manager, and it has
+ * to refuse the same paths for the same reason while saying so in words that are true. "Refusing
+ * to write" on a call that was never going to write is the kind of sentence that sends a user
+ * looking for damage that did not happen.
+ */
+export function isUnderLibrary(targetPath: string, libraryFolders: { path: string }[]): boolean {
+  const target = canonicalize(targetPath)
+  return libraryFolders.some((f) => isUnder(target, canonicalize(f.path)))
+}
+
+/**
  * Throws unless the canonicalized target lives inside one of the configured
  * library folders. Every asset writer MUST call this before touching disk:
  * it is the single guard between renderer-supplied paths and the filesystem.
  */
 export function assertUnderLibrary(targetPath: string, libraryFolders: { path: string }[]): void {
-  const target = canonicalize(targetPath)
-  const inside = libraryFolders.some((f) => isUnder(target, canonicalize(f.path)))
-  if (!inside) {
+  if (!isUnderLibrary(targetPath, libraryFolders)) {
     throw new Error(`Refusing to write outside the library folders: ${targetPath}`)
   }
 }

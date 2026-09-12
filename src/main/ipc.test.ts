@@ -33,6 +33,14 @@ const deps = (): IpcDeps => ({
   countCharts: vi.fn().mockReturnValue(0),
   chartsExistByMeta: vi.fn().mockReturnValue([true]),
   chartFacets: vi.fn().mockReturnValue({ artists: [], genres: [], charters: [], years: [] }),
+  duplicateCharts: vi.fn().mockReturnValue({
+    identical: [],
+    versions: [],
+    alternates: [],
+    totalCharts: 0,
+    unidentifiedCharts: 0
+  }),
+  revealChart: vi.fn(),
   checkUpdates: vi.fn().mockResolvedValue({ verdicts: [], failed: 0, requests: 0 }),
   lastUpdates: vi.fn().mockReturnValue([]),
   cancelUpdateCheck: vi.fn(),
@@ -205,6 +213,33 @@ describe('registerIpc', () => {
       years: []
     })
     expect(d.chartFacets).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes catalog:duplicates to deps', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.catalogDuplicates)).toEqual({
+      identical: [],
+      versions: [],
+      alternates: [],
+      totalCharts: 0,
+      unidentifiedCharts: 0
+    })
+    expect(d.duplicateCharts).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to reveal a chart named by nothing at all', async () => {
+    // The containment check itself lives in main/index.ts, where the library folders are. What
+    // the boundary can rule out on its own is an empty path, which would otherwise reach
+    // `shell.showItemInFolder` as a request to open the file manager on ''.
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.chartReveal, '')).rejects.toThrow()
+    expect(d.revealChart).not.toHaveBeenCalled()
+    await ipc.invoke(IPC.chartReveal, '/library/Rush - YYZ')
+    expect(d.revealChart).toHaveBeenCalledWith('/library/Rush - YYZ')
   })
 
   it('validates download requests', async () => {

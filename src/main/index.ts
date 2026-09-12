@@ -9,11 +9,13 @@ import { ENCORE_TMP_DIR, ENCHOR_FILES_URL } from '../shared/constants'
 import { IPC } from '../shared/ipc-contract'
 import { resolveChartFolderName } from '../shared/naming'
 import type { ChartRecord } from '../shared/schemas'
+import { isUnderLibrary } from './assets/library-guard'
 import { sweepOrphanArt } from './catalog/art-cache'
 import { readChartFiles } from './catalog/chart-files'
 import { readLyricLines } from './catalog/lyric-lines'
 import { detectChartLibraries } from './catalog/detect-library'
 import { openCatalog, type CatalogDb } from './catalog/db'
+import { findDuplicates } from './catalog/duplicates'
 import {
   chartFacets,
   chartsExistByMeta,
@@ -463,6 +465,18 @@ function wireIpc(): {
     countCharts: (f) => countCharts(db, f),
     chartsExistByMeta: (keys) => chartsExistByMeta(db, keys),
     chartFacets: () => chartFacets(db),
+    duplicateCharts: () => findDuplicates(db),
+    // The library containment check is the same one the writers make, for a call that writes
+    // nothing: the path arrives from the renderer, and `shell.showItemInFolder` hands it
+    // straight to the desktop. `showItemInFolder` selects the chart inside its parent folder,
+    // which is the useful view for both chart shapes: a folder chart's own folder, and a .sng
+    // sitting among its neighbours.
+    revealChart: (path) => {
+      if (!isUnderLibrary(path, loadSettings(settingsPath).libraryFolders)) {
+        throw new Error(`Refusing to open a path outside the library folders: ${path}`)
+      }
+      shell.showItemInFolder(path)
+    },
     startScan: () => runScan(),
     cancelScan: () => scanner.cancel(),
     // Targeted re-index after an asset write. The alternative, waiting for the watcher's
