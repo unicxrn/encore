@@ -15,14 +15,40 @@ import { encore } from './bridge'
 export const appUpdate: Writable<AppUpdateStatus | null> = writable(null)
 
 /**
- * Subscribe to main's state changes for the life of the app.
+ * Subscribe to main's state changes for the life of the app, and read what it already decided.
  *
- * Needed as well as `refreshAppUpdate` because two of the states arrive unasked: the startup
- * check's result, which nothing in the renderer invoked, and the percent during a download, which
- * arrives between the invoke and the promise it resolves.
+ * The subscription is needed because two states arrive unasked: the startup check's result, which
+ * nothing in the renderer invoked, and the percent during a download, which arrives between the
+ * invoke and the promise it resolves.
+ *
+ * The read is needed because the startup check can finish before this subscription exists. Main
+ * begins it immediately after `createWindow()`, and the renderer has to load, mount and reach
+ * here first; on a fast connection the push lands with nobody listening and is gone. Nothing then
+ * set this store until Settings was opened, because its `onMount` was the only caller of
+ * `refreshAppUpdate`, so the launch prompt appeared on a visit to Settings rather than at launch.
+ * Asking main for its current state costs no network and cannot miss an answer that has already
+ * happened.
+ *
+ * Whatever answers first wins. The read is dispatched after the subscription, so a push can land
+ * while it is still in flight, and letting the older answer resolve on top of a newer one would
+ * put a stale percent or a superseded verdict on screen.
  */
 export function initAppUpdate(): () => void {
-  return encore().onAppUpdate((raw) => appUpdate.set(raw as AppUpdateStatus))
+  const off = encore().onAppUpdate((raw) => appUpdate.set(raw as AppUpdateStatus))
+  void (async () => {
+    try {
+      const current = await encore().appUpdateStatus()
+      // Only if nothing has answered yet. This read is dispatched at mount and resolves a tick
+      // or more later, by which time a push may have landed or a refresh may have run, and both
+      // of those are newer than the state main held when this call was made. Filling the gap is
+      // the whole job; overwriting an answer is not.
+      if (get(appUpdate) === null) appUpdate.set(current)
+    } catch {
+      // A bridge without the method, or main mid-restart. The subscription is still live and
+      // Settings still asks on its own, so there is nothing to report and nothing to undo.
+    }
+  })()
+  return off
 }
 
 /**

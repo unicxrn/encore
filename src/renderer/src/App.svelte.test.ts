@@ -966,3 +966,63 @@ describe('App launch collisions', () => {
     expect(await screen.findByRole('dialog', { name: PROMPT })).toBeTruthy()
   })
 })
+
+/**
+ * The launch prompt when the check finished before anyone was listening.
+ *
+ * Main starts the update check immediately after `createWindow()`, and the renderer has to load,
+ * mount and subscribe before the answer is pushed. On a fast connection it loses that race, the
+ * push lands with nothing listening, and it is gone: `ev:app-update` is an event, not a value.
+ *
+ * The tests above push the status into the store by hand, which is a fair way to pin what App
+ * does with an offer and is exactly why this went unnoticed. It skips the question of how the
+ * offer gets there. Encore shipped with the prompt appearing when Settings was opened, because
+ * `refreshAppUpdate` in Settings' `onMount` was the only thing that ever asked main what it had
+ * decided. So this one never fires the subscription at all.
+ */
+describe('App update prompt, when the push was missed', () => {
+  const offered = {
+    currentVersion: '0.2.9',
+    target: 'appimage' as const,
+    canApply: true,
+    note: 'Encore will fetch the release and apply it when you restart.',
+    state: { kind: 'available' as const, version: '0.3.0' }
+  }
+
+  it('asks main what it already decided, rather than waiting for an event that has been and gone', async () => {
+    stubEncore({
+      // The push happened before this subscription existed, so it never arrives.
+      onAppUpdate: vi.fn(() => () => {}),
+      appUpdateStatus: vi.fn().mockResolvedValue(offered)
+    })
+    settingsLoaded.set(true)
+    render(App)
+
+    expect(await screen.findByRole('dialog', { name: 'Update available' })).toBeTruthy()
+  })
+
+  it('lets a push that arrives first stand, rather than resolving an older read on top of it', async () => {
+    let emit: ((raw: unknown) => void) | null = null
+    stubEncore({
+      onAppUpdate: vi.fn((cb: (raw: unknown) => void) => {
+        emit = cb
+        return () => {}
+      }),
+      // Main answers with the state as it was when the call was dispatched. A change that lands
+      // while it is in flight is newer, and must not be overwritten when this resolves.
+      appUpdateStatus: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve(offered), 0)
+          })
+      )
+    })
+    settingsLoaded.set(true)
+    render(App)
+    emit?.({ ...offered, state: { kind: 'downloading', percent: 40 } })
+
+    // The download is in progress, so there is no offer to accept and no prompt.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByRole('dialog', { name: 'Update available' })).toBeNull()
+  })
+})
