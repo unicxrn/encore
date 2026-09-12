@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartRecord, JobProgress } from '../../../../shared/schemas'
 import { ChartRecordSchema } from '../../../../shared/schemas'
 import { scanProgress } from '../stores/scan'
+import {
+  EIGHT_TAG_CHARTER,
+  EIGHT_TAG_CHARTER_TEXT
+} from '../../../../../test/helpers/marked-up-names'
 
 // The latest-charts row talks to the Enchor API over the network. Stubbed at the store, not at
 // fetch, because nothing below is about that row; this file only covers Home's scan controls.
@@ -109,5 +113,21 @@ describe('Home: no longer the place the play data lives', () => {
     const latest = await screen.findByText('LATEST CHARTS')
     const library = await screen.findByText('IN YOUR LIBRARY')
     expect(latest.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('Home: a name written in Clone Hero markup', () => {
+  it('reads the recently added row as text, and falls back when the name is only tags', async () => {
+    // Home is the one view the strip pass could not reach, because the Stats move held this file.
+    // Both rows here are real shapes: a charter styles their name and song.ini carries it whole.
+    renderHome({
+      catalogQuery: () =>
+        Promise.resolve([chart('/l/a', EIGHT_TAG_CHARTER), chart('/l/Only Tags', '<b></b>')])
+    })
+    expect(await screen.findByText(EIGHT_TAG_CHARTER_TEXT)).toBeTruthy()
+    // A name that strips to nothing used to render an empty span. The path is what is left to
+    // identify the chart by, and it is what every other view falls back to.
+    expect(screen.getByText('Only Tags')).toBeTruthy()
+    expect(screen.queryByText(/color=#/)).toBeNull()
   })
 })

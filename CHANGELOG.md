@@ -67,6 +67,10 @@ release.
 
 ### Fixed
 
+- Home reads a chart name as text too. It was the one view left drawing Clone Hero's
+  markup, and a name that is nothing but markup now falls back to the folder it sits in
+  rather than rendering as an empty line.
+
 - A name written in Clone Hero's own styling markup read as the markup, everywhere Encore drew
   one. Charters colour their names in the game and song.ini and Chorus carry that verbatim, so one
   charter arrived as eight colour tags, one per letter. Installed, Explore, a chart's page, Asset

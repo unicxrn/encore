@@ -16,7 +16,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { albumArtUrl } from '../api/enchor'
   import { artUrl } from '../../../../shared/art'
-  import { msToTime, fallbackChartName } from '../../../../shared/format'
+  import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
   import { globalQuery } from '../stores/global-search'
   import { latestCharts, loadLatestCharts } from '../stores/latest-charts'
@@ -213,8 +213,8 @@
             {:else}
               <div class="art placeholder"></div>
             {/if}
-            <span class="c-name">{chart.name}</span>
-            <span class="c-artist">{chart.artist}</span>
+            <span class="c-name">{stripRichText(chart.name)}</span>
+            <span class="c-artist">{stripRichText(chart.artist)}</span>
             <span class="c-len mono">{msToTime(chart.song_length)}</span>
           </button>
         {/each}
@@ -242,7 +242,7 @@
             {:else}
               <div class="avatar placeholder"></div>
             {/if}
-            <span class="a-name">{entry.name}</span>
+            <span class="a-name">{stripRichText(entry.name)}</span>
           </button>
         {/each}
       </div>
@@ -287,9 +287,9 @@
               <div class="art placeholder"></div>
             {/if}
             <span class="c-name" title={record.path}
-              >{record.name ?? fallbackChartName(record.path)}</span
+              >{stripRichText(record.name) || fallbackChartName(record.path)}</span
             >
-            <span class="c-artist">{record.artist ?? ''}</span>
+            <span class="c-artist">{stripRichText(record.artist)}</span>
             <span class="c-len mono">{msToTime(record.songLength)}</span>
           </button>
         {/each}
