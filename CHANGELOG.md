@@ -14,6 +14,18 @@ release.
 
 ### Added
 
+- Your plays, on Home. Encore has been reading Clone Hero's own score file since 0.2.0 and keeping
+  what it finds, and none of it reached the screen. The panel shows plays recorded, charts played,
+  accuracy, full combos, best score, longest streak and the ten charts you have played most. Every
+  figure is prefaced by the date the record starts, because Clone Hero's score file holds only the
+  most recent play: Encore's history begins the first time it saw that file change, and nothing
+  before that can be recovered. These are not lifetime totals and the panel says so before it says
+  anything else. When there is nothing yet it says which of the four reasons applies and where it
+  looked, rather than drawing a grid of zeroes.
+- A chart in Installed says how many times it has been played, when there is a play on record for
+  it. The count is a batch read for each page of the list, and a chart with no record carries no
+  badge at all: the list already distinguishes "no plays recorded" from "never played", and a zero
+  would not.
 - Explore loads the next page as you reach the bottom of the results, instead of asking you to
   press a button for each one. It appends on its own up to 500 charts, then leaves a button that
   fetches a page and raises the ceiling again, so a long browse stays a list you can still scroll

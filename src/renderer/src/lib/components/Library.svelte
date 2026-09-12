@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { get } from 'svelte/store'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import type {
     CatalogFacets,
     CatalogSortField,
     ChartRecord,
     SortDirection
   } from '../../../../shared/schemas'
+  import type { ChartPlaySummary, PlayDataStatus } from '../../../../shared/play'
   import { artUrl } from '../../../../shared/art'
-  import { msToTime, instrumentDiff, fallbackChartName } from '../../../../shared/format'
+  import { msToTime, instrumentDiff, fallbackChartName, playedOn } from '../../../../shared/format'
   import { cancelScan, scanProgress, startScan } from '../stores/scan'
   import { encore } from '../stores/bridge'
   import { settings } from '../stores/settings'
@@ -109,6 +110,104 @@
   const artFailed = new SvelteSet<string>()
 
   /**
+   * Play summaries for the rows on screen, keyed by Clone Hero checksum.
+   *
+   * Fetched one request per PAGE, never one per row: `playSummaries` takes a batch precisely so
+   * a hundred badges cost a hundred rows' worth of one round trip, and the cap it enforces
+   * (PLAY_SUMMARY_MAX, 500) is above this view's page size for the same reason.
+   *
+   * A checksum with no play is OMITTED from the answer rather than returned as zeroes, so an
+   * absent entry here means "no play on record" and the row simply grows no badge. It also means
+   * "not fetched yet" for the moment between a page landing and its summaries arriving, which is
+   * the same thing on screen: nothing.
+   *
+   * A SvelteMap rather than a reassigned plain one, so "Load more" adds this page's entries
+   * without rebuilding the map the rows already on screen are reading from.
+   */
+  const plays = new SvelteMap<string, ChartPlaySummary>()
+
+  /**
+   * What `playStatus` said, asked once per mount and shared by every page.
+   *
+   * The gate the preload comment asks for. Null means the question has not been answered yet or
+   * could not be; either way nothing is drawn, which is also what a machine with no Clone Hero
+   * gets. Held as a promise so the pages that load concurrently on mount queue behind one
+   * request instead of firing one each.
+   */
+  let playStatus = $state<PlayDataStatus | null>(null)
+  let playStatusRequest: Promise<PlayDataStatus | null> | null = null
+
+  function requestPlayStatus(): Promise<PlayDataStatus | null> {
+    playStatusRequest ??= (async () => {
+      try {
+        const status = await encore().playStatus()
+        playStatus = status
+        return status
+      } catch {
+        // Best effort, like the facets and the version badges: this column is an addition to a
+        // list that is complete without it, and nothing here may take the list down.
+        return null
+      }
+    })()
+    return playStatusRequest
+  }
+
+  /**
+   * Summaries for one page of rows.
+   *
+   * `append` decides whether this extends the map or replaces it, matching what `load()` just
+   * did to `charts`: a fresh page one is a new list, and keeping the previous filter's entries
+   * would grow the map for the life of the visit with rows nothing can show.
+   *
+   * Charts with no `cloneHeroChecksum` are dropped before the request. Nothing can ever join a
+   * play to them, and sending them would only spend the request's cap.
+   */
+  async function loadPlays(rows: ChartRecord[], append: boolean): Promise<void> {
+    const status = await requestPlayStatus()
+    if (!status?.available) return
+    const checksums = [
+      ...new Set(rows.map((row) => row.cloneHeroChecksum).filter((sum) => sum !== null))
+    ]
+    if (checksums.length === 0) {
+      if (!append) plays.clear()
+      return
+    }
+    try {
+      const summaries = await encore().playSummaries(checksums)
+      // Cleared after the answer arrives, not before it is asked for: clearing up front would
+      // blank the badges already on screen for as long as the round trip takes.
+      if (!append) plays.clear()
+      for (const summary of summaries) plays.set(summary.checksum, summary)
+    } catch {
+      // See requestPlayStatus.
+    }
+  }
+
+  function playFor(chart: ChartRecord): ChartPlaySummary | null {
+    return chart.cloneHeroChecksum ? (plays.get(chart.cloneHeroChecksum) ?? null) : null
+  }
+
+  /**
+   * The badge's hover text: what the count is worth, in one line.
+   *
+   * `bestAccuracy` belongs to the best-SCORING play rather than the most accurate one (see
+   * main/play/store.ts), so the two sit together in one sentence instead of reading as two
+   * independent bests.
+   */
+  function playTitle(play: ChartPlaySummary): string {
+    const parts: string[] = []
+    if (play.bestScore !== null) {
+      const accuracy =
+        play.bestAccuracy !== null ? ` at ${(play.bestAccuracy * 100).toFixed(1)}%` : ''
+      parts.push(`Best score ${play.bestScore.toLocaleString()}${accuracy}.`)
+    }
+    if (play.everFc) parts.push('Full combo at least once.')
+    if (play.lastPlayedAt) parts.push(`Last played ${playedOn(play.lastPlayedAt)}.`)
+    parts.push('Counted only from when Encore started watching Clone Hero.')
+    return parts.join(' ')
+  }
+
+  /**
    * The three difficulty columns of a row, with the ones this chart does not chart removed.
    *
    * Dropping absent instruments here rather than rendering an empty span keeps the `.d + .d`
@@ -167,6 +266,9 @@
       charts = append ? [...charts, ...rows] : rows
       total = count
       loadError = null
+      // One batch for the page that just landed, not one per row, and not awaited: the list is
+      // complete without badges and must not wait on them to paint.
+      void loadPlays(rows, append)
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
@@ -445,6 +547,14 @@
       Encore counts plays only from when it started watching Clone Hero, so a chart you played
       before that is in this list too.
     </p>
+  {:else if playStatus?.available}
+    <!-- The same fact from the other side, and it earns the same line for the same reason: a
+         row with no badge is "no play on record", never "you have never played this". Only one
+         of the two is ever on screen, since the filter's wording above already says it. -->
+    <p class="caveat">
+      Play counts start from when Encore began watching Clone Hero. A chart you played before that
+      carries no count here.
+    </p>
   {/if}
   <!-- One line of scope, so Installed and Asset Studio don't read as the same list twice. -->
   <p class="intro">
@@ -473,6 +583,7 @@
   <div class="table selectable">
     {#each charts as chart (chart.path)}
       {@const art = coverFor(chart)}
+      {@const play = playFor(chart)}
       <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
         {#if art}
           <!-- Decorative: the title and artist beside it already name the chart, so alt text
@@ -504,6 +615,16 @@
                 title="Chorus Encore has a different version of this chart. Open it to compare."
               >
                 DIFFERENT VERSION
+              </span>
+            {/if}
+            <!-- Inside the title line rather than as a column of its own: the grid has no room
+                 to spare, and a seventh track would be empty down its whole length for the
+                 many users with no play data at all. Absent when there is no record, so it
+                 costs nothing on a row that has none. -->
+            {#if play}
+              <span class="badge mono plays" title={playTitle(play)}>
+                {play.timesPlayed.toLocaleString()}
+                {play.timesPlayed === 1 ? 'PLAY' : 'PLAYS'}
               </span>
             {/if}
           </span>
@@ -870,6 +991,13 @@
     border-radius: 3px;
     color: var(--accent-text);
     white-space: nowrap;
+  }
+  /* Quieter than the version badge above, and declared after it so that at equal specificity
+     this wins the colour. The version badge is asking for a decision; a play count is only
+     telling you something, and two accent chips on one line would make neither of them stand
+     out. Same box, so the row's height is unchanged either way. */
+  .badge.plays {
+    color: var(--text-3);
   }
   /* Artist, album and genre on one line. Kept to one line and one size: the row is two lines
      tall and that is what holds it at its current height. */

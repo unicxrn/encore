@@ -78,3 +78,31 @@ describe('Home: cancelling a scan', () => {
     expect(await screen.findByText('YYZ')).toBeTruthy()
   })
 })
+
+/**
+ * The play panel is Home's first block under the hero, and it owns everything about itself:
+ * its own gate, its own fetches, its own empty states. All this checks is that Home mounts it,
+ * and that a Home whose bridge cannot answer the play calls still renders the rest of the page.
+ * What the panel says in each state is PlayPanel.svelte.test.ts's business.
+ */
+describe('Home: the play panel', () => {
+  it('mounts the panel above the chart rows', async () => {
+    renderHome({
+      catalogQuery: () => Promise.resolve([]),
+      playStatus: () =>
+        Promise.resolve({ available: false, reason: 'noFile', path: '/scores.json', playCount: 0 }),
+      onPlayRecorded: () => () => {}
+    })
+
+    const plays = await screen.findByText('YOUR PLAYS')
+    const latest = await screen.findByText('LATEST CHARTS')
+    expect(plays.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the rest of Home when the bridge has no play calls at all', async () => {
+    renderHome({ catalogQuery: () => Promise.resolve([chart('/library/YYZ', 'YYZ')]) })
+
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    expect(await screen.findByText('YOUR PLAYS')).toBeTruthy()
+  })
+})

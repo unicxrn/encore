@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { msToTime, diffDisplay, formatBytes, instrumentDiff, fallbackChartName } from './format'
+import {
+  msToTime,
+  diffDisplay,
+  formatBytes,
+  instrumentDiff,
+  fallbackChartName,
+  playedOn
+} from './format'
 
 describe('msToTime', () => {
   it('formats minutes and seconds', () => {
@@ -105,5 +112,28 @@ describe('formatBytes', () => {
   it('renders nonsense as a dash rather than as NaN', () => {
     expect(formatBytes(-1)).toBe('—')
     expect(formatBytes(Number.NaN)).toBe('—')
+  })
+})
+
+describe('playedOn', () => {
+  /**
+   * The output is the host locale's, so what is pinned is the parse, not the wording. Clone Hero
+   * writes seven fractional digits, which is more than the three ECMAScript spells out, and this
+   * asserts that the engine takes it rather than throwing the whole value away.
+   */
+  it("reads Clone Hero's seven-digit ISO timestamp", () => {
+    const iso = '2026-03-03T18:04:11.1234567Z'
+    expect(playedOn(iso)).toBe(new Date(iso).toLocaleDateString())
+    expect(playedOn(iso)).not.toBe('—')
+  })
+
+  it('shows the empty-cell dash for a missing timestamp', () => {
+    expect(playedOn(null)).toBe('—')
+    expect(playedOn(undefined)).toBe('—')
+  })
+
+  /** The unguarded form of this renders the literal words "Invalid Date" into the page. */
+  it('shows the dash rather than "Invalid Date" for something unparsable', () => {
+    expect(playedOn('not a timestamp')).toBe('—')
   })
 })

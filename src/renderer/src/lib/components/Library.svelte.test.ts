@@ -8,6 +8,7 @@ import {
   type ChartRecord,
   type JobProgress
 } from '../../../../shared/schemas'
+import type { ChartPlaySummary, PlayDataStatus } from '../../../../shared/play'
 import type { ChartVerdict } from '../../../../shared/updates'
 import { scanProgress } from '../stores/scan'
 import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
@@ -806,5 +807,240 @@ describe('Library: the filterable fields on a row', () => {
     renderLibrary([chart({ path: '/library/y', name: 'Undated', year: null })])
 
     expect((await rowTitled('Undated')).querySelector('.year')?.textContent?.trim()).toBe('')
+  })
+})
+
+/**
+ * Play counts on the rows.
+ *
+ * Two things are worth pinning and one is not. The two: that the whole page's badges cost ONE
+ * `playSummaries` call rather than one per row, and that a row with no record grows no badge,
+ * because a zero here would read as "you have never played this" when the truth is "Encore was
+ * not watching". The one that is not: how the badge looks beside the version badge, which jsdom
+ * cannot see.
+ */
+describe('Library: play counts', () => {
+  const CHECKSUM_A = 'a'.repeat(32)
+  const CHECKSUM_B = 'b'.repeat(32)
+
+  const summary = (over: Partial<ChartPlaySummary> & { checksum: string }): ChartPlaySummary => ({
+    timesPlayed: 1,
+    bestScore: null,
+    bestStars: null,
+    bestAccuracy: null,
+    everFc: false,
+    lastPlayedAt: null,
+    ...over
+  })
+
+  const watching = (over: Partial<PlayDataStatus> = {}): PlayDataStatus => ({
+    available: true,
+    reason: 'ok',
+    path: '/home/player/.clonehero/scorestats.json',
+    playCount: 9,
+    ...over
+  })
+
+  /**
+   * A catalog that pages, so "once per page" is a question this file can ask.
+   *
+   * `pages` is served in order: the first `load()` gets the first entry, each "Load more" the
+   * next. `total` is the sum, which is what keeps the Load more button on screen.
+   */
+  function renderPaged(
+    pages: ChartRecord[][],
+    summaries: ChartPlaySummary[],
+    status: PlayDataStatus = watching()
+  ): { playSummaries: ReturnType<typeof vi.fn>; playStatus: ReturnType<typeof vi.fn> } {
+    const total = pages.reduce((n, page) => n + page.length, 0)
+    const playSummaries = vi.fn((checksums: string[]) =>
+      Promise.resolve(summaries.filter((s) => checksums.includes(s.checksum)))
+    )
+    const playStatus = vi.fn(() => Promise.resolve(status))
+    vi.stubGlobal('encore', {
+      catalogQuery: (f: CatalogFilter): Promise<ChartRecord[]> => {
+        // The view asks by offset; the page index is the offset over the page size it used.
+        const index = pages.findIndex(
+          (_page, i) => f.offset === pages.slice(0, i).reduce((n, p) => n + p.length, 0)
+        )
+        return Promise.resolve(index === -1 ? [] : pages[index])
+      },
+      catalogCount: (): Promise<number> => Promise.resolve(total),
+      updatesLast: () => Promise.resolve([]),
+      playStatus,
+      playSummaries
+    })
+    render(Library, { onOpenChart: () => {} })
+    return { playSummaries, playStatus }
+  }
+
+  function badgesOf(row: HTMLElement): string[] {
+    return [...row.querySelectorAll('.badge')].map((b) =>
+      (b.textContent ?? '').replace(/\s+/g, ' ').trim()
+    )
+  }
+
+  it('asks once for the whole page, not once per row', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) =>
+      chart({
+        path: `/library/chart-${i}`,
+        name: `Chart ${i}`,
+        cloneHeroChecksum: String(i).repeat(32).slice(0, 32)
+      })
+    )
+    const { playSummaries } = renderPaged([rows], [])
+
+    await rowTitled('Chart 7')
+    await waitFor(() => expect(playSummaries).toHaveBeenCalledTimes(1))
+    // Eight rows, one call, eight checksums in it.
+    expect(playSummaries.mock.calls[0][0]).toHaveLength(8)
+  })
+
+  it('asks once more per page appended, with only that page in the batch', async () => {
+    const first = [chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]
+    const second = [chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B })]
+    const { playSummaries } = renderPaged(
+      [first, second],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 3 }), summary({ checksum: CHECKSUM_B })]
+    )
+
+    await rowTitled('One')
+    await waitFor(() => expect(playSummaries).toHaveBeenCalledTimes(1))
+    await fireEvent.click(await screen.findByRole('button', { name: /load more/i }))
+    await rowTitled('Two')
+    await waitFor(() => expect(playSummaries).toHaveBeenCalledTimes(2))
+
+    expect(playSummaries.mock.calls[1][0]).toEqual([CHECKSUM_B])
+    // The first page keeps its badge: appending must extend the map, not replace it.
+    await waitFor(() =>
+      expect(badgesOf(document.querySelector('.row') as HTMLElement)).toContain('3 PLAYS')
+    )
+  })
+
+  it('asks the gate once for the whole visit, not once per page', async () => {
+    const first = [chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]
+    const second = [chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B })]
+    const { playStatus } = renderPaged([first, second], [])
+
+    await rowTitled('One')
+    await fireEvent.click(await screen.findByRole('button', { name: /load more/i }))
+    await rowTitled('Two')
+    await waitFor(() => expect(playStatus).toHaveBeenCalledTimes(1))
+  })
+
+  it('never asks for summaries when the gate says nothing is recorded', async () => {
+    const { playSummaries } = renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [],
+      watching({ available: false, playCount: 0 })
+    )
+
+    await rowTitled('One')
+    // Given a moment to have made the call it must not make.
+    await waitFor(() => expect(document.querySelector('.row')).not.toBeNull())
+    expect(playSummaries).not.toHaveBeenCalled()
+  })
+
+  it('badges a played chart with its count and leaves an unplayed one bare', async () => {
+    renderPaged(
+      [
+        [
+          chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A }),
+          chart({ path: '/library/two', name: 'Two', cloneHeroChecksum: CHECKSUM_B })
+        ]
+      ],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 12 })]
+    )
+
+    const played = await rowTitled('One')
+    await waitFor(() => expect(badgesOf(played)).toEqual(['12 PLAYS']))
+    // Nothing at all on the row with no record. A "0 PLAYS" here would be the claim this whole
+    // feature has to avoid making.
+    expect(badgesOf(await rowTitled('Two'))).toEqual([])
+  })
+
+  it('says PLAY, not PLAYS, for a single play', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 1 })]
+    )
+    await waitFor(async () => expect(badgesOf(await rowTitled('One'))).toEqual(['1 PLAY']))
+  })
+
+  it('does not add a grid child, so a badged row keeps the row shape', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [summary({ checksum: CHECKSUM_A, timesPlayed: 4 })]
+    )
+    const row = await rowTitled('One')
+    await waitFor(() => expect(badgesOf(row)).toEqual(['4 PLAYS']))
+    expect(row.children).toHaveLength(declaredRowTracks())
+  })
+
+  it('carries the best score, the combo and the window in the badge hover text', async () => {
+    renderPaged(
+      [[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]],
+      [
+        summary({
+          checksum: CHECKSUM_A,
+          timesPlayed: 4,
+          bestScore: 654_321,
+          bestAccuracy: 0.9812,
+          everFc: true,
+          lastPlayedAt: '2026-09-01T20:00:00.0000000Z'
+        })
+      ]
+    )
+    const badge = await waitFor(() => {
+      const found = document.querySelector('.badge.plays')
+      if (!found) throw new Error('no play badge yet')
+      return found
+    })
+    const title = badge.getAttribute('title') ?? ''
+    expect(title).toContain('Best score 654,321 at 98.1%')
+    expect(title).toContain('Full combo at least once.')
+    expect(title).toContain('Counted only from when Encore started watching Clone Hero.')
+  })
+
+  it('states the window beside the list whenever counts are on screen', async () => {
+    renderPaged([[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]], [])
+
+    const caveat = await waitFor(() => {
+      const found = document.querySelector('.caveat')
+      if (!found) throw new Error('no caveat yet')
+      return found
+    })
+    expect((caveat.textContent ?? '').replace(/\s+/g, ' ')).toContain(
+      'Play counts start from when Encore began watching Clone Hero'
+    )
+  })
+
+  it('leaves the never-played filter to say it, rather than saying it twice', async () => {
+    renderPaged([[chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })]], [])
+    await rowTitled('One')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'No plays recorded' }))
+    await waitFor(() => {
+      const caveats = [...document.querySelectorAll('.caveat')]
+      expect(caveats).toHaveLength(1)
+      expect(caveats[0].textContent).toContain('is in this list too')
+    })
+  })
+
+  it('keeps the list when the play calls fail, because the badges are an addition to it', async () => {
+    vi.stubGlobal('encore', {
+      catalogQuery: (): Promise<ChartRecord[]> =>
+        Promise.resolve([
+          chart({ path: '/library/one', name: 'One', cloneHeroChecksum: CHECKSUM_A })
+        ]),
+      catalogCount: (): Promise<number> => Promise.resolve(1),
+      updatesLast: () => Promise.resolve([]),
+      playStatus: () => Promise.reject(new Error('no handler'))
+    })
+    render(Library, { onOpenChart: () => {} })
+
+    const row = await rowTitled('One')
+    expect(badgesOf(row)).toEqual([])
+    expect(document.querySelector('.caveat')).toBeNull()
   })
 })

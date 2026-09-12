@@ -74,3 +74,20 @@ export function fallbackChartName(path: string): string {
   const stripped = base?.replace(/\.sng$/i, '') ?? ''
   return stripped === '' ? path : stripped
 }
+
+/**
+ * A Clone Hero play timestamp as a date, in whatever the user's locale calls one.
+ *
+ * Clone Hero writes ISO 8601 with seven fractional digits and a Z, which Date parses, but the
+ * app never re-serialises it and nothing guarantees the next Clone Hero writes the same shape.
+ * An unparsable value renders as the empty-cell placeholder, because the unguarded form of this
+ * puts the literal words "Invalid Date" on screen.
+ *
+ * Date only, no clock time: every caller is labelling a span of history, and the minute a song
+ * finished is not what any of them is about.
+ */
+export function playedOn(value: string | null | undefined): string {
+  if (value == null) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString()
+}
