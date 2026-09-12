@@ -14,12 +14,21 @@ export const IPC = {
   // The distinct artists, genres, charters and years the catalog holds, for the Installed view's
   // filter pickers. Read on mount and again after a scan, never per keystroke.
   catalogFacets: 'catalog:facets',
+  // What the library holds more than one copy of, grouped in SQL. Read from the catalog, not
+  // from disk, so unlike the issue scan there is nothing to start and nothing to cancel: it is
+  // one query and it answers immediately. It reports what is duplicated and where each copy is;
+  // nothing in Encore removes a chart.
+  catalogDuplicates: 'catalog:duplicates',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
   downloadRetry: 'download:retry',
   downloadList: 'download:list',
   downloadClearFinished: 'download:clear-finished',
   chartReadFiles: 'chart:read-files',
+  // Opens the system file manager on a chart, with the chart itself selected. The one thing the
+  // duplicates report offers to do about a duplicate: show the user both copies so they can
+  // decide on their own filesystem. Refused for a path outside the configured library folders.
+  chartReveal: 'chart:reveal',
   chartLyricLines: 'chart:lyric-lines',
   windowControl: 'window:control',
   dialogPickFolder: 'dialog:pick-folder',

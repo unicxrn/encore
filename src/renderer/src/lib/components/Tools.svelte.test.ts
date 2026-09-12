@@ -1,11 +1,29 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartIssueRow } from '../../../../main/catalog/issues'
+import type { DuplicateReport } from '../../../../shared/duplicates'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import type { FixableCode } from '../../../../main/issues/fix'
 import type { JobProgress } from '../../../../shared/schemas'
 import { assetJobs } from '../stores/assets'
 import Tools from './Tools.svelte'
+
+/**
+ * Tools mounts the duplicates panel, which reads the catalogue on mount, so every stub in this
+ * file has to answer it. An empty report is the right answer for all of them: these tests are
+ * about the issue report, and a panel with findings would put extra buttons and paths on screen
+ * for each of them to step around. Duplicates.svelte.test.ts is where the panel itself is tested.
+ */
+const NO_DUPLICATES = {
+  catalogDuplicates: (): Promise<DuplicateReport> =>
+    Promise.resolve({
+      identical: [],
+      versions: [],
+      alternates: [],
+      totalCharts: 0,
+      unidentifiedCharts: 0
+    })
+}
 
 /**
  * `encore()` reads `window.encore`, and under jsdom `globalThis` *is* `window`, so
@@ -14,6 +32,7 @@ import Tools from './Tools.svelte'
  */
 function stubEncore(rows: ChartIssueRow[]): void {
   vi.stubGlobal('encore', {
+    ...NO_DUPLICATES,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     saveTextFile: (): Promise<string | null> => Promise.resolve(null)
@@ -228,6 +247,7 @@ function stubFixes(
     install: vi.fn(() => Promise.resolve())
   }
   vi.stubGlobal('encore', {
+    ...NO_DUPLICATES,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: stub.scan,
     saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -309,6 +329,7 @@ describe('Tools: finding the repairs the filters are hiding', () => {
     // issuesFixable rejecting leaves availability unknown, and an unknown availability is not an
     // offer. The report itself still renders.
     vi.stubGlobal('encore', {
+      ...NO_DUPLICATES,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -377,6 +398,7 @@ describe('Tools: confirming a repair', () => {
   it('reports a repair that failed instead of quietly dropping it', async () => {
     stubFixes(repairable)
     vi.stubGlobal('encore', {
+      ...NO_DUPLICATES,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -486,6 +508,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
     })
     const cancel = vi.fn(() => Promise.resolve())
     vi.stubGlobal('encore', {
+      ...NO_DUPLICATES,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -536,6 +559,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       release = resolve
     })
     vi.stubGlobal('encore', {
+      ...NO_DUPLICATES,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -597,6 +621,7 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
   })
   const cancel = vi.fn(() => Promise.resolve())
   vi.stubGlobal('encore', {
+    ...NO_DUPLICATES,
     issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(last),
     issuesScan: (): Promise<ChartIssueRow[]> => pending,
     issuesScanCancel: cancel,
@@ -742,6 +767,7 @@ function stubUndo(
     scan: vi.fn(() => Promise.resolve(repairable))
   }
   vi.stubGlobal('encore', {
+    ...NO_DUPLICATES,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
     issuesScan: stub.scan,
     saveTextFile: (): Promise<string | null> => Promise.resolve(null),

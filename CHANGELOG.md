@@ -14,6 +14,15 @@ release.
 
 ### Added
 
+- Issues reports what your library holds more than one copy of, in three kinds that are kept
+  apart because they mean different things. The same chart file installed twice, where nothing is
+  lost by keeping one. The same song by the same charter at more than one version, which is
+  usually an update that landed beside the copy it was meant to replace. And the same song by
+  different charters, which is not a problem at all and says so. Every copy can be opened in your
+  file manager, and the whole report exports as CSV. Encore never deletes a chart: it says what is
+  duplicated and where each copy is, and the removing is yours to do. It reads the catalogue
+  rather than the disk, so it answers as soon as the tab opens and needs no scan first.
+
 - Explore loads the next page as you reach the bottom of the results, instead of asking you to
   press a button for each one. It appends on its own up to 500 charts, then leaves a button that
   fetches a page and raises the ceiling again, so a long browse stays a list you can still scroll
