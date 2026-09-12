@@ -926,7 +926,9 @@ describe('Library: play counts', () => {
       reason: rows.length > 0 ? 'ok' : 'noFile',
       scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
       scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
-      lastImportAt: rows.length > 0 ? '2026-09-12T10:00:00.000Z' : null
+      lastImportAt: rows.length > 0 ? '2026-09-12T10:00:00.000Z' : null,
+      usedBackup: false,
+      folderSource: 'probe' as const
     },
     totals: {
       charts: rows.length,

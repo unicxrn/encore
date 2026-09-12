@@ -65,7 +65,9 @@ const lifetime = (over: Partial<LifetimeScores> = {}): LifetimeScores => ({
     reason: 'noFile',
     scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
     scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
-    lastImportAt: null
+    lastImportAt: null,
+    usedBackup: false,
+    folderSource: 'probe' as const
   },
   totals: {
     charts: 0,
@@ -629,7 +631,9 @@ const owner = lifetime({
     reason: 'ok',
     scoreDataPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoredata.bin',
     scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
-    lastImportAt: '2026-09-12T10:00:00.000Z'
+    lastImportAt: '2026-09-12T10:00:00.000Z',
+    usedBackup: false,
+    folderSource: 'probe' as const
   },
   totals: {
     charts: 101,
