@@ -10,6 +10,31 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
+## [Unreleased]
+
+### Added
+
+- Encore now says so on screen when a newer release exists. The check has run at every launch
+  since 0.1.0, but the only place its answer appeared was the Updates row in Settings, which
+  nobody opens to find out about something they do not know is waiting. A newer release now opens
+  a prompt over whatever the app started on: it names the release and the one running, says what
+  this particular install does about updates, and offers the release notes, Skip, and Download and
+  install. Skip means not now and not never. Nothing is written down, so the next launch asks
+  again, and the prompt says as much before the button is pressed. Download and install starts the
+  same download the Updates row starts and puts you in front of that row, where the percent and
+  the Restart button already are, so there is still one update flow and one place the per-platform
+  rules are written. On a copy Encore cannot replace, a snap being the one most people will meet,
+  there is no install button at all and the sentence in its place is the one that does work:
+  `snap refresh encore`. Reading the notes does not count as declining. The panel opens over the
+  prompt and the prompt is waiting underneath when it closes.
+- Three things can now want the screen the moment Encore starts: the first-run tour, the what's
+  new panel after an update, and the update prompt. They share one layer and only one of them is
+  ever drawn. The update prompt is last in that order and yields the whole launch rather than
+  queueing behind, so dismissing the tour or the changelog never hands you a second card, and a
+  fresh install is never told about an update by the copy that was just installed. The decision is
+  made once, after the settings have loaded, which is the moment the other two decide, so a check
+  that answers quickly wins nothing it would not otherwise have won.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added

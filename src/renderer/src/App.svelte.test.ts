@@ -11,6 +11,8 @@ import { globalQuery } from './lib/stores/global-search'
 import { emptyAdvanced } from './lib/api/advanced'
 import { runtimeError } from './lib/stores/runtime-errors'
 import { finishTour } from './lib/stores/tour'
+import { appUpdate } from './lib/stores/app-update'
+import { targetCapability, type AppUpdateStatus } from '../../shared/app-update'
 
 /**
  * The Tools view, replaced by something that throws while Svelte renders it.
@@ -139,6 +141,9 @@ beforeEach(() => {
   settings.set(defaultSettings())
   settingsLoaded.set(false)
   runtimeError.set(null)
+  // Main's mirror is module state, so a test that leaves a release on offer would put a modal in
+  // front of the next one. Null is what it holds before main has answered anything.
+  appUpdate.set(null)
 })
 
 afterEach(() => {
@@ -709,5 +714,255 @@ describe('App downloads panel', () => {
 
     press(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'YYZ' })).toBeNull())
+  })
+})
+
+/**
+ * The launch prompt for a newer Encore, as App wires it.
+ *
+ * Three independent decisions can want this layer when Encore starts: the first-run tour, the
+ * what's new panel after an update, and this. What these pin is the order between them, that only
+ * one of the three is ever on screen, and that Skip is written nowhere.
+ *
+ * The status is pushed through the store rather than through the bridge stub, because that is
+ * where main's answer lands either way: `initAppUpdate` subscribes the store to `ev:app-update`
+ * and App reads nothing else.
+ */
+describe('App update prompt', () => {
+  const PROMPT = 'Update available'
+  const NOTES = "What's new"
+
+  /** What main pushes when the startup check has found a release. */
+  function available(over: Partial<AppUpdateStatus> = {}): AppUpdateStatus {
+    const { canApply, note } = targetCapability(over.target ?? 'appimage')
+    return {
+      currentVersion: '0.3.0',
+      target: 'appimage',
+      canApply,
+      note,
+      state: { kind: 'available', version: '0.4.0' },
+      ...over
+    }
+  }
+
+  beforeEach(() => {
+    // Nothing in the content pane may throw while a modal test is running.
+    boom.remaining = 0
+  })
+
+  it('says there is a newer release, and offers to install it', async () => {
+    appUpdate.set(available())
+    render(App)
+
+    const prompt = await screen.findByRole('dialog', { name: PROMPT })
+    expect(prompt.textContent).toContain('Encore 0.4.0 is available')
+    expect(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' })).toBeTruthy()
+  })
+
+  it('offers no install on a copy Encore cannot replace, and says what does', async () => {
+    // A snap never reaches this in the shipped app: main short-circuits the check before it can
+    // find anything (see AppUpdateService.check). The prompt is still built to be handed one,
+    // because the rule it has to keep is about the control, and the control is here.
+    appUpdate.set(available({ target: 'snap', ...targetCapability('snap') }))
+    render(App)
+
+    const prompt = await screen.findByRole('dialog', { name: PROMPT })
+    expect(prompt.textContent).toContain('snap refresh encore')
+    expect(screen.queryByRole('button', { name: /Download and install/ })).toBeNull()
+  })
+
+  it('says nothing when this build is the latest', async () => {
+    appUpdate.set({ ...available(), state: { kind: 'current' } })
+    render(App)
+    await screen.findByRole('button', { name: /choose a folder/i })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('says nothing when the check failed', async () => {
+    // A failed check belongs in the Settings row that offers to try again, not in a modal over a
+    // launch nobody asked a question during.
+    appUpdate.set({
+      ...available(),
+      state: {
+        kind: 'error',
+        message: 'Could not reach GitHub. Check your connection and try again.'
+      }
+    })
+    render(App)
+    await screen.findByRole('button', { name: /choose a folder/i })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('skips for this launch, and stays skipped while the launch lasts', async () => {
+    appUpdate.set(available())
+    render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Skip this update until the next launch' })
+    )
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Main pushing the same answer again, which it does on any state change, must not bring it
+    // back: the user answered this launch's question.
+    appUpdate.set(available())
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('asks again on the next launch, because Skip is written nowhere', async () => {
+    // The owner's rule for this prompt: Skip means not now, not never. The flag lives on the App
+    // component, so a new launch is a new answer. A store or a setting would outlive it.
+    appUpdate.set(available())
+    const first = render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Skip this update until the next launch' })
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    first.unmount()
+    render(App)
+
+    expect(await screen.findByRole('dialog', { name: PROMPT })).toBeTruthy()
+  })
+
+  it('skips on Escape, under the dismiss order rather than beside it', async () => {
+    appUpdate.set(available())
+    render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+
+    press(document.body, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('lets ? open the shortcut sheet over it, and Escape closes the sheet first', async () => {
+    appUpdate.set(available())
+    render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+
+    press(document.body, { key: '?', shiftKey: true })
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy()
+
+    press(document.body, { key: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull()
+    )
+    expect(screen.getByRole('dialog', { name: PROMPT })).toBeTruthy()
+  })
+
+  it('starts the download through the Settings flow and shows the user where it went', async () => {
+    // Not a second download path: this is the call the Updates row makes, and the user is put in
+    // front of that row, where the percent, the failure and the Restart button already are.
+    const api = stubEncore({
+      settingsGet: vi.fn().mockResolvedValue(seenSettings()),
+      appUpdateDownload: vi.fn().mockResolvedValue(available())
+    })
+    appUpdate.set(available())
+    render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' }))
+
+    await waitFor(() => expect(api.appUpdateDownload).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
+  })
+
+  it('opens the notes without spending the skip, and comes back when they close', async () => {
+    // Pressing "What's new" is someone deciding, not someone declining. The panel outranks this
+    // prompt on the shared layer, so the prompt waits under it rather than stacking with it.
+    appUpdate.set(available())
+    render(App)
+    await screen.findByRole('dialog', { name: PROMPT })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'What is new in Encore 0.4.0' }))
+
+    const notes = await screen.findByRole('dialog', { name: NOTES })
+    expect(notes.textContent).toContain('Encore 0.4.0 is available')
+    expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
+    // A regression guard on the layer itself rather than on either of the two things that keep
+    // it clear: one card, whatever route put something on it.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    expect(await screen.findByRole('dialog', { name: PROMPT })).toBeTruthy()
+  })
+})
+
+/**
+ * What happens when more than one thing wants the launch.
+ *
+ * The answer App implements: one interruption per launch, decided once, with the update prompt
+ * last in the order and yielding the whole launch rather than queueing behind. It asks again next
+ * time, which costs one launch; the alternatives cost the user two cards, or a race.
+ */
+describe('App launch collisions', () => {
+  const PROMPT = 'Update available'
+  const TOUR = 'What Encore does'
+  const NOTES = "What's new"
+
+  function available(): AppUpdateStatus {
+    return {
+      currentVersion: '0.3.0',
+      target: 'appimage',
+      ...targetCapability('appimage'),
+      state: { kind: 'available', version: '0.4.0' }
+    }
+  }
+
+  beforeEach(() => {
+    boom.remaining = 0
+  })
+
+  it('leaves a first run to the tour, and does not follow it once the tour is gone', async () => {
+    // A fresh install has no business being told about an update. The tour owns this launch; the
+    // prompt asks on the next one.
+    stubEncore({ settingsGet: vi.fn().mockResolvedValue(defaultSettings()) })
+    appUpdate.set(available())
+    render(App)
+
+    expect(await screen.findByRole('dialog', { name: TOUR })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Skip tour' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // The whole point of yielding rather than queueing: dismissing the tour does not hand the
+    // user a second card they never asked for.
+    expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
+  })
+
+  it('leaves the launch after an update to the what is new panel', async () => {
+    // The panel opens itself on the first launch after an update. An update prompt behind it
+    // would be two cards about releases at once.
+    stubEncore({
+      settingsGet: vi.fn().mockResolvedValue({
+        ...seenSettings(),
+        lastSeenVersion: '0.0.1'
+      })
+    })
+    appUpdate.set(available())
+    render(App)
+
+    expect(await screen.findByRole('dialog', { name: NOTES })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('takes the launch when nothing else wanted it, however late the check answers', async () => {
+    // The ordinary case, and the reason the decision waits for an answer rather than being made
+    // at mount: the check is a network round trip and lands well after the settings load.
+    render(App)
+    await screen.findByRole('button', { name: /choose a folder/i })
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    appUpdate.set(available())
+
+    expect(await screen.findByRole('dialog', { name: PROMPT })).toBeTruthy()
   })
 })

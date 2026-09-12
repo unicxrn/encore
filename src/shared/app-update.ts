@@ -131,3 +131,39 @@ export function targetCapability(target: UpdateTarget): TargetCapability {
       }
   }
 }
+
+/** The one release the launch prompt can be about, with everything that prompt has to print. */
+export interface UpdateOffer {
+  /** The release being offered. Never the running one. */
+  version: string
+  /** The running one, so the prompt can name both and the user can see the step. */
+  currentVersion: string
+  /** Whether Encore can apply this release to this copy of itself. Gates the install control. */
+  canApply: boolean
+  /** The target's sentence, which is what the prompt says instead of a button when it cannot. */
+  note: string
+}
+
+/**
+ * Whether there is something to interrupt a launch about, and what.
+ *
+ * Only `available`. The other six states are all reasons not to say anything: nothing has been
+ * asked yet, a check is in flight, this build is the latest, a download the user already started
+ * is running or staged, or the check failed. A failed check in particular is not the launch
+ * prompt's business; Settings reports it in the row that offers to try again, and a modal about a
+ * network error nobody asked for would be a worse app.
+ *
+ * `canApply` is carried through rather than filtered on. A prompt that cannot offer an install is
+ * still worth showing, because `note` says what to do instead (on a snap, the command that does
+ * it); what must never happen is an install control that cannot work, and the component is where
+ * that is enforced, because the component is where the control is.
+ */
+export function offeredUpdate(status: AppUpdateStatus | null): UpdateOffer | null {
+  if (status === null || status.state.kind !== 'available') return null
+  return {
+    version: status.state.version,
+    currentVersion: status.currentVersion,
+    canApply: status.canApply,
+    note: status.note
+  }
+}

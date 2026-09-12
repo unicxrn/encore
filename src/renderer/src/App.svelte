@@ -14,16 +14,23 @@
   import ShortcutSheet from './lib/components/ShortcutSheet.svelte'
   import Sidebar, { type ViewId } from './lib/components/Sidebar.svelte'
   import Tools from './lib/components/Tools.svelte'
+  import UpdatePrompt from './lib/components/UpdatePrompt.svelte'
   import Welcome from './lib/components/Welcome.svelte'
   import WelcomeTour from './lib/components/WelcomeTour.svelte'
   import WhatsNew from './lib/components/WhatsNew.svelte'
   import { initSettings, needsWelcome, settingsLoaded } from './lib/stores/settings'
   import { finishTour, tourOpen } from './lib/stores/tour'
-  import { closeWhatsNew, initWhatsNew, whatsNew } from './lib/stores/whats-new'
+  import {
+    closeWhatsNew,
+    initWhatsNew,
+    openOfferedWhatsNew,
+    whatsNew
+  } from './lib/stores/whats-new'
   import { initDownloads } from './lib/stores/downloads'
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
-  import { initAppUpdate } from './lib/stores/app-update'
+  import { appUpdate, downloadAppUpdate, initAppUpdate } from './lib/stores/app-update'
+  import { offeredUpdate } from '../../shared/app-update'
   import { globalQuery } from './lib/stores/global-search'
   import { togglePlay } from './lib/stores/preview-controller'
   import { matchShortcut, renderKeys, type ShortcutView } from './lib/shortcuts'
@@ -82,6 +89,92 @@
   }
 
   /**
+   * The launch prompt for a newer Encore: whether it is owed, and what pressing anything does.
+   *
+   * Skipping is session state, held here rather than in a store and written nowhere. The owner's
+   * rule is that Skip means not now and not never, so the flag lives exactly as long as this
+   * component does, which is exactly as long as the launch does. A store would outlive a remount
+   * and a setting would outlive the launch, and either one would quietly turn Skip into never.
+   */
+  let updateSkipped = $state(false)
+
+  /** Null unless a check has found a release. See `offeredUpdate` for why only that state. */
+  const updateOffer = $derived(offeredUpdate($appUpdate))
+
+  /**
+   * Whether something else already owns this launch.
+   *
+   * The tour and the what's new panel share this layer and both open themselves. They are also
+   * both earned: the tour by a first run, the panel by the update the user just installed.
+   */
+  const launchTaken = $derived($tourOpen || $whatsNew !== null)
+
+  const updatePromptOpen = $derived(
+    updateOffer !== null && !updateSkipped && $settingsLoaded && !launchTaken
+  )
+
+  /**
+   * One interruption per launch, decided once.
+   *
+   * Three things can want the screen when Encore starts: the first-run tour, the what's new panel
+   * after an update, and this. Stacking them, or letting whichever resolves first win, is the
+   * defect. So the update prompt is last in the order and it yields the whole launch rather than
+   * queueing behind: if either of the others was up at the moment the check's answer arrived,
+   * this launch is spent and the prompt is skipped exactly as if the user had pressed Skip. It
+   * asks again next time, which costs the user one launch and never costs them two cards at once.
+   * A fresh install is the case that matters most: the tour is open, so nothing tells someone who
+   * has just installed Encore that Encore needs updating.
+   *
+   * Gated on `settingsLoaded`, because that is the moment the other two decide. Before it they are
+   * both closed and both undecided, so a check that answered first would win a race rather than
+   * an argument. `decided` is a plain variable, not state: the decision is made once and nothing
+   * renders from it.
+   */
+  let decided = false
+  $effect(() => {
+    if (decided) return
+    if (!$settingsLoaded) return
+    if (updateOffer === null) return
+    decided = true
+    if (launchTaken) updateSkipped = true
+  })
+
+  /** Not now, not never: nothing is written, so the next launch asks again. */
+  const skipUpdate = (): void => {
+    updateSkipped = true
+  }
+
+  /**
+   * Start the download and hand the user to the row that owns the rest of it.
+   *
+   * Deliberately not a second download path. `downloadAppUpdate` is the call the Updates row in
+   * Settings makes, and Settings is where the percent, the failure and the Restart button already
+   * are, so this navigates there rather than growing a copy of that row inside a modal. The skip
+   * flag is set as well, so the prompt is gone the moment it is pressed rather than for the frames
+   * between the invoke and main's first state push.
+   */
+  const installUpdate = (): void => {
+    updateSkipped = true
+    goTo('settings')
+    void downloadAppUpdate()
+  }
+
+  /**
+   * The changelog, opened on the offered version rather than on the running one.
+   *
+   * A build ships the changelog it was built from, so it has no entry for a release published
+   * after it. `openOfferedWhatsNew` is the existing answer to exactly that: it says the release
+   * exists, says the notes are not in this build, and links its release page. It does NOT skip the update. The
+   * panel outranks this prompt on the shared layer, so the prompt is hidden while the notes are
+   * open and comes back when they are closed, which is what someone who pressed "What's new" to
+   * decide is asking for.
+   */
+  const showUpdateNotes = (): void => {
+    if (updateOffer === null) return
+    openOfferedWhatsNew(updateOffer.version)
+  }
+
+  /**
    * Navigating closes the downloads panel.
    *
    * Keyed on `viewKey` rather than wired into each caller, because the callers are many and
@@ -130,6 +223,12 @@
       closeWhatsNew()
       return true
     }
+    // Last of the three that share this layer, in the order they render in. Escape here is Skip:
+    // the same not-now the button says, written nowhere, so the next launch asks again.
+    if (updatePromptOpen) {
+      skipUpdate()
+      return true
+    }
     // Any OTHER modal dialog on screen owns the keyboard, including Escape. The
     // Issues repair confirmation is one, and it has its own handler. Found
     // by role rather than by a flag because the dialogs belong to view
@@ -158,12 +257,16 @@
     // Modal on the same terms as the tour, and exempted from the generic dialog guard below for
     // the same reason: ? has to keep opening the sheet over it.
     if ($whatsNew !== null && id !== 'dismiss' && id !== 'show-shortcuts') return
+    // Modal on the same terms as the other two on this layer, and exempted from the generic
+    // dialog guard below for the same reason: ? has to keep opening the sheet over it.
+    if (updatePromptOpen && id !== 'dismiss' && id !== 'show-shortcuts') return
     // Everything below `dismiss` in the ordering above applies to the view
     // underneath a modal dialog, so none of it may fire while one is open.
     if (
       id !== 'dismiss' &&
       !$tourOpen &&
       $whatsNew === null &&
+      !updatePromptOpen &&
       document.querySelector('[role="dialog"][aria-modal="true"]') !== null
     ) {
       return
@@ -372,6 +475,20 @@
            cards on one layer would stack on each other. The tour wins: it is the one the user
            just asked for. -->
       <WhatsNew version={$whatsNew.version} offered={$whatsNew.offered} onclose={closeWhatsNew} />
+    {:else if updatePromptOpen && updateOffer !== null}
+      <!-- Last in the chain, and part of it rather than a block of its own, so the exclusivity is
+           structural: one layer, one card, whatever three independent decisions concluded. The
+           `updateOffer !== null` here is what narrows it for the props; `updatePromptOpen` has
+           already required it. -->
+      <UpdatePrompt
+        version={updateOffer.version}
+        currentVersion={updateOffer.currentVersion}
+        canApply={updateOffer.canApply}
+        note={updateOffer.note}
+        onskip={skipUpdate}
+        oninstall={installUpdate}
+        onnotes={showUpdateNotes}
+      />
     {/if}
     <!-- Inside the app shell but outside the view boundary: the sheet documents
          the keys that navigate away from a broken screen, so it has to survive

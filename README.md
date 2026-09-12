@@ -102,6 +102,14 @@ Encore checks Releases once at startup and whenever you press **Check** in Setti
 Updates. It never downloads or installs anything on its own: a check tells you a version exists,
 and downloading and restarting are two more things you choose.
 
+When the startup check finds a newer release, Encore says so on screen rather than waiting for you
+to open Settings. The prompt names the release, says what your install does about updates, and
+offers the release notes, **Skip**, and **Download and install**. Skip means not now: nothing is
+recorded, so the next launch asks again. Download and install starts the same download the
+Settings row starts and takes you to that row, where the progress and the restart are. The first
+launch after an update, and a first run, both have something of their own to show, so the prompt
+stays out of that launch and asks on the next one.
+
 - **Windows and the AppImage** update in place. Encore fetches the release and applies it when you
   restart.
 - **The `.deb`** updates through `dpkg`, so your system asks for your password at the end. If your
@@ -220,8 +228,9 @@ release page that says the same thing it does.
    The script prints the changelog entry followed by the download paragraph, which is packaging
    rather than history and so lives in the script rather than in the changelog.
 
-Users meet the entry in two places: Settings, under Updates, has a button for it at any time, and
-the first launch after an update opens it once on its own. `lastSeenVersion` in settings is what
+Users meet the entry in three places: Settings, under Updates, has a button for it at any time,
+the first launch after an update opens it once on its own, and the prompt for a newer release
+offers it before anything is downloaded. `lastSeenVersion` in settings is what
 makes that once rather than every launch.
 
 ## Licence
