@@ -10,6 +10,15 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
+## [Unreleased]
+
+### Fixed
+
+- The duplicate report grouped on the raw `song.ini` text, so a chart whose title or charter is
+  written in Clone Hero's colour tags was a group of its own. Two versions by one charter, one of
+  them styled, were reported as two people having charted the song, which is the one tier the
+  report says is not a problem. It now groups on the name a chart reads as.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added

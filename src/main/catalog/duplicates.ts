@@ -5,7 +5,8 @@ import type {
   IdenticalGroup,
   VersionGroup
 } from '../../shared/duplicates'
-import type { CatalogDb } from './db'
+import { readableColumn, type CatalogDb } from './db'
+import { stripRichText } from '../../shared/format'
 
 /**
  * Find what a library holds more than one copy of, entirely in SQL.
@@ -54,19 +55,24 @@ const IDENTICAL_SQL = `SELECT ${COPY_COLUMNS} FROM charts
  * has no `artist` would be grouped with every other one, and a library's untagged charts would be
  * reported as several hundred versions of one song.
  *
- * `LOWER` and `TRIM` are what make the key case and whitespace insensitive, matching how the rest
- * of the catalog compares these columns (`chartsExistByMeta`, the filter clauses in queries.ts).
+ * The key is built from the readable form of each column, not the raw one, so a charter who
+ * writes their song titles in Clone Hero's colour tags does not get a second group for the same
+ * song. `LOWER` and `TRIM` make it case and whitespace insensitive on top of that. The blank
+ * check reads the same form on purpose: a title that is nothing but tags strips to empty and
+ * cannot be grouped on, exactly like a title that was never filled in.
  * SQLite's LOWER only folds ASCII, so two spellings of an accented artist that differ in case
  * stay two groups. That is a miss, never a false claim: the tier it costs is a listing, not an
  * accusation.
  */
+const SONG_ARTIST = `LOWER(TRIM(${readableColumn('artist')}))`
+const SONG_NAME = `LOWER(TRIM(${readableColumn('name')}))`
+
 const SONG_SQL = `SELECT ${COPY_COLUMNS}, songKey FROM (
 		 SELECT ${COPY_COLUMNS},
-			 LOWER(TRIM(artist)) || CHAR(31) || LOWER(TRIM(name)) AS songKey,
-			 COUNT(*) OVER (PARTITION BY LOWER(TRIM(artist)), LOWER(TRIM(name))) AS copies
+			 ${SONG_ARTIST} || CHAR(31) || ${SONG_NAME} AS songKey,
+			 COUNT(*) OVER (PARTITION BY ${SONG_ARTIST}, ${SONG_NAME}) AS copies
 		 FROM charts
-		 WHERE name IS NOT NULL AND TRIM(name) <> ''
-			 AND artist IS NOT NULL AND TRIM(artist) <> ''
+		 WHERE ${SONG_NAME} <> '' AND ${SONG_ARTIST} <> ''
 	 )
 	 WHERE copies > 1
 	 ORDER BY songKey, path`
@@ -126,7 +132,7 @@ function runs<T>(rows: T[], keyOf: (row: T) => string): T[][] {
 
 /** Charter as the sub-grouping key: case and whitespace folded, blank staying blank. */
 function charterKey(copy: DuplicateCopy): string {
-  return (copy.charter ?? '').trim().toLowerCase()
+  return stripRichText(copy.charter).toLowerCase()
 }
 
 /** The first non-blank spelling of a field in a group, for display. Falls back to the first row. */

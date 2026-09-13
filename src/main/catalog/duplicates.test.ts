@@ -482,3 +482,80 @@ describe('duplicate detection', () => {
     expect(elapsed).toBeLessThan(5_000)
   })
 })
+
+/**
+ * Charters style their own names and their song titles in Clone Hero's colour tags, and song.ini
+ * carries that styling whole. Grouping on the raw column split one song into two, and split one
+ * charter into two, which is the worse of the pair: it demotes "you have two versions from this
+ * charter" into "two people charted this", the tier that exists to say nothing is wrong.
+ */
+describe('a name written in Clone Hero markup', () => {
+  let db: CatalogDb
+  beforeEach(() => {
+    db = openCatalog(join(tmpDir('dupes-markup'), 'catalog.db'))
+  })
+
+  it('groups one song whose copies spell its title differently', () => {
+    upsertChart(
+      db,
+      chart('/lib/plain', {
+        name: 'Bloom',
+        artist: 'Radiohead',
+        charter: 'Ann',
+        cloneHeroChecksum: md5('a')
+      })
+    )
+    upsertChart(
+      db,
+      chart('/lib/tagged', {
+        name: '<color=#8200f3>Bloom</color>',
+        artist: 'Radiohead',
+        charter: 'Bob',
+        cloneHeroChecksum: md5('b')
+      })
+    )
+
+    const report = findDuplicates(db)
+    expect(report.alternates).toHaveLength(1)
+    // Two charters, one copy each: the point is that both landed in the SAME song group.
+    expect(report.alternates[0].charters).toHaveLength(2)
+  })
+
+  it('keeps one charter one charter, so two versions are not read as two people', () => {
+    upsertChart(
+      db,
+      chart('/lib/v1', {
+        name: 'Bloom',
+        artist: 'Radiohead',
+        charter: 'SirMonkfish',
+        cloneHeroChecksum: md5('a')
+      })
+    )
+    upsertChart(
+      db,
+      chart('/lib/v2', {
+        name: 'Bloom',
+        artist: 'Radiohead',
+        charter: '<color=#8200f3>SirMonkfish</color>',
+        cloneHeroChecksum: md5('b')
+      })
+    )
+
+    const report = findDuplicates(db)
+    expect(report.versions).toHaveLength(1)
+    expect(report.alternates).toEqual([])
+  })
+
+  it('leaves a title that is nothing but tags ungrouped, as an untagged one already is', () => {
+    // It strips to empty, so there is no title to group on. Without reading the readable form the
+    // blank check passes and every such chart piles into one enormous group.
+    // Named charters on purpose: an untitled-charter pair is dropped by the tier split anyway,
+    // so it would pass whether the blank check read the raw column or the readable one.
+    upsertChart(db, chart('/lib/x', { name: '<b></b>', artist: 'Radiohead', charter: 'Ann' }))
+    upsertChart(db, chart('/lib/y', { name: '<b></b>', artist: 'Radiohead', charter: 'Bob' }))
+
+    const report = findDuplicates(db)
+    expect(report.versions).toEqual([])
+    expect(report.alternates).toEqual([])
+  })
+})
