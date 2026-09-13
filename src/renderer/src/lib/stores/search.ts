@@ -135,6 +135,17 @@ export interface SearchStore {
   /** How many the panel is holding, applied or not. What `restoreAdvanced` would put back. */
   advancedDraftCount: Readable<number>
   /**
+   * Changes whenever the store replaces the draft itself instead of being told what it holds.
+   *
+   * The panel binds its inputs to a local copy of the draft, because `bind:value` needs one, and
+   * it seeds that copy when it mounts. Nothing here can reach into it, so `clearAdvanced` called
+   * from outside the panel (the chip beside the Advanced button, which is on screen while the
+   * panel is open) emptied the store and left the boxes showing filters nothing was filtering by,
+   * one keystroke from writing all of them back. This is the panel's cue to seed again. The
+   * number itself means nothing.
+   */
+  advancedDraftReset: Readable<number>
+  /**
    * How many applied filters the last plain search dropped, or 0 with nothing to report.
    *
    * A search term and the advanced filters cannot both narrow one query (see `setQuery`), so
@@ -243,6 +254,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const activeCount = derived(advancedApplied, advancedCount)
   const draftCount = derived(advancedDraft, advancedCount)
   const advancedDropped = writable(0)
+  const draftReset = writable(0)
   // Raised a cap's worth at a time by an explicit loadMore; see AUTO_APPEND_CAP and loadMore.
   const autoCap = writable(AUTO_APPEND_CAP)
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
@@ -541,6 +553,10 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     const wasNarrowed = get(activeCount) > 0
     advancedApplied.set(emptyAdvanced())
     advancedDraft.set(emptyAdvanced())
+    // The one place the store replaces the draft rather than being handed one; see
+    // `advancedDraftReset`. Bumped whether or not anything was narrowing, because an open panel
+    // full of boxes is the thing being cleared either way.
+    draftReset.update((n) => n + 1)
     // Cleared on purpose, so there is nothing left to offer to put back.
     advancedDropped.set(0)
     // Clearing a form that was not narrowing anything changes no answer, and re-asking the same
@@ -570,6 +586,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     advancedDraft: { subscribe: advancedDraft.subscribe },
     advancedCount: activeCount,
     advancedDraftCount: draftCount,
+    advancedDraftReset: { subscribe: draftReset.subscribe },
     advancedDropped: { subscribe: advancedDropped.subscribe },
     advancedOpen: { subscribe: advancedOpen.subscribe },
     hasMore,

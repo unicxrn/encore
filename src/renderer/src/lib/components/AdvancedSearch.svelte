@@ -29,6 +29,21 @@
     search.setAdvancedDraft($state.snapshot(draft) as AdvancedQuery)
   })
 
+  // svelte-ignore state_referenced_locally
+  // (As with `count` below: one store, for the life of the app.)
+  const draftReset = search.advancedDraftReset
+
+  // Seeded again whenever the store replaced the draft itself rather than being handed one. The
+  // Clear chip beside the Advanced button is on screen while this panel is open and goes straight
+  // to the store, which cannot reach this copy: the boxes went on showing an artist and an album
+  // that nothing was filtering by, and the next keystroke in any of them wrote all of it back and
+  // re-armed the dropped-filters banner's offer to put it back too.
+  $effect(() => {
+    // Read for the dependency. The number itself means nothing; see `advancedDraftReset`.
+    void $draftReset
+    draft = cloneAdvanced(get(search.advancedDraft))
+  })
+
   function apply(): void {
     // Written through here as well as in the effect above, so a press that lands in the same tick
     // as the keystroke before it still searches for what is in the boxes.

@@ -1013,6 +1013,41 @@ describe('Browse advanced search', () => {
     })
   })
 
+  it('empties the open panel when the filters are cleared from outside it', async () => {
+    // The Clear chip sits beside the Advanced button, which is on screen while the panel is open,
+    // and it goes straight to the store. The panel binds its boxes to a copy of the draft that
+    // the store cannot reach, so the boxes went on showing an artist and an album that nothing
+    // was filtering by, and the next keystroke in any box wrote all of them back and re-armed the
+    // offer to restore them.
+    await openPanel()
+    await fireEvent.input(screen.getByLabelText('Artist'), { target: { value: 'Metallica' } })
+    await fireEvent.input(screen.getByLabelText('Album'), {
+      target: { value: 'Ride the Lightning' }
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    await screen.findByRole('button', { name: 'Advanced search, 2 filters applied' })
+
+    // The chip outside the panel, not the button inside it: both are called Clear filters, and
+    // the one this is about is the one the panel cannot see coming.
+    const outside = screen
+      .getAllByRole('button', { name: 'Clear filters' })
+      .find((el) => el.classList.contains('adv-clear'))
+    expect(outside).toBeTruthy()
+    await fireEvent.click(outside as HTMLElement)
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Artist') as HTMLInputElement).value).toBe('')
+    )
+    expect((screen.getByLabelText('Album') as HTMLInputElement).value).toBe('')
+
+    // And a keystroke anywhere in the panel does not put the other two back.
+    await fireEvent.input(screen.getByLabelText('Genre'), { target: { value: 'Thrash' } })
+
+    expect(get(browseSearch.advancedDraftCount)).toBe(1)
+    expect(get(browseSearch.advancedDraft).text.artist.value).toBe('')
+    expect(get(browseSearch.advancedDraft).text.album.value).toBe('')
+  })
+
   it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {
     // App renders Detail instead of Browse, so visiting a chart destroys this component and the
     // panel with it. Ten fields typed and lost is worse than a search nobody ran.
