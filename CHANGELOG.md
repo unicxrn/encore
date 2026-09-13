@@ -27,6 +27,24 @@ release.
   the row says exactly that and is not counted as a fault either. Every platform reads the rows
   the last scan already produced, so none of this needs re-scanning.
 
+### Added
+
+- Encore can now remove a chart. Installed carries a Remove beside every row, and the duplicate
+  report offers one on the copies whose Clone Hero checksum is identical. Both ask first, by name,
+  and both say where the chart goes: the system Trash, which is the whole of the recovery path.
+  Encore keeps no copy of its own and there is no permanent delete behind either of them, so a
+  Trash that refuses the move leaves the chart on disk and in your library and says so. Your play
+  history is kept either way, because a play is recorded against the chart rather than its folder,
+  and the Stats page goes on naming charts the library no longer holds.
+- Each copy in the duplicate report now says what it holds and how big it is, and the removal is
+  offered only where that is the whole story. Two copies with one checksum are the same notes byte
+  for byte, and the checksum covers nothing else: one of them can be the only copy with the album
+  art, the background video or the synced lyrics. Each copy lists what it has, and the one holding
+  something none of the others do says so, on the row and again in the confirmation. Nothing is
+  preselected and nothing is recommended. Removal is not offered on the other two tiers: an old
+  version is a different chart whose scores are recorded against it, and a song charted by two
+  people is not waste at all.
+
 ### Fixed
 
 - Adding lyrics to a chart destroyed every byte of the chart file that was not valid UTF-8. Encore

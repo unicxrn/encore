@@ -2,12 +2,20 @@
   import { onMount } from 'svelte'
   import { toCsv } from '../../../../shared/csv'
   import {
+    PLAY_HISTORY_PROMISE,
+    TRASH_PROMISE,
+    removalMessage,
+    type ChartRemoval
+  } from '../../../../shared/chart-removal'
+  import {
+    assetsHeld,
+    assetsOnlyHere,
     DUPLICATE_TIERS,
     type DuplicateCopy,
     type DuplicateReport,
     type DuplicateTierId
   } from '../../../../shared/duplicates'
-  import { fallbackChartName, stripRichText } from '../../../../shared/format'
+  import { fallbackChartName, formatBytes, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
 
   /**
@@ -19,10 +27,16 @@
    * takes seconds; this is two grouped queries over the catalog and takes tens of milliseconds,
    * so it loads on mount with no button to press and no progress to report.
    *
-   * **Nothing here removes anything.** The only action offered is opening a copy in the system
-   * file manager. Deleting a chart folder is a different class of operation from the verified,
-   * undoable asset writes this app makes, and a report that is confident enough to point at a
-   * duplicate is not the same as a tool that should be trusted to remove one.
+   * **Removal is offered on tier 1 and nowhere else.** Tier 1 is the only claim here that
+   * survives being acted on: those copies hold the same notes byte for byte. Removing a tier 2
+   * copy throws away a different chart and orphans the scores set on it, and tier 3 is not waste
+   * at all and says so, so neither carries a button.
+   *
+   * **Nothing is preselected and nothing is recommended.** Encore could work out which copy is
+   * the richer one, and deliberately does not: a recommendation nobody checked is a decision
+   * Encore made on the user's behalf, and the whole point of showing what each copy holds is
+   * that the user sees the difference before choosing. The copies are listed in path order, as
+   * they arrive.
    */
 
   /**
@@ -41,6 +55,21 @@
   let expanded = $state<DuplicateTierId[]>([])
   /** Why a reveal failed, against the path that failed. Empty is the normal state. */
   let revealErrors = $state.raw<Record<string, string>>({})
+  /**
+   * The one copy whose removal is being confirmed, by path. Never more than one.
+   *
+   * The confirmation is an inline panel rather than a second press on a re-labelled button,
+   * because it has to name the chart, say where the copy is, and list what that copy holds that
+   * the others do not. None of that fits on a button, and all of it is the part the user is
+   * meant to read before pressing anything.
+   */
+  let confirming = $state<string | null>(null)
+  /** The path currently being removed, so its buttons can say so and cannot be pressed twice. */
+  let removing = $state<string | null>(null)
+  /** Why a removal failed, against the path that failed. The chart and its row are untouched. */
+  let removeErrors = $state.raw<Record<string, string>>({})
+  /** What the last removal did, kept on screen until the next one. */
+  let removed = $state<string | null>(null)
 
   type CsvState =
     | { status: 'saved'; path: string }
@@ -126,6 +155,12 @@
     return DUPLICATE_TIERS.find((t) => t.id === id) ?? { title: id, blurb: '' }
   }
 
+  /** `a`, `a and b`, `a, b and c`. The asset lists are at most four items long. */
+  function sentenceList(items: string[]): string {
+    if (items.length < 2) return items.join('')
+    return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+  }
+
   function copyLabel(copy: DuplicateCopy): string {
     const title = stripRichText(copy.name)
     const artist = stripRichText(copy.artist)
@@ -149,6 +184,64 @@
       await encore().chartReveal(path)
     } catch (err) {
       revealErrors = { ...revealErrors, [path]: asMessage(err) }
+    }
+  }
+
+  /**
+   * Drop one copy from the report in place, once it is really gone.
+   *
+   * Local rather than a second `catalogDuplicates()` call, and not because of the cost. The
+   * library watcher has just seen the folder disappear and will run a scan of its own; re-asking
+   * for the whole report puts this view in a race with that scan for no gain, when the one thing
+   * that changed is a copy this component itself just removed. A group left holding a single
+   * copy is no longer a duplicate of anything, so it goes with it.
+   */
+  function dropCopy(path: string): void {
+    if (report === null) return
+    report = {
+      ...report,
+      identical: report.identical
+        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
+        .filter((group) => group.copies.length > 1),
+      // The same chart can be listed under tiers 2 and 3 as well, and a path that is gone must
+      // not stay on screen under a heading that offers to open it in a file manager.
+      versions: report.versions
+        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
+        .filter((group) => group.copies.length > 1),
+      alternates: report.alternates
+        .map((group) => ({
+          ...group,
+          charters: group.charters
+            .map((charter) => ({
+              ...charter,
+              copies: charter.copies.filter((c) => c.path !== path)
+            }))
+            .filter((charter) => charter.copies.length > 0)
+        }))
+        .filter((group) => group.charters.length > 1),
+      totalCharts: Math.max(0, report.totalCharts - 1)
+    }
+  }
+
+  /**
+   * Move one copy to the Trash, after the user has confirmed that copy by name.
+   *
+   * The failure path is the point: if the trash refuses, nothing about the library has changed,
+   * so the copy stays exactly where it is on screen with the reason beside it. There is no
+   * second attempt that deletes instead.
+   */
+  async function remove(copy: DuplicateCopy): Promise<void> {
+    confirming = null
+    removing = copy.path
+    removeErrors = Object.fromEntries(Object.entries(removeErrors).filter(([p]) => p !== copy.path))
+    try {
+      const result: ChartRemoval = await encore().chartRemove(copy.path)
+      removed = removalMessage(result.outcome, copyLabel(copy))
+      dropCopy(copy.path)
+    } catch (err) {
+      removeErrors = { ...removeErrors, [copy.path]: asMessage(err) }
+    } finally {
+      removing = null
     }
   }
 
@@ -252,9 +345,15 @@
 
   {#if open && report !== null}
     <p class="d-safety">
-      Encore never deletes a chart. This report says what is duplicated and where each copy is;
-      removing one is yours to do, in your own file manager.
+      Encore can remove a copy of a chart it found installed twice, and nothing else here. A removal
+      goes to your system Trash, so you can put it back from there. Nothing is chosen for you: each
+      copy lists what it holds, because two copies of the same chart file can still differ in album
+      art, video, background or lyrics.
     </p>
+
+    {#if removed}
+      <p class="d-progress mono" role="status">{removed}</p>
+    {/if}
 
     {#if report.identical.length > 0}
       {@const meta = tierMeta('identical')}
@@ -271,7 +370,7 @@
               <span class="g-meta mono">{group.copies.length} COPIES · SAME CHART FILE</span>
             </div>
             {#each group.copies as copy (copy.path)}
-              {@render copyRow(copy)}
+              {@render copyRow(copy, group.copies)}
             {/each}
           </div>
         {/each}
@@ -312,7 +411,7 @@
               </p>
             {/if}
             {#each group.copies as copy (copy.path)}
-              {@render copyRow(copy)}
+              {@render copyRow(copy, null)}
             {/each}
           </div>
         {/each}
@@ -341,7 +440,7 @@
             {#each group.charters as charter (charter.charter)}
               <p class="g-charter-head">{stripRichText(charter.charter)}</p>
               {#each charter.copies as copy (copy.path)}
-                {@render copyRow(copy)}
+                {@render copyRow(copy, null)}
               {/each}
             {/each}
           </div>
@@ -352,7 +451,13 @@
   {/if}
 </section>
 
-{#snippet copyRow(copy: DuplicateCopy)}
+<!-- `group` is the copies this one sits with when a removal can be offered on it, and null on
+     the two tiers where it cannot. Passing the whole group rather than a boolean is what lets
+     the row say which of its contents no other copy in the set has, which is the only fact that
+     makes this decision safe to make from a screen. -->
+{#snippet copyRow(copy: DuplicateCopy, group: DuplicateCopy[] | null)}
+  {@const held = assetsHeld(copy)}
+  {@const only = group === null ? [] : assetsOnlyHere(copy, group)}
   <div class="copy">
     <span class="c-type mono">{copy.chartType === 'sng' ? 'SNG' : 'FOLDER'}</span>
     <span class="c-path mono">{copy.path}</span>
@@ -363,7 +468,63 @@
     >
       Show in folder
     </button>
+    {#if group !== null}
+      <button
+        class="hairline"
+        aria-label={`Remove this copy: ${copy.path}`}
+        disabled={removing === copy.path}
+        onclick={() => (confirming = confirming === copy.path ? null : copy.path)}
+      >
+        {removing === copy.path ? 'Removing…' : 'Remove'}
+      </button>
+    {/if}
   </div>
+  <!-- Shown for every copy in a removable set, including the ones holding nothing extra: a row
+       that only spoke up when it had something would leave the user to read an absence, and an
+       absence looks the same as a line that failed to render. -->
+  {#if group !== null}
+    <p class="c-holds">
+      <span class="mono"
+        >{copy.sizeBytes === null ? 'SIZE UNREAD' : formatBytes(copy.sizeBytes)}</span
+      >
+      {#if held.length > 0}
+        Holds {sentenceList(held)}.
+      {:else}
+        No album art, video, background or lyrics.
+      {/if}
+      {#if only.length > 0}
+        <span class="c-only">The only copy here with {sentenceList(only)}.</span>
+      {/if}
+    </p>
+  {/if}
+  {#if confirming === copy.path && group !== null}
+    <div class="confirm">
+      <p class="cf-text">
+        Remove this copy of {copyLabel(copy)}?
+        {#if only.length > 0}
+          It is the only copy in this set with {sentenceList(only)}, and that goes with it.
+        {:else}
+          Everything this copy holds is held by another copy in this set as well.
+        {/if}
+        {TRASH_PROMISE}
+        {PLAY_HISTORY_PROMISE}
+      </p>
+      <p class="cf-path mono">{copy.path}</p>
+      <div class="cf-buttons">
+        <button class="hairline" onclick={() => void remove(copy)}>Move to Trash</button>
+        <button class="hairline" onclick={() => (confirming = null)}>Keep it</button>
+      </div>
+    </div>
+  {/if}
+  {#if removeErrors[copy.path]}
+    <!-- The chart and its catalog row are both still there. The sentence says so, because the
+         user is looking at a row that did not disappear and needs to know that is the truth
+         rather than a list that failed to refresh. -->
+    <p class="c-error" role="alert">
+      Could not move this copy to the Trash: {removeErrors[copy.path]}. It is still on disk and
+      still in your library.
+    </p>
+  {/if}
   {#if revealErrors[copy.path]}
     <p class="c-error">{revealErrors[copy.path]}</p>
   {/if}
@@ -542,6 +703,46 @@
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-2);
+  }
+  /* Indented to the path above it, so the line reads as belonging to that copy rather than to
+     the group. Nothing about the removal decision is carried by colour alone: the "only copy
+     with" clause is a sentence first and a brighter one second. */
+  .c-holds {
+    margin: 0 0 2px;
+    padding-left: 62px;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-snug);
+    color: var(--text-3);
+  }
+  .c-only {
+    color: var(--text-1);
+  }
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 0 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface-1);
+  }
+  .cf-text {
+    margin: 0;
+    max-width: 78ch;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    color: var(--text-2);
+  }
+  .cf-path {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+  .cf-buttons {
+    display: flex;
+    gap: 8px;
   }
   .t-more {
     align-self: flex-start;

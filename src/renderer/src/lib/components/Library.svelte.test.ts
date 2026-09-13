@@ -1445,3 +1445,145 @@ describe('Library names written in Clone Hero markup', () => {
     return { filters }
   }
 })
+
+/**
+ * Removing a chart from Installed.
+ *
+ * `chartRemove` is stubbed in every one of these: the real channel hands a path to
+ * `shell.trashItem`, and a component test must not put anything in the machine's Trash. What is
+ * pinned here is the confirmation's wording, that nothing is asked of main before it, and what
+ * the list does with each of the three answers the channel can give. The trashing itself, the
+ * ordering against the catalog row, and the containment refusal are covered over real files in
+ * `src/main/catalog/remove-chart.test.ts`.
+ */
+describe('Library: removing a chart', () => {
+  function renderRemovable(
+    rows: ChartRecord[],
+    chartRemove: ReturnType<typeof vi.fn> = vi.fn((path: string) =>
+      Promise.resolve({ path, outcome: 'trashed' as const })
+    )
+  ): { chartRemove: ReturnType<typeof vi.fn> } {
+    vi.stubGlobal('encore', {
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(rows),
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      chartRemove,
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([])
+    })
+    render(Library, { onOpenChart: () => {} })
+    return { chartRemove }
+  }
+
+  it('offers one removal per row, named after the chart it removes', async () => {
+    renderRemovable(LIBRARY)
+
+    expect(await screen.findByRole('button', { name: 'Remove YYZ' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove Limelight' })).toBeTruthy()
+  })
+
+  it('asks before it removes, naming the chart, its path and the Trash', async () => {
+    const { chartRemove } = renderRemovable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+
+    expect(chartRemove).not.toHaveBeenCalled()
+    const question = screen.getByText(/Remove YYZ from your library\?/)
+    expect(question.textContent).toContain('goes to your system Trash')
+    // "Remove this chart" reads like it takes the scores with it, and it does not: plays are
+    // recorded against the chart, not its folder.
+    expect(question.textContent).toContain('Your play history is kept')
+    expect(screen.getByText('/library/Rush - YYZ')).toBeTruthy()
+  })
+
+  it('removes only the chart that was confirmed, and takes its row out of the list', async () => {
+    const { chartRemove } = renderRemovable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(chartRemove).toHaveBeenCalledTimes(1)
+    expect(chartRemove).toHaveBeenCalledWith('/library/Rush - YYZ')
+    expect(await screen.findByText('Moved YYZ to the Trash.')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText('YYZ')).toBeNull())
+    expect(screen.getByText('Limelight')).toBeTruthy()
+  })
+
+  it('counts one fewer chart afterwards without re-querying the catalog', async () => {
+    // The row is dropped here rather than by reloading, because the watcher is about to run a
+    // scan of its own over the same change and a re-query would race it for no gain.
+    const { chartRemove } = renderRemovable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    await waitFor(() => expect(screen.getByText('1 CHARTS')).toBeTruthy())
+    expect(chartRemove).toHaveBeenCalledTimes(1)
+  })
+
+  it('changes nothing on the way out of the confirmation', async () => {
+    const { chartRemove } = renderRemovable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Keep it' }))
+
+    expect(chartRemove).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Move to Trash' })).toBeNull()
+    expect(screen.getByText('YYZ')).toBeTruthy()
+  })
+
+  it('keeps the row and says the chart is still there when trashing fails', async () => {
+    // The failure that matters. Nothing moved, so the row must not disappear, and the user must
+    // not read a row that is still there as a list that failed to refresh.
+    renderRemovable(
+      LIBRARY,
+      vi.fn(() => Promise.reject(new Error('Failed to move item to trash')))
+    )
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(await screen.findByText(/Failed to move item to trash/)).toBeTruthy()
+    expect(screen.getByText(/still on disk and still in your library/)).toBeTruthy()
+    expect(screen.getByText('YYZ')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove YYZ' })).toBeTruthy()
+  })
+
+  it('reports a chart that had already left the disk as the non-event it is', async () => {
+    renderRemovable(
+      LIBRARY,
+      vi.fn((path: string) => Promise.resolve({ path, outcome: 'already-gone' as const }))
+    )
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(
+      await screen.findByText('YYZ was no longer on disk, so only its catalog entry was removed.')
+    ).toBeTruthy()
+    expect(screen.queryByText(/Could not move that chart/)).toBeNull()
+    await waitFor(() => expect(screen.queryByText('YYZ')).toBeNull())
+  })
+
+  it('confirms one chart at a time', async () => {
+    // There is no selection in this view and this does not add one: opening a second
+    // confirmation closes the first, so two questions are never on screen at once.
+    renderRemovable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Remove YYZ' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove Limelight' }))
+
+    expect(screen.getAllByRole('button', { name: 'Move to Trash' })).toHaveLength(1)
+    expect(screen.getByText(/Remove Limelight from your library\?/)).toBeTruthy()
+    expect(screen.queryByText(/Remove YYZ from your library\?/)).toBeNull()
+  })
+
+  it('keeps the removal out of the row button, so opening a chart is still one click', async () => {
+    // A button inside a button is invalid markup and the inner one is unreachable. The row's own
+    // grid-track count is checked elsewhere; this pins that the action sits outside it.
+    renderRemovable(LIBRARY)
+
+    const remove = await screen.findByRole('button', { name: 'Remove YYZ' })
+    const row = await rowTitled('YYZ')
+    expect(row.contains(remove)).toBe(false)
+    expect(remove.closest('.row-wrap')).toBe(row.closest('.row-wrap'))
+  })
+})
