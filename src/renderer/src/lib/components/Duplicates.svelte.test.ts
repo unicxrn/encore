@@ -79,26 +79,38 @@ const alternates = (): AlternateGroup => ({
   ]
 })
 
-function stub(
-  result: DuplicateReport,
-  extra: Record<string, unknown> = {}
-): { reveal: ReturnType<typeof vi.fn> } {
+interface Stubs {
+  reveal: ReturnType<typeof vi.fn>
+  remove: ReturnType<typeof vi.fn>
+}
+
+function stub(result: DuplicateReport, extra: Record<string, unknown> = {}): Stubs {
   const reveal = vi.fn(() => Promise.resolve())
+  // Never the real channel, which would hand a path to shell.trashItem. What is pinned here is
+  // what the view asks for and what it does with each answer; the trashing itself is covered in
+  // main/catalog/remove-chart.test.ts.
+  const remove = vi.fn((path: string) => Promise.resolve({ path, outcome: 'trashed' as const }))
   vi.stubGlobal('encore', {
     catalogDuplicates: (): Promise<DuplicateReport> => Promise.resolve(result),
     chartReveal: reveal,
+    chartRemove: remove,
     saveTextFile: (): Promise<string | null> => Promise.resolve(null),
     ...extra
   })
-  return { reveal }
+  return { reveal, remove }
 }
 
 /** Renders and opens the panel, which is collapsed until something is found and shown. */
-async function open(result: DuplicateReport): Promise<{ reveal: ReturnType<typeof vi.fn> }> {
+async function open(result: DuplicateReport): Promise<Stubs> {
   const stubs = stub(result)
   render(Duplicates)
   fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
   return stubs
+}
+
+/** Open the confirmation for one copy. Nothing is removed until the second press. */
+async function confirmFor(path: string): Promise<void> {
+  await fireEvent.click(screen.getByRole('button', { name: `Remove this copy: ${path}` }))
 }
 
 afterEach(() => {
@@ -138,13 +150,11 @@ describe('Duplicates: the same chart installed twice', () => {
     expect(screen.getByText('/library/Rush - YYZ (1)')).toBeTruthy()
   })
 
-  it('never offers to delete anything, and says outright that it will not', async () => {
+  it('says what a removal does before offering one', async () => {
     await open(report({ identical: [identical()] }))
 
-    expect(screen.getByText(/Encore never deletes a chart/)).toBeTruthy()
-    for (const name of [/delete/i, /remove/i, /clean up/i]) {
-      expect(screen.queryByRole('button', { name })).toBeNull()
-    }
+    expect(screen.getByText(/A removal goes to your system Trash/)).toBeTruthy()
+    expect(screen.getByText(/Nothing is chosen for you/)).toBeTruthy()
   })
 
   it('opens one copy in the file manager without touching the other', async () => {
@@ -168,6 +178,192 @@ describe('Duplicates: the same chart installed twice', () => {
       screen.getByRole('button', { name: 'Show in folder: /library/Rush - YYZ' })
     )
     expect(await screen.findByText(/Refusing to open a path outside/)).toBeTruthy()
+  })
+})
+
+describe('Duplicates: removing one copy of an identical pair', () => {
+  /**
+   * The decision this view exists to inform, and the one it must not make.
+   *
+   * Two copies with one checksum are the same notes and can still differ in everything around
+   * them, so the test that matters most is not that the button works: it is that the difference
+   * is on screen before the button is pressed, and that Encore never points at one of the two.
+   */
+  const mixed = (): IdenticalGroup => ({
+    checksum: 'a'.repeat(32),
+    copies: [
+      copy('/library/Rush - YYZ', { hasAlbumArt: true, hasVideo: true, sizeBytes: 42_000_000 }),
+      copy('/library/Rush - YYZ (1)', { hasAlbumArt: true, sizeBytes: 3_000_000 })
+    ]
+  })
+
+  it('shows what each copy holds and how big it is, before anything is removable', async () => {
+    await open(report({ identical: [mixed()] }))
+
+    expect(screen.getByText(/Holds album art and video/)).toBeTruthy()
+    expect(screen.getByText(/The only copy here with video/)).toBeTruthy()
+    expect(screen.getByText('40 MB')).toBeTruthy()
+    expect(screen.getByText('2.9 MB')).toBeTruthy()
+  })
+
+  it('says so plainly when a copy holds none of the four', async () => {
+    // An absent line and a line saying "nothing" look the same to a reader only if the absent
+    // one is allowed, so it is not.
+    await open(report({ identical: [identical()] }))
+
+    expect(screen.getAllByText(/No album art, video, background or lyrics/)).toHaveLength(2)
+  })
+
+  it('preselects nothing and recommends nothing', async () => {
+    await open(report({ identical: [mixed()] }))
+
+    // Both copies are equally offered, in the order they arrived, and no wording nominates one.
+    expect(
+      screen.getByRole('button', { name: 'Remove this copy: /library/Rush - YYZ' })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Remove this copy: /library/Rush - YYZ (1)' })
+    ).toBeTruthy()
+    const panel = screen.getByText('The same chart, installed twice').closest('.tier')
+    const text = panel?.textContent?.toLowerCase() ?? ''
+    for (const word of ['recommend', 'we suggest', 'keep this one', 'safe to remove']) {
+      expect(text).not.toContain(word)
+    }
+  })
+
+  it('asks first, naming the chart, the path, the Trash and the play history', async () => {
+    const { remove } = await open(report({ identical: [mixed()] }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+
+    expect(remove).not.toHaveBeenCalled()
+    expect(screen.getByText(/Remove this copy of Rush - YYZ\?/)).toBeTruthy()
+    // The panel says it for itself, rather than relying on the paragraph at the top of the
+    // report that the user may have scrolled past.
+    const panel = screen.getByText(/Remove this copy of Rush - YYZ\?/)
+    expect(panel.textContent).toContain('goes to your system Trash')
+    expect(panel.textContent).toContain('Your play history is kept')
+    expect(screen.getAllByText('/library/Rush - YYZ (1)').length).toBeGreaterThan(1)
+  })
+
+  it('warns in the confirmation when this copy is the only one holding something', async () => {
+    await open(report({ identical: [mixed()] }))
+
+    await confirmFor('/library/Rush - YYZ')
+
+    expect(
+      screen.getByText(/the only copy in this set with video, and that goes with it/)
+    ).toBeTruthy()
+  })
+
+  it('says the opposite when nothing would be lost', async () => {
+    await open(report({ identical: [mixed()] }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+
+    expect(
+      screen.getByText(/Everything this copy holds is held by another copy in this set as well/)
+    ).toBeTruthy()
+  })
+
+  it('removes only the copy that was confirmed, and drops the group with it', async () => {
+    const { remove } = await open(report({ identical: [mixed()] }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith('/library/Rush - YYZ (1)')
+    expect(await screen.findByText('Moved Rush - YYZ to the Trash.')).toBeTruthy()
+    // One copy left is not a duplicate of anything, so the set goes rather than sitting there
+    // with a Remove button over the last copy of a chart.
+    expect(screen.queryByText('/library/Rush - YYZ (1)')).toBeNull()
+    expect(screen.queryByText(/SAME CHART FILE/)).toBeNull()
+  })
+
+  it('changes nothing on the way out of the confirmation', async () => {
+    const { remove } = await open(report({ identical: [mixed()] }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+    await fireEvent.click(screen.getByRole('button', { name: 'Keep it' }))
+
+    expect(remove).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Move to Trash' })).toBeNull()
+    expect(screen.getByText('/library/Rush - YYZ (1)')).toBeTruthy()
+  })
+
+  it('keeps the copy on screen and says it is still there when trashing fails', async () => {
+    // The failure the whole design turns on. Nothing was deleted, so the row must not vanish and
+    // the user must not be left thinking it did.
+    stub(report({ identical: [mixed()] }), {
+      chartRemove: vi.fn(() => Promise.reject(new Error('Failed to move item to trash')))
+    })
+    render(Duplicates)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(await screen.findByText(/Failed to move item to trash/)).toBeTruthy()
+    expect(screen.getByText(/still on disk and still in your library/)).toBeTruthy()
+    expect(screen.getByText('/library/Rush - YYZ (1)')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Remove this copy: /library/Rush - YYZ (1)' })
+    ).toBeTruthy()
+  })
+
+  it('reports a chart that had already left the disk as the non-event it is', async () => {
+    stub(report({ identical: [mixed()] }), {
+      chartRemove: vi.fn((path: string) =>
+        Promise.resolve({ path, outcome: 'already-gone' as const })
+      )
+    })
+    render(Duplicates)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+
+    await confirmFor('/library/Rush - YYZ (1)')
+    await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(
+      await screen.findByText(
+        'Rush - YYZ was no longer on disk, so only its catalog entry was removed.'
+      )
+    ).toBeTruthy()
+    expect(screen.queryByText(/Could not move this copy/)).toBeNull()
+  })
+
+  it('says the size is unread rather than calling a copy empty', async () => {
+    await open(
+      report({
+        identical: [
+          {
+            checksum: 'a'.repeat(32),
+            copies: [copy('/library/Rush - YYZ'), copy('/library/Rush - YYZ (1)')]
+          }
+        ]
+      })
+    )
+
+    expect(screen.getAllByText('SIZE UNREAD')).toHaveLength(2)
+    expect(screen.queryByText('0 B')).toBeNull()
+  })
+})
+
+describe('Duplicates: the two tiers that offer no removal', () => {
+  it('offers nothing to remove on a version group', async () => {
+    // Removing the old version of a chart orphans the scores set on it: they are recorded
+    // against its checksum, not the new one's. That is a decision for a file manager, not a
+    // button in a report.
+    await open(report({ versions: [versions()] }))
+
+    expect(screen.queryByRole('button', { name: /^Remove this copy/ })).toBeNull()
+    expect(screen.queryByText(/Holds /)).toBeNull()
+  })
+
+  it('offers nothing to remove on an alternate-charters group', async () => {
+    await open(report({ alternates: [alternates()] }))
+
+    expect(screen.queryByRole('button', { name: /^Remove this copy/ })).toBeNull()
   })
 })
 
