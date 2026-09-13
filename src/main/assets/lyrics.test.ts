@@ -538,6 +538,155 @@ describe('injectLyrics (.sng)', () => {
   })
 })
 
+// ─── injectLyrics and the chart file's encoding ────────────────────────────
+
+/**
+ * The bytes an injection did not come for.
+ *
+ * A `.chart` names no encoding, and Encore used to read one through a non-strict UTF-8 decode and
+ * write the result back. Every byte that was not valid UTF-8 came out as U+FFFD and went to disk
+ * as `ef bf bd`, so a Latin-1 chart lost its accents to the one write in the app whose identity
+ * assertions cannot see it: an injection is meant to move both of a chart's identities, so neither
+ * `writeWithUndo` nor anything downstream compares them. The damage was silent and the batch
+ * runner reached it once per affected chart.
+ *
+ * These pin the rule that replaced it: the encoding is read off the bytes and the write uses the
+ * same one, so a byte the injection did not target comes back as itself.
+ */
+
+/** A chart whose artist is Latin-1: `0xf6` is a lone `ö`, which is not valid UTF-8. */
+const LATIN1_CHART_LINES = [
+  '[Song]',
+  '{',
+  '  Name = "Test Song"',
+  '  Artist = "Mot\u00f6rhead"',
+  '  Resolution = 192',
+  '}',
+  '[SyncTrack]',
+  '{',
+  '  0 = TS 4',
+  '  0 = B 120000',
+  '}',
+  '[ExpertSingle]',
+  '{',
+  '  192 = N 0 0',
+  '}',
+  ''
+]
+
+/** Where the injected `[Events]` block lands: after `[SyncTrack]`'s closing brace. */
+const EVENTS_AT = 11
+
+/** The whole file as it should be after `LRC_THREE_LINES` goes in, in one encoding or the other. */
+const injectedChart = (encoding: 'latin1' | 'utf8'): Buffer =>
+  Buffer.from(
+    [
+      ...LATIN1_CHART_LINES.slice(0, EVENTS_AT),
+      expectedEvents(384, 768, 1152, 1920),
+      ...LATIN1_CHART_LINES.slice(EVENTS_AT)
+    ].join('\n'),
+    encoding
+  )
+
+/** What the old UTF-8 round trip left behind in place of a byte it could not decode. */
+const REPLACEMENT_BYTES = Buffer.from([0xef, 0xbf, 0xbd])
+
+describe('injectLyrics and the chart file encoding', () => {
+  let library: string
+  let chartDir: string
+  let chartPath: string
+
+  beforeEach(() => {
+    library = join(tmpDir('lyricsenc'), 'library')
+    chartDir = join(library, 'Artist - Song (Charter)')
+    mkdirSync(chartDir, { recursive: true })
+    chartPath = join(chartDir, 'notes.chart')
+  })
+
+  const folders = (): { path: string }[] => [{ path: library }]
+
+  it('leaves a Latin-1 chart byte-identical apart from the injected [Events] block', async () => {
+    const original = Buffer.from(LATIN1_CHART_LINES.join('\n'), 'latin1')
+    writeFileSync(chartPath, original)
+
+    await injectLyrics(chartPath, 'folder', LRC_THREE_LINES, folders(), null)
+
+    const after = readFileSync(chartPath)
+    // The defect, named: `Mot` + 0xf6 + `rhead` used to come back as `Mot` + ef bf bd + `rhead`.
+    expect(after.includes(REPLACEMENT_BYTES)).toBe(false)
+    expect(after.includes(0xf6)).toBe(true)
+    // And the whole file, not only the artist line: every other byte is where it was too.
+    expect(after.equals(injectedChart('latin1'))).toBe(true)
+  })
+
+  it("keeps a Latin-1 chart's bytes through the .sng path as well", async () => {
+    const sngPath = join(chartDir, 'Artist - Song.sng')
+    const original = Buffer.from(LATIN1_CHART_LINES.join('\n'), 'latin1')
+    writeFileSync(
+      sngPath,
+      makeSng([{ fileName: 'notes.chart', data: new Uint8Array(original) }], { name: 'Song' })
+    )
+
+    await injectLyrics(sngPath, 'sng', LRC_THREE_LINES, folders(), null)
+
+    const entries = (await readSngForRepack(new Uint8Array(readFileSync(sngPath)))).entries
+    const chart = Buffer.from(entries.find((e) => e.fileName === 'notes.chart')!.data)
+    expect(chart.includes(REPLACEMENT_BYTES)).toBe(false)
+    expect(chart.equals(injectedChart('latin1'))).toBe(true)
+  })
+
+  it('writes accented and non-Latin lyric text into a UTF-8 chart', async () => {
+    // The same chart, written as UTF-8 this time, so `0xf6` arrives as `c3 b6` and the file
+    // decodes strictly. Lyric text that only UTF-8 can carry then has somewhere to go.
+    writeFileSync(chartPath, Buffer.from(LATIN1_CHART_LINES.join('\n'), 'utf8'))
+    const lrc = [
+      '[00:01.00] d\u00e9j\u00e0 \u6771\u4eac',
+      '[00:02.00] Second line',
+      '[00:03.00] End',
+      ''
+    ].join('\n')
+
+    await injectLyrics(chartPath, 'folder', lrc, folders(), null)
+
+    const after = readFileSync(chartPath)
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(after)
+    expect(text).toContain('Artist = "Mot\u00f6rhead"')
+    expect(text).toContain('384 = E "lyric d\u00e9j\u00e0"')
+    expect(text).toContain('384 = E "lyric \u6771\u4eac"')
+    // The chart's own accent went back as the two bytes it arrived as, not as a replacement.
+    expect(after.includes(REPLACEMENT_BYTES)).toBe(false)
+    expect(after.includes(Buffer.from('Mot\u00f6rhead', 'utf8'))).toBe(true)
+  })
+
+  it('refuses lyrics a Latin-1 chart cannot hold, and leaves the chart alone', async () => {
+    // The conflict the encoding rule cannot serve both sides of: the file's existing bytes only
+    // survive as Latin-1, and U+2019 has no Latin-1 byte. LRCLIB returns curly apostrophes
+    // routinely, so this is the common shape of it rather than an exotic one.
+    const original = Buffer.from(LATIN1_CHART_LINES.join('\n'), 'latin1')
+    writeFileSync(chartPath, original)
+
+    await expect(
+      injectLyrics(chartPath, 'folder', '[00:01.00] Don\u2019t stop\n', folders(), null)
+    ).rejects.toThrow(/Latin-1 cannot hold/)
+
+    expect(readFileSync(chartPath).equals(original)).toBe(true)
+  })
+
+  it('refuses a UTF-16 chart rather than cutting its lines in the wrong places', async () => {
+    writeFileSync(
+      chartPath,
+      Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(LATIN1_CHART_LINES.join('\n'), 'utf16le')
+      ])
+    )
+
+    await expect(
+      injectLyrics(chartPath, 'folder', LRC_THREE_LINES, folders(), null)
+    ).rejects.toThrow(/UTF-16/)
+  })
+})
+
 // ─── searchLyrics ────────────────────────────────────────────────────────────
 
 describe('searchLyrics', () => {

@@ -208,6 +208,105 @@ function unsupportedChartFileError(ext: string): Error {
 }
 
 /**
+ * How a chart file's bytes become text, and how that text becomes the same bytes again.
+ *
+ * An injection rewrites one section and copies the rest of the file through it, so whatever
+ * carries the file from bytes to text and back has to be exact for every part it was not asked to
+ * change. Both of a chart's multiplayer identities are computed over `notes.chart`, and this is
+ * the one write in the app where neither can catch a mistake: an injection is expected to move
+ * both, so `writeWithUndo` asserts neither (see its note on the lyrics kind). A byte this turns
+ * into a different byte is a chart the user can no longer play with anyone else, and nothing
+ * downstream will say so.
+ *
+ * A `.chart` carries no encoding declaration. scan-chart reads one as UTF-8 unless a UTF-16 BOM
+ * says otherwise (`getEncoding`, node_modules/scan-chart/dist/index.js:68) and its decode is not
+ * strict, so a chart written in Latin-1 already reads THERE with U+FFFD where its accents were.
+ * That reading is scan-chart's business; writing it back to disk would be Encore destroying the
+ * bytes, which is what this exists to stop. `issues/ini-edit.ts` faced the same choice for
+ * `song.ini` and took it the other way, by never decoding the lines it does not target.
+ *
+ * So the encoding is decided from the bytes, and the write uses the one the read used:
+ *
+ * - Bytes that pass a strict UTF-8 decode are a UTF-8 file, and encoding that text back as UTF-8
+ *   reproduces them exactly. `ignoreBOM` keeps a leading U+FEFF in the text so the write puts it
+ *   back; every header match in this file trims its line first, and `trim` drops U+FEFF.
+ * - Bytes that fail it are treated as Latin-1, which maps each of the 256 byte values onto one
+ *   code point and back, so they also reproduce exactly, whatever the file's real encoding was.
+ * - A UTF-16 BOM is refused, exactly as `removeSongIniKey` refuses a UTF-16 `song.ini`: a line
+ *   terminator there is two bytes, so splitting on LF would cut lines in the wrong places.
+ */
+type ChartEncoding = 'utf-8' | 'latin1'
+
+/** The chart file's text, and the encoding the write back has to use. */
+function decodeChartFile(
+  bytes: Uint8Array,
+  fileName: string
+): { text: string; encoding: ChartEncoding } {
+  if (
+    bytes.length >= 2 &&
+    ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
+  ) {
+    throw new Error(
+      `Encore cannot add lyrics to ${fileName}: it is UTF-16, and Encore only edits UTF-8 and ` +
+        `Latin-1 chart files.`
+    )
+  }
+  try {
+    return {
+      text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes),
+      encoding: 'utf-8'
+    }
+  } catch {
+    return { text: Buffer.from(bytes).toString('latin1'), encoding: 'latin1' }
+  }
+}
+
+/** How many unencodable characters the refusal names before it starts counting instead. */
+const MAX_NAMED_CHARACTERS = 8
+
+/**
+ * The chart file's new bytes, or a refusal when its encoding cannot hold the lyrics.
+ *
+ * This is the case where the two requirements genuinely conflict. The file is not valid UTF-8, so
+ * its existing bytes only go back unchanged if they go back as Latin-1; the lyrics LRCLIB returned
+ * hold a character above U+00FF, which Latin-1 has no byte for, and a curly apostrophe is enough
+ * to reach here. The only way to write that character would be to re-encode the whole file as
+ * UTF-8, rewriting every non-ASCII byte the chart already had. Note what that would rest on:
+ * reading those bytes as Latin-1 is a GUESS, harmless while the write puts them back as they were
+ * and load-bearing the moment it does not. A wrong guess writes mojibake into a chart the user has
+ * no backup of, for the sake of text the user did not write.
+ *
+ * So Encore refuses, and names the characters that stopped it. The cost is real and is one
+ * feature, not one chart: a Latin-1 chart cannot be given lyrics containing any character Latin-1
+ * lacks, and the user has to re-save the chart as UTF-8 to get them. What that buys is that Encore
+ * never silently rewrites a file it was asked to add lyrics to. The refusal is also cheap to
+ * absorb: `batch.ts` records it against that chart and carries on with the rest of the run.
+ */
+function encodeChartFile(text: string, encoding: ChartEncoding, fileName: string): Buffer {
+  if (encoding === 'utf-8') return Buffer.from(text, 'utf8')
+  const unencodable = new Set<string>()
+  // `Buffer.from(text, 'latin1')` keeps the low byte of anything higher and says nothing, so the
+  // check has to happen here rather than be read off the result.
+  for (const character of text) {
+    if (character.codePointAt(0)! > 0xff) unencodable.add(character)
+  }
+  if (unencodable.size > 0) {
+    const named = [...unencodable].slice(0, MAX_NAMED_CHARACTERS).join(' ')
+    const rest =
+      unencodable.size > MAX_NAMED_CHARACTERS
+        ? ` and ${unencodable.size - MAX_NAMED_CHARACTERS} more`
+        : ''
+    throw new Error(
+      `Encore will not add these lyrics to ${fileName}: the chart file is not UTF-8, so Encore ` +
+        `reads and writes it as Latin-1, and the lyrics contain ${named}${rest}, which Latin-1 ` +
+        `cannot hold. Writing them would mean re-encoding the whole chart file and changing ` +
+        `every non-ASCII byte already in it. Re-save this chart as UTF-8 and try again.`
+    )
+  }
+  return Buffer.from(text, 'latin1')
+}
+
+/**
  * Rewrite a .chart file's [Events] section around synced LRC lyrics, returning the new text.
  *
  * Pure: it neither reads nor writes, so the caller decides where the text comes from (a file on
@@ -350,7 +449,12 @@ export async function injectLyrics(
           `This .sng contains no chart file (no notes.chart or notes.mid): ${chartPath}`
         )
       }
-      const updated = injectIntoChartText(new TextDecoder().decode(chartEntry.data), syncedLrc)
+      const { text, encoding } = decodeChartFile(chartEntry.data, chartEntry.fileName)
+      const updated = encodeChartFile(
+        injectIntoChartText(text, syncedLrc),
+        encoding,
+        chartEntry.fileName
+      )
       return {
         // The entry as it is, extracted out of the archive by the store. Replaced in place under
         // its own name, so there is nothing for the undo to remove.
@@ -360,8 +464,7 @@ export async function injectLyrics(
         // The entry's own name, not a hardcoded 'notes.chart': writeSngAsset replaces by exact
         // name, so a differently-cased entry would otherwise be left in place and the archive
         // would come back holding two chart files.
-        write: () =>
-          writeSngAsset(chartPath, chartEntry.fileName, Buffer.from(updated), libraryFolders)
+        write: () => writeSngAsset(chartPath, chartEntry.fileName, updated, libraryFolders)
       }
     })
     return
@@ -374,7 +477,8 @@ export async function injectLyrics(
   const chart = { chartPath: dirname(chartPath), chartType, backupDir }
   const fileName = basename(chartPath)
   await writeWithUndo(chart, 'lyrics', async () => {
-    const updated = injectIntoChartText(readFileSync(chartPath, 'utf8'), syncedLrc)
+    const { text, encoding } = decodeChartFile(readFileSync(chartPath), fileName)
+    const updated = encodeChartFile(injectIntoChartText(text, syncedLrc), encoding, fileName)
     return {
       files: [{ fileName, content: chartFileContent(chart, fileName) }],
       // writeChartAsset directly, which is the folder half of `writeChartFile`: it re-asserts the
@@ -382,7 +486,7 @@ export async function injectLyrics(
       // atomic. Not `writeChartFile` itself, because that takes the per-chart lock and
       // `writeWithUndo` already holds it, and the lock is not re-entrant.
       write: async () => {
-        writeChartAsset(chart.chartPath, fileName, Buffer.from(updated), libraryFolders)
+        writeChartAsset(chart.chartPath, fileName, updated, libraryFolders)
       }
     }
   })

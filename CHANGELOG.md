@@ -14,6 +14,22 @@ release.
 
 ### Fixed
 
+- Adding lyrics to a chart destroyed every byte of the chart file that was not valid UTF-8. Encore
+  read `notes.chart` through a decode that turns an undecodable byte into the replacement
+  character and then wrote that reading back, so a chart written in Latin-1 came back with three
+  bytes of nothing where each of its accents had been, and one Complete missing pass did that to
+  every affected chart in the library at once. Nothing caught it, because a lyric injection is
+  expected to move both of the numbers Clone Hero matches charts by, and the assertions that hold
+  every other chart write to leaving them alone are therefore off for this one. Encore now reads
+  the chart file's encoding off its own bytes and writes back the one it read, so a byte the
+  injection did not come for goes back as itself.
+- Lyrics a chart's encoding cannot hold are now refused for that chart, with a message naming the
+  characters that stopped them, rather than written at the cost of the rest of the file. A chart
+  file that is not valid UTF-8 is read and written as Latin-1, which has no byte for a curly
+  apostrophe or for anything outside its 256 characters; the only way to write one would be to
+  re-encode the whole file and change every non-ASCII byte the chart already had. Re-saving the
+  chart as UTF-8 is what makes those lyrics fit. A UTF-16 chart file is refused for the same
+  reason `song.ini` editing already refuses one.
 - The duplicate report grouped on the raw `song.ini` text, so a chart whose title or charter is
   written in Clone Hero's colour tags was a group of its own. Two versions by one charter, one of
   them styled, were reported as two people having charted the song, which is the one tier the
