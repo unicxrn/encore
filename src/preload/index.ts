@@ -42,6 +42,21 @@ const subscribe =
   }
 
 const api = {
+  /**
+   * Which operating system this is, as Node reports it: 'linux', 'win32', 'darwin'.
+   *
+   * A value rather than a channel, and read here rather than in the renderer, for three reasons.
+   * `navigator.platform` is deprecated and the renderer's own comment on it says so
+   * (lib/shortcuts.ts); there it picks a key cap glyph and being wrong costs a wrong symbol,
+   * whereas the Issues view uses this to decide whether a chart is faulty, and being wrong there
+   * either calls a working chart broken or stays quiet about a broken one. `process.platform` is
+   * what every platform-dependent decision in main already reads (catalog/detect-library.ts,
+   * play/location.ts, app-update/target.ts), and the preload runs in the same process with the
+   * same Node, so it is the same answer without a round trip. And it cannot change while the
+   * process runs, so an async channel would buy nothing and would leave the first render, which
+   * is when the issue list is drawn, with no platform at all.
+   */
+  platform: process.platform,
   settingsGet: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
   settingsSet: (s: Settings): Promise<void> => ipcRenderer.invoke(IPC.settingsSet, s),
   catalogQuery: (f: Partial<CatalogFilter>): Promise<ChartRecord[]> =>
