@@ -16,6 +16,11 @@
   } from '../../../../shared/play'
   import { artUrl } from '../../../../shared/art'
   import {
+    PLAY_HISTORY_PROMISE,
+    TRASH_PROMISE,
+    removalMessage
+  } from '../../../../shared/chart-removal'
+  import {
     msToTime,
     instrumentDiff,
     fallbackChartName,
@@ -385,6 +390,57 @@
    */
   let loadError = $state<string | null>(null)
 
+  /**
+   * Removing a chart, which is the only thing this list does that takes something away.
+   *
+   * One chart at a time, deliberately. There is no selection in this view and adding one to
+   * carry a removal would not be a checkbox: the list is paged and filtered in SQL, so
+   * "everything matching this filter" is a query rather than a list of ids, and a selection that
+   * silently meant "the hundred rows you have loaded" would be the wrong hundred.
+   *
+   * `confirming` holds the one path being confirmed. The confirmation names the chart and says
+   * where it goes, which is more than a re-labelled button can say and exactly the part the user
+   * is meant to read.
+   */
+  let confirming = $state<string | null>(null)
+  let removing = $state<string | null>(null)
+  /** Why a removal failed. The chart and its catalog row are both still there. */
+  let removeError = $state<string | null>(null)
+  /** What the last removal did, kept above the list until the next one. */
+  let removed = $state<string | null>(null)
+
+  /**
+   * Move one chart to the Trash and take its row out of the list.
+   *
+   * The row is dropped here rather than by re-running `load()`. The watcher will notice the
+   * folder disappear and run a scan of its own a couple of seconds later, and that scan's own
+   * first pass deletes rows whose path is gone; re-querying now would race it for no gain, and
+   * would also reshuffle a paged list under the user's cursor. The counts are adjusted by one
+   * for the same reason: the removal is the only thing that changed.
+   */
+  async function removeChart(chart: ChartRecord): Promise<void> {
+    confirming = null
+    removing = chart.path
+    removeError = null
+    try {
+      const result = await encore().chartRemove(chart.path)
+      removed = removalMessage(result.outcome, chartTitle(chart))
+      charts = charts.filter((row) => row.path !== chart.path)
+      total = Math.max(0, total - 1)
+      libraryTotal = Math.max(0, libraryTotal - 1)
+    } catch (err) {
+      // Nothing moved. The row stays exactly where it was, which is what the message says.
+      removeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      removing = null
+    }
+  }
+
+  /** The name a row shows, which is also the name the confirmation has to use. */
+  function chartTitle(chart: ChartRecord): string {
+    return stripRichText(chart.name) || fallbackChartName(chart.path)
+  }
+
   async function load(append = false): Promise<void> {
     const offset = append ? charts.length : 0
     // Read straight from the store rather than from a copy: the sort has to reach the query,
@@ -735,75 +791,115 @@
   {:else if $scanProgress?.status === 'done' && $scanProgress.message}
     <div class="warn">{$scanProgress.message}</div>
   {/if}
+  {#if removeError}
+    <!-- The chart is still on disk and still in the list. Said outright, because the row the
+         user pressed Remove on is still sitting there and the obvious reading of that is a list
+         that failed to refresh. There is no second attempt that deletes instead. -->
+    <div class="error" role="alert">
+      Could not move that chart to the Trash: {removeError}. It is still on disk and still in your
+      library.
+    </div>
+  {:else if removed}
+    <p class="removed" role="status">{removed}</p>
+  {/if}
   <div class="table selectable">
     {#each charts as chart (chart.path)}
       {@const art = coverFor(chart)}
       {@const play = badgeFor(chart)}
-      <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
-        {#if art}
-          <!-- Decorative: the title and artist beside it already name the chart, so alt text
+      <!-- The row itself is a button, so the removal cannot live inside it: a button inside a
+           button is invalid and the inner one would not be reachable. The wrapper carries the
+           row's bottom rule and lays the two out side by side. -->
+      <div class="row-wrap">
+        <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
+          {#if art}
+            <!-- Decorative: the title and artist beside it already name the chart, so alt text
                here would only repeat them to a screen reader. -->
-          <img
-            class="thumb"
-            src={art}
-            alt=""
-            loading="lazy"
-            onerror={() => chart.albumArtMd5 && artFailed.add(chart.albumArtMd5)}
-          />
-        {:else}
-          <span class="thumb placeholder" aria-hidden="true"></span>
-        {/if}
-        <span class="song">
-          <span class="title-line">
-            <!-- title fallback is the file/folder name, not the full path: paths are unreadable
+            <img
+              class="thumb"
+              src={art}
+              alt=""
+              loading="lazy"
+              onerror={() => chart.albumArtMd5 && artFailed.add(chart.albumArtMd5)}
+            />
+          {:else}
+            <span class="thumb placeholder" aria-hidden="true"></span>
+          {/if}
+          <span class="song">
+            <span class="title-line">
+              <!-- title fallback is the file/folder name, not the full path: paths are unreadable
                  in a list, and a chart can legitimately have no parsed title. -->
-            <span class="title" title={chart.path}>
-              {stripRichText(chart.name) || fallbackChartName(chart.path)}
-            </span>
-            <!-- Only for an `alternate` verdict already in main's memory. `current` earns no ink
+              <span class="title" title={chart.path}>
+                {chartTitle(chart)}
+              </span>
+              <!-- Only for an `alternate` verdict already in main's memory. `current` earns no ink
                  in a list, and a chart nobody has checked must not look checked. The words are
                  Detail's: "different version", never "newer", because nothing in the Chorus API
                  orders two uploads of a chart. -->
-            {#if $verdicts.get(chart.path)?.kind === 'alternate'}
-              <span
-                class="badge mono"
-                title="Chorus Encore has a different version of this chart. Open it to compare."
-              >
-                DIFFERENT VERSION
-              </span>
-            {/if}
-            <!-- Inside the title line rather than as a column of its own: the grid has no room
+              {#if $verdicts.get(chart.path)?.kind === 'alternate'}
+                <span
+                  class="badge mono"
+                  title="Chorus Encore has a different version of this chart. Open it to compare."
+                >
+                  DIFFERENT VERSION
+                </span>
+              {/if}
+              <!-- Inside the title line rather than as a column of its own: the grid has no room
                  to spare, and a seventh track would be empty down its whole length for the
                  many users with no play data at all. Absent when there is no record, so it
                  costs nothing on a row that has none. -->
-            {#if play}
-              <span class="badge mono plays" title={play.title}>
-                {#if play.count === null}
-                  PLAYED
-                {:else}
-                  {play.count.toLocaleString()}
-                  {play.count === 1 ? 'PLAY' : 'PLAYS'}
-                {/if}
-              </span>
-            {/if}
+              {#if play}
+                <span class="badge mono plays" title={play.title}>
+                  {#if play.count === null}
+                    PLAYED
+                  {:else}
+                    {play.count.toLocaleString()}
+                    {play.count === 1 ? 'PLAY' : 'PLAYS'}
+                  {/if}
+                </span>
+              {/if}
+            </span>
+            <span class="meta">{metaLine(chart)}</span>
           </span>
-          <span class="meta">{metaLine(chart)}</span>
-        </span>
-        <span class="charter">{stripRichText(chart.charter)}</span>
-        <!-- One grid child: the each block stays inside this span so the row's five columns
+          <span class="charter">{stripRichText(chart.charter)}</span>
+          <!-- One grid child: the each block stays inside this span so the row's five columns
              keep matching .row's five tracks. -->
-        <span class="diffs mono">
-          {#each diffCells(chart) as cell (cell.letter)}
-            <span class="d">{cell.letter}{cell.text}</span>
-          {/each}
-        </span>
-        <!-- Year and length sit together at the end, and both are sortable columns: the user
+          <span class="diffs mono">
+            {#each diffCells(chart) as cell (cell.letter)}
+              <span class="d">{cell.letter}{cell.text}</span>
+            {/each}
+          </span>
+          <!-- Year and length sit together at the end, and both are sortable columns: the user
              has to be able to see the thing they just ordered the list by. An empty cell for a
              chart with no year, not a placeholder glyph: the length beside it already spends
              one, and two in a row reads as an error. -->
-        <span class="year mono">{chart.year ?? ''}</span>
-        <span class="len mono">{msToTime(chart.songLength)}</span>
-      </button>
+          <span class="year mono">{chart.year ?? ''}</span>
+          <span class="len mono">{msToTime(chart.songLength)}</span>
+        </button>
+        <button
+          class="remove"
+          aria-label={`Remove ${chartTitle(chart)}`}
+          disabled={removing === chart.path}
+          onclick={() => (confirming = confirming === chart.path ? null : chart.path)}
+        >
+          {removing === chart.path ? 'Removing…' : 'Remove'}
+        </button>
+      </div>
+      {#if confirming === chart.path}
+        <!-- Inline, under the row it is about, rather than a modal over the list: the chart the
+             user is deciding about stays on screen beside the question. -->
+        <div class="confirm">
+          <p class="cf-text">
+            Remove {chartTitle(chart)} from your library?
+            {TRASH_PROMISE}
+            {PLAY_HISTORY_PROMISE}
+          </p>
+          <p class="cf-path mono">{chart.path}</p>
+          <div class="cf-buttons">
+            <button class="cf-go" onclick={() => void removeChart(chart)}>Move to Trash</button>
+            <button class="cf-no" onclick={() => (confirming = null)}>Keep it</button>
+          </div>
+        </div>
+      {/if}
     {/each}
     {#if charts.length < total}
       <button class="more" onclick={() => void load(true)}>Load more</button>
@@ -1210,6 +1306,97 @@
   .more:hover {
     color: var(--text-1);
     border-color: rgba(255, 255, 255, 0.2);
+  }
+  /* The row keeps its own five-column grid; the wrapper only puts the Remove button beside it
+     and takes over the rule between rows, so a row and its action share one boundary. */
+  .row-wrap {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  }
+  .row-wrap .row {
+    flex: 1;
+    min-width: 0;
+    border-bottom: 0;
+  }
+  .row-wrap:hover .remove {
+    color: var(--text-2);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  /* Present on every row rather than appearing on hover: a control that only exists while the
+     pointer is over it cannot be reached by keyboard or found by someone looking for it. Low
+     contrast until the row is hovered or the button itself is focused, so a page of rows does
+     not read as a page of Remove buttons. */
+  .remove {
+    flex-shrink: 0;
+    margin-right: 16px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-3);
+    font-family: var(--font-ui);
+    font-size: var(--fs-caption);
+    padding: 3px 9px;
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .remove:hover,
+  .remove:focus-visible {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .remove:disabled {
+    cursor: default;
+    color: var(--text-3);
+  }
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 16px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+    background: var(--surface-1);
+  }
+  .cf-text {
+    margin: 0;
+    max-width: 78ch;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    color: var(--text-2);
+  }
+  .cf-path {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+  .cf-buttons {
+    display: flex;
+    gap: 8px;
+  }
+  .cf-go,
+  .cf-no {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 4px 11px;
+    cursor: pointer;
+  }
+  .cf-go:hover,
+  .cf-no:hover {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .removed {
+    margin: 0;
+    padding: 8px 16px 0;
+    font-size: var(--fs-secondary);
+    color: var(--text-3);
   }
   .empty {
     padding: 24px 16px;
