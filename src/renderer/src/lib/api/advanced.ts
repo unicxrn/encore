@@ -56,14 +56,16 @@ export interface RangeSpec {
   readonly min: AdvancedNumberField
   readonly max: AdvancedNumberField
   readonly label: string
-  /**
-   * Multiplied into the typed number before it is sent. 60 for length, which the API counts in
-   * seconds and everybody else says in minutes; see `unit`.
-   */
-  readonly scale: number
   /** Shown after the pair, and named in each box's accessible label. Empty where there is none. */
   readonly unit: string
-  /** The `step` attribute. Whole numbers unless a field is genuinely fractional. */
+  /**
+   * The `step` attribute.
+   *
+   * Whole numbers except where a field is genuinely fractional. On intensity it is load-bearing
+   * rather than cosmetic: a fractional `minIntensity` is a 500 from the endpoint every time
+   * (measured), so the box must not offer one. Length takes a fraction happily (`minLength: 3.5`
+   * answers with 59,830 charts), so there the step is only coarse.
+   */
   readonly step: string
 }
 
@@ -73,20 +75,20 @@ export interface RangeSpec {
  * A range is one filter made of two boxes, which is why these are pairs rather than ten separate
  * fields: "between 3 and 6 minutes" is the question people have, and two loose boxes labelled
  * minLength and maxLength are two filters that happen to sit next to each other.
+ *
+ * Every one of these goes out as the user typed it, length included. `minLength`/`maxLength` are
+ * MINUTES, re-measured against the live service on 2026-09-13: `{minLength: 4, maxLength: 4}`
+ * answers with 55 charts whose `song_length` is 240000 ms exactly, and `{minLength: 3, maxLength:
+ * 6}` with 63,408 that all sit in that band. The panel therefore converts nothing. An earlier
+ * reading of this as seconds multiplied by 60, which asked for 3 to 6 HOURS and found 16 charts,
+ * and a lone maximum of 360 matched 95,284 of the 95,299 charts there are.
  */
 export const ADVANCED_RANGES: readonly RangeSpec[] = [
-  { min: 'minLength', max: 'maxLength', label: 'Length', scale: 60, unit: 'min', step: '1' },
-  { min: 'minIntensity', max: 'maxIntensity', label: 'Intensity', scale: 1, unit: '', step: '1' },
-  {
-    min: 'minAverageNPS',
-    max: 'maxAverageNPS',
-    label: 'Average NPS',
-    scale: 1,
-    unit: '',
-    step: '0.1'
-  },
-  { min: 'minMaxNPS', max: 'maxMaxNPS', label: 'Peak NPS', scale: 1, unit: '', step: '0.1' },
-  { min: 'minYear', max: 'maxYear', label: 'Year', scale: 1, unit: '', step: '1' }
+  { min: 'minLength', max: 'maxLength', label: 'Length', unit: 'min', step: '1' },
+  { min: 'minIntensity', max: 'maxIntensity', label: 'Intensity', unit: '', step: '1' },
+  { min: 'minAverageNPS', max: 'maxAverageNPS', label: 'Average NPS', unit: '', step: '0.1' },
+  { min: 'minMaxNPS', max: 'maxMaxNPS', label: 'Peak NPS', unit: '', step: '0.1' },
+  { min: 'minYear', max: 'maxYear', label: 'Year', unit: '', step: '1' }
 ]
 
 export type AdvancedSingleField = 'modifiedAfter' | 'hash' | 'trackHash'
@@ -188,9 +190,6 @@ export function cloneAdvanced(query: AdvancedQuery): AdvancedQuery {
   }
 }
 
-const rangeFor = (field: AdvancedNumberField): RangeSpec =>
-  ADVANCED_RANGES.find((r) => r.min === field || r.max === field) as RangeSpec
-
 /**
  * The fields to send, and only those.
  *
@@ -222,7 +221,9 @@ export function advancedBody(query: AdvancedQuery): Record<string, unknown> {
     // endpoint rejects for a field it expects a number in. Dropping it leaves the box on screen
     // with what the user typed and the results unfiltered by it.
     if (!Number.isFinite(parsed)) continue
-    body[field] = parsed * rangeFor(field).scale
+    // The number the user typed, in the unit the box is labelled in. Every range the endpoint
+    // takes is already in that unit, length included; see ADVANCED_RANGES.
+    body[field] = parsed
   }
 
   for (const flag of ADVANCED_FLAGS) {

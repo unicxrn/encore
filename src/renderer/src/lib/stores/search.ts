@@ -135,6 +135,17 @@ export interface SearchStore {
   /** How many the panel is holding, applied or not. What `restoreAdvanced` would put back. */
   advancedDraftCount: Readable<number>
   /**
+   * Changes whenever the store replaces the draft itself instead of being told what it holds.
+   *
+   * The panel binds its inputs to a local copy of the draft, because `bind:value` needs one, and
+   * it seeds that copy when it mounts. Nothing here can reach into it, so `clearAdvanced` called
+   * from outside the panel (the chip beside the Advanced button, which is on screen while the
+   * panel is open) emptied the store and left the boxes showing filters nothing was filtering by,
+   * one keystroke from writing all of them back. This is the panel's cue to seed again. The
+   * number itself means nothing.
+   */
+  advancedDraftReset: Readable<number>
+  /**
    * How many applied filters the last plain search dropped, or 0 with nothing to report.
    *
    * A search term and the advanced filters cannot both narrow one query (see `setQuery`), so
@@ -148,10 +159,18 @@ export interface SearchStore {
   /**
    * Whether another page exists.
    *
-   * Both halves matter. `found` is the service's count and the rows can overshoot it, because a
-   * page carries every version of a song it lists while `found` counts songs, so rows past `found`
-   * is the ordinary end of the data. A page that comes back empty is the other end, and without it
-   * an appending list would ask for page after page of nothing.
+   * Songs against songs. `found` counts SONGS, and a page carries every version of each one it
+   * lists, so rows and `found` are different units and comparing them ended a query before its
+   * end. Measured against `/search "metallica"`, which answers `found=511` and delivers 26 rows
+   * for 25 distinct songs on most pages: the extra row per page accumulated until 525 rows
+   * covering 475 songs read as past the count, the button disappeared, and the last 36 songs were
+   * unreachable. The same measurement is what says grouping is the right unit: distinct songs
+   * accumulate 25 a page with no repeats across pages and land on 511 exactly, on page 21.
+   *
+   * A page that comes back empty is the other end and stays, because it is the only terminator
+   * that does not depend on `found` being right. It costs one request past the last page, and
+   * only on a query where `found` undercounts the songs the pages actually carry; on the measured
+   * one the group count stops paging at page 21 and page 22 is never asked for.
    */
   hasMore: Readable<boolean>
   /**
@@ -192,6 +211,27 @@ export interface SearchStore {
   loadMore: () => Promise<void>
 }
 
+/**
+ * A run that has been asked for and has not started.
+ *
+ * Typing schedules a run one debounce out, and for that window the previous query's rows are
+ * still on screen and still the only thing anything can act on. So nothing a run changes about
+ * the store is done when the run is asked for: it is recorded here and applied when the run
+ * starts, and `loadMore` refuses while one is waiting.
+ *
+ * Setting `query`, `page` and the applied filters at schedule time instead left the store
+ * describing the new query while the old query's rows were up, and `loadMore` reads all three:
+ * it asked for page 2 of a query whose page 1 had not been fetched yet (so the top 25 matches
+ * were never loaded and two requests both went to page 2), and it appended an unfiltered page
+ * under a filtered one.
+ */
+interface PendingRun {
+  /** The term the run will ask for. */
+  query: string
+  /** Whether starting it drops the applied advanced filters; see `setQuery`. */
+  dropsAdvanced: boolean
+}
+
 export function createSearch(config: SearchConfig = {}): SearchStore {
   const { fetchFn = fetch, debounceMs = 300, retryDelayMs } = config
   const results = writable<ChartData[]>([])
@@ -214,22 +254,28 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const activeCount = derived(advancedApplied, advancedCount)
   const draftCount = derived(advancedDraft, advancedCount)
   const advancedDropped = writable(0)
+  const draftReset = writable(0)
   // Raised a cap's worth at a time by an explicit loadMore; see AUTO_APPEND_CAP and loadMore.
   const autoCap = writable(AUTO_APPEND_CAP)
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
   const exhausted = writable(false)
   const hasMore = derived(
-    [results, found, exhausted],
-    ([rows, total, done]) => !done && rows.length > 0 && rows.length < total
+    [groups, results, found, exhausted],
+    ([songs, rows, total, done]) => !done && rows.length > 0 && songs.length < total
   )
+  // The query the rows on screen were asked for. Written when a run STARTS, never when one is
+  // scheduled; see `PendingRun`.
   let query = '*'
-  // The last query we started a run for, or null before the first one. This is
+  // The last query a run was asked for, or null before the first one. This is
   // what "already answered" means, independent of whether the answer was rows,
-  // no rows, or an error.
+  // no rows, or an error. Moves at schedule time rather than at run time,
+  // because what it answers is "has this question been put to us", and a
+  // question waiting out the debounce has been.
   let lastRan: string | null = null
   let page = 1
   let instrument: string | null = null
   let difficulty: string | null = null
+  let pending: PendingRun | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let controller: AbortController | null = null
   let scrollTop = 0
@@ -286,12 +332,49 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     }
   }
 
-  function search(next: string): void {
-    query = next
-    lastRan = next
-    page = 1
+  /** The drop half of the rule in `setQuery`, done when the run that causes it starts. */
+  function dropAppliedAdvanced(): void {
+    const dropping = get(activeCount)
+    if (dropping === 0) return
+    advancedApplied.set(emptyAdvanced())
+    advancedDropped.set(dropping)
+  }
+
+  /** Forget a scheduled run without applying any of it. */
+  function cancelPending(): void {
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void run(false), debounceMs)
+    timer = null
+    pending = null
+  }
+
+  /**
+   * Apply what a scheduled run was going to apply, and cancel it.
+   *
+   * Every immediate path (a filter change, Search in the panel, Clear) goes through this rather
+   * than throwing the pending run away, because a click lands on what is in the boxes, including
+   * a keystroke still inside the debounce window. Discarding it would answer the click with the
+   * term before that keystroke.
+   */
+  function takePending(): void {
+    const next = pending
+    cancelPending()
+    if (!next) return
+    query = next.query
+    if (next.dropsAdvanced) dropAppliedAdvanced()
+  }
+
+  function startPending(): void {
+    if (!pending) return
+    takePending()
+    page = 1
+    void run(false)
+  }
+
+  function schedule(next: PendingRun): void {
+    cancelPending()
+    pending = next
+    lastRan = next.query
+    timer = setTimeout(startPending, debounceMs)
   }
 
   function setQuery(value: string): void {
@@ -321,25 +404,26 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     // still holds every field the user filled in and one press of Search (or of Restore, below)
     // asks the same question again. A rule that destroyed the form instead would make an
     // accidental keystroke in the title bar cost a filter set someone built.
-    const dropping = get(activeCount)
-    if (dropping > 0) {
-      advancedApplied.set(emptyAdvanced())
-      advancedDropped.set(dropping)
-    }
-    search(next)
+    //
+    // The drop happens when the run starts, not here: for the debounce window the filtered rows
+    // are still the ones on screen, and a count that had already fallen to zero described neither
+    // the rows above it nor the request that had not been made yet.
+    schedule({ query: next, dropsAdvanced: true })
   }
 
   function retry(): void {
-    search(query)
+    // The question last put to us, which is the pending one if the debounce is still running.
+    schedule({ query: lastRan ?? query, dropsAdvanced: false })
   }
 
   function setFilters(nextInstrument: string | null, nextDifficulty: string | null): void {
     instrument = nextInstrument
     difficulty = nextDifficulty
     filters.set({ instrument, difficulty })
+    // A filter change is a click, not typing: skip the debounce, and carry any term still inside
+    // it into this run rather than dropping it.
+    takePending()
     page = 1
-    // A filter change is a click, not typing: skip the debounce.
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 
@@ -401,13 +485,22 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
    * await, so a second call made in the same turn (a scroll that crosses the sentinel twice, a
    * double click on the button) sees it already true and returns having spent nothing.
    *
+   * The pending guard is the same idea one step earlier. A scheduled run has not touched
+   * `loading` yet, and the button stays live through the whole debounce window, so without this
+   * the next page of a query that is about to be replaced gets fetched and thrown away. What it
+   * cost before it was thrown away is in `PendingRun`.
+   *
+   * `hasMore` rather than a count of its own, so the store refuses exactly what the button and
+   * the sentinel are hidden for; a second opinion here is a second place for the end of the data
+   * to be wrong.
+   *
    * Called both by the sentinel below the cap and by the button at it, and raising the cap here
    * rather than in the button is what keeps that one path. Below the cap the raise cannot fire;
    * at it, the only caller left is a deliberate click, and a click is the user asking for another
    * cap's worth.
    */
   async function loadMore(): Promise<void> {
-    if (get(loading) || get(exhausted) || get(results).length >= get(found)) return
+    if (pending || get(loading) || !get(hasMore)) return
     const held = get(results).length
     if (held >= get(autoCap)) autoCap.set(held + AUTO_APPEND_CAP)
     page += 1
@@ -419,23 +512,36 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   }
 
   function applyAdvanced(): void {
-    advancedApplied.set(cloneAdvanced(get(advancedDraft)))
+    const next = cloneAdvanced(get(advancedDraft))
+    const narrowing = advancedCount(next) > 0
+    // A form with nothing in it, submitted while nothing was applied, is not a question. The
+    // panel is a `<form>`, so Enter in any of its thirty controls submits it, and taking the term
+    // over for a query that ends up narrowed by nothing threw away what was typed in the search
+    // box with nothing left to say so: `advancedDropped` counts filters and there were none.
+    if (!narrowing && get(activeCount) === 0) return
+    // A press of Search, like a filter change, is a click rather than typing, and it carries any
+    // term still inside the debounce window with it.
+    takePending()
+    advancedApplied.set(next)
     advancedDropped.set(0)
-    // The other half of the rule in `setQuery`, and the reason neither search box has to be
-    // disabled: the endpoint about to answer ignores the term, so the box is emptied rather than
-    // left showing a word that had no part in the results. `lastRan` moves with it, so Explore's
-    // mount effect finds the wildcard already answered instead of spending a second request on
-    // the rows this run is fetching.
-    query = '*'
-    lastRan = '*'
-    globalQuery.set('')
+    if (narrowing) {
+      // The other half of the rule in `setQuery`, and the reason neither search box has to be
+      // disabled: the endpoint about to answer ignores the term, so the box is emptied rather
+      // than left showing a word that had no part in the results. `lastRan` moves with it, so
+      // Explore's mount effect finds the wildcard already answered instead of spending a second
+      // request on the rows this run is fetching. Only when something is actually narrowing:
+      // with an empty form the endpoint is `/search`, which honours the term.
+      query = '*'
+      lastRan = '*'
+      globalQuery.set('')
+    }
     page = 1
-    // A press of Search, like a filter change, is a click rather than typing.
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 
   function restoreAdvanced(): void {
+    // Offered only while the draft holds something (Explore gates the button on
+    // `advancedDraftCount`), so it never lands on the empty-form case `applyAdvanced` returns on.
     applyAdvanced()
   }
 
@@ -447,13 +553,17 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     const wasNarrowed = get(activeCount) > 0
     advancedApplied.set(emptyAdvanced())
     advancedDraft.set(emptyAdvanced())
+    // The one place the store replaces the draft rather than being handed one; see
+    // `advancedDraftReset`. Bumped whether or not anything was narrowing, because an open panel
+    // full of boxes is the thing being cleared either way.
+    draftReset.update((n) => n + 1)
     // Cleared on purpose, so there is nothing left to offer to put back.
     advancedDropped.set(0)
     // Clearing a form that was not narrowing anything changes no answer, and re-asking the same
     // question would spend one of the 50 requests a minute to get the rows already on screen.
     if (!wasNarrowed) return
+    takePending()
     page = 1
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 
@@ -476,6 +586,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     advancedDraft: { subscribe: advancedDraft.subscribe },
     advancedCount: activeCount,
     advancedDraftCount: draftCount,
+    advancedDraftReset: { subscribe: draftReset.subscribe },
     advancedDropped: { subscribe: advancedDropped.subscribe },
     advancedOpen: { subscribe: advancedOpen.subscribe },
     hasMore,

@@ -52,6 +52,26 @@ release.
   going to look at an install for. The second now says that it is a pair Encore cannot read
   together rather than a damaged install, since Encore matches the two files on a field that has
   never been decoded and a healthy pair shaped unlike the one it was read from would land there.
+- Explore's advanced Length range was sent to Chorus Encore multiplied by 60. The service counts
+  length in minutes, not seconds, so a search for 3 to 6 minutes asked for 3 to 6 hours and
+  answered with 16 charts, and a maximum on its own matched 95,284 of the 95,299 charts there are.
+  The numbers now go out in the minutes the boxes are labelled in.
+- Typing in Explore's search box waits 300ms before it searches, and everything about the new
+  query was already in place for those 300ms while the previous query's rows were still on screen.
+  Reaching the end of the list in that window, or pressing Load more, skipped the new query's
+  first page entirely: its top 25 matches never loaded and two requests went to page 2. It could
+  also append a page of unfiltered results under a page of filtered ones, in one list. A search
+  that has been asked for now happens all at once, and Load more waits for it.
+- Pressing Enter in Explore's advanced panel with nothing filled in threw away the search term and
+  searched for everything instead, with nothing on screen to say where the term had gone. An empty
+  panel now leaves the term alone.
+- Explore stopped paging before the end of a search. A page carries every version of the songs it
+  lists while the result count counts songs, so the extra rows added up until the list looked
+  longer than the answer and the Load more button disappeared. On a search for "metallica" that
+  left 36 of its 511 songs unreachable.
+- Clearing the advanced filters from the chip beside the Advanced button left the open panel still
+  showing every field, and one keystroke anywhere in it put all of them back. The panel now
+  empties with the filters.
 
 ## [0.3.0] - 2026-09-13
 

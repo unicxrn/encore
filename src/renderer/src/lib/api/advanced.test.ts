@@ -60,14 +60,17 @@ describe('advancedBody', () => {
     expect(advancedBody(query)).toEqual({})
   })
 
-  it('converts length from the minutes it is typed in to the seconds the API counts', () => {
+  it('sends the length range in the minutes the API counts, not converted to seconds', () => {
+    // Measured against the live service: {minLength: 4, maxLength: 4} answers with 55 charts whose
+    // song_length is 240000 ms exactly, so the unit on the wire is the unit on the box. Converting
+    // to seconds asked for 10 to 12 HOURS.
     const query = emptyAdvanced()
     query.numbers.minLength = '10'
     query.numbers.maxLength = '12'
-    expect(advancedBody(query)).toEqual({ minLength: 600, maxLength: 720 })
+    expect(advancedBody(query)).toEqual({ minLength: 10, maxLength: 12 })
   })
 
-  it('sends the other ranges unscaled', () => {
+  it('sends every other range as typed too', () => {
     const query = emptyAdvanced()
     query.numbers.minYear = '1994'
     query.numbers.maxAverageNPS = '8.5'

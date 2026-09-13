@@ -632,15 +632,41 @@ describe('Browse bulk download', () => {
  */
 describe('Browse loading as the list is scrolled', () => {
   /**
+   * Answer every request with the next page: one song in two versions, a different song each
+   * time.
+   *
+   * A different song each time is what makes it the NEXT page. `found` counts songs and so does
+   * the end of the data, so a mock that answered with the same songId forever would be a service
+   * that never got through its own answer, and the list would page until something stopped it for
+   * an unrelated reason. `found` is therefore in songs too: `found: 2` is one more page after the
+   * one in hand, `found: 3` is two.
+   */
+  function servePages(found: number): void {
+    let served = 0
+    searchCharts.mockImplementation(() => {
+      served += 1
+      const songId = 42 + served
+      return Promise.resolve({
+        found,
+        out_of: found,
+        page: served,
+        data: [
+          chart(served * 2 - 1, songId, 'CharterA', ART_MD5),
+          chart(served * 2, songId, 'CharterB', 'c'.repeat(32))
+        ]
+      })
+    })
+  }
+
+  /**
    * The store left with rows on screen and more pages behind them, and Browse rendered over it.
    *
-   * `found` is how many pages there are: each mocked page carries the two rows of TWO_VERSIONS,
-   * so `found: 4` is one more page and `found: 6` is two. Tests that would otherwise append until
-   * the mock ran out say how far they want it to go. retry() is the one path that re-runs a query
-   * the module-scoped store has already answered.
+   * Tests that would otherwise append until the end say how far they want it to go, in the songs
+   * `found` counts; see `servePages`. retry() is the one path that re-runs a query the
+   * module-scoped store has already answered.
    */
-  async function renderWithMorePages(found = 4): Promise<HTMLElement> {
-    searchCharts.mockResolvedValue({ found, out_of: found, page: 1, data: TWO_VERSIONS })
+  async function renderWithMorePages(found = 2): Promise<HTMLElement> {
+    servePages(found)
     browseSearch.retry()
     await new Promise((r) => setTimeout(r, 350))
     const { container } = renderBrowse()
@@ -694,13 +720,13 @@ describe('Browse loading as the list is scrolled', () => {
     // the sentinel still in view crosses nothing. Without asking it again, one page would land and
     // the list would sit there with its end on screen and, on a window too tall for one page,
     // still nothing to scroll.
-    await renderWithMorePages(6)
+    await renderWithMorePages(3)
     expect(searchCharts).toHaveBeenCalledTimes(1)
 
     sentinelInView()
 
-    // Two pages, unasked and one after the other, and then it stops: the mock has no third, so
-    // `hasMore` goes false. Every guard still applies to each of them.
+    // Two pages, unasked and one after the other, and then it stops: all three songs `found`
+    // counted are on screen, so `hasMore` goes false. Every guard still applies to each of them.
     await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(3))
     expect(searchCharts.mock.calls.map((c) => (c[0] as { page: number }).page)).toEqual([1, 2, 3])
     await new Promise((r) => setTimeout(r, 50))
@@ -710,7 +736,7 @@ describe('Browse loading as the list is scrolled', () => {
   it('does not treat the restored scroll offset as the user reaching the bottom', async () => {
     // The restore writes scrollTop, and the browser answers with a scroll event of its own. That
     // one is not a gesture and must not arm anything.
-    searchCharts.mockResolvedValue({ found: 4, out_of: 4, page: 1, data: TWO_VERSIONS })
+    servePages(2)
     browseSearch.retry()
     await new Promise((r) => setTimeout(r, 350))
     browseSearch.saveScroll(420)
@@ -735,7 +761,7 @@ describe('Browse loading as the list is scrolled', () => {
     // screen-reader user never fires an intersection, and tabbing to this and pressing it is how
     // they reach the same rows.
     // Two pages behind the rows in hand, so the button is still there after the one this presses.
-    const table = await renderWithMorePages(6)
+    const table = await renderWithMorePages(3)
     const button = screen.getByRole('button', { name: 'Load more' })
     expect(button.tagName).toBe('BUTTON')
 
@@ -815,7 +841,7 @@ describe('Browse advanced search', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
   })
 
-  it('names the unit on the length range, which the API counts in seconds', async () => {
+  it('names the unit on the length range, which is the minutes the API counts', async () => {
     await openPanel()
     expect(screen.getByLabelText('Lowest length, in min')).toBeTruthy()
     expect(screen.getByLabelText('Highest length, in min')).toBeTruthy()
@@ -985,6 +1011,41 @@ describe('Browse advanced search', () => {
       expect(get(browseSearch.advancedCount)).toBe(0)
       expect(screen.getByRole('button', { name: 'Advanced search' })).toBeTruthy()
     })
+  })
+
+  it('empties the open panel when the filters are cleared from outside it', async () => {
+    // The Clear chip sits beside the Advanced button, which is on screen while the panel is open,
+    // and it goes straight to the store. The panel binds its boxes to a copy of the draft that
+    // the store cannot reach, so the boxes went on showing an artist and an album that nothing
+    // was filtering by, and the next keystroke in any box wrote all of them back and re-armed the
+    // offer to restore them.
+    await openPanel()
+    await fireEvent.input(screen.getByLabelText('Artist'), { target: { value: 'Metallica' } })
+    await fireEvent.input(screen.getByLabelText('Album'), {
+      target: { value: 'Ride the Lightning' }
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    await screen.findByRole('button', { name: 'Advanced search, 2 filters applied' })
+
+    // The chip outside the panel, not the button inside it: both are called Clear filters, and
+    // the one this is about is the one the panel cannot see coming.
+    const outside = screen
+      .getAllByRole('button', { name: 'Clear filters' })
+      .find((el) => el.classList.contains('adv-clear'))
+    expect(outside).toBeTruthy()
+    await fireEvent.click(outside as HTMLElement)
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Artist') as HTMLInputElement).value).toBe('')
+    )
+    expect((screen.getByLabelText('Album') as HTMLInputElement).value).toBe('')
+
+    // And a keystroke anywhere in the panel does not put the other two back.
+    await fireEvent.input(screen.getByLabelText('Genre'), { target: { value: 'Thrash' } })
+
+    expect(get(browseSearch.advancedDraftCount)).toBe(1)
+    expect(get(browseSearch.advancedDraft).text.artist.value).toBe('')
+    expect(get(browseSearch.advancedDraft).text.album.value).toBe('')
   })
 
   it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {
