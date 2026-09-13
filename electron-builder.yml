@@ -165,8 +165,11 @@ nsis:
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
-# macOS is not a supported target — no macOS build has ever been produced or run. This block
-# is kept only so `npm run build:mac` does not fall back to electron-builder's defaults.
+# macOS is not a supported target. No macOS build has ever been produced or run, and nobody
+# working on Encore has a Mac to run one on, so a dmg from here would be untested, unsigned and
+# unnotarised. This block is kept only so `npm run build:mac` does not fall back to
+# electron-builder's defaults if someone who can test it ever picks this up. Until then, do not
+# put a dmg in a release: `gh release create ... dist/encore-*` would sweep one up.
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
