@@ -143,6 +143,21 @@ export class ScoreFileWatcher {
   private lastReason: PlayAvailability
   private lastImport: string | null = null
   private backupUsed = false
+  /**
+   * Bumped by every read and by every retarget, and checked once a read's bytes are back.
+   *
+   * `refresh` takes its paths before its first await and `retarget` swaps them before its own, so
+   * a read already in flight when the folder changes resolves holding the OLD folder's records
+   * with nothing to stop it storing them. That is not merely stale: `importScoreBests` deletes
+   * every stored chart the list it is given does not mention, so the old folder's scores replace
+   * the new folder's wholesale, the status goes on reporting the new folder and `ok`, and nothing
+   * re-reads until a file changes or Encore restarts. Two refreshes of one folder carry the same
+   * hazard in the small, since the older read can be the one that lands last.
+   *
+   * So a read that is no longer the newest one throws its own result away, and the read that
+   * overtook it is left to say what the state is.
+   */
+  private generation = 0
 
   constructor(opts: ScoreFileWatcherOptions) {
     this.paths = opts.paths
@@ -208,10 +223,15 @@ export class ScoreFileWatcher {
       return false
     }
     const p = this.paths
+    const generation = (this.generation += 1)
     const [data, ext] = await Promise.all([
       readCandidates([p.scoreData, p.scoreDataBackup], parseScoreData),
       readCandidates([p.scoresExt, p.scoresExtBackup], parseScoresExt)
     ])
+    // Overtaken while the reads were out: see `generation`. Not even the reason is recorded,
+    // because everything this read knows is about a folder or a moment that has been superseded,
+    // and the read that superseded it has already said, or is about to say, what the state is.
+    if (this.generation !== generation) return false
     if (data.parsed.length === 0 || ext.parsed.length === 0) {
       // A side is `noFile` only when neither its primary nor its backup was there at all, which
       // is the ordinary "no Clone Hero, or a version too old to have written this file" case.
@@ -321,6 +341,10 @@ export class ScoreFileWatcher {
     // renderer asks where Encore is reading as soon as its own call resolves. Swapping the paths
     // after an await would answer that question with the folder the user just stopped using.
     this.paths = paths
+    // Bumped here, in the same breath and for the same reason: a read of the old folder that is
+    // already in flight has to be invalidated before this method yields, or it resolves during
+    // the `stop` below and imports the folder the user just left. See `generation`.
+    this.generation += 1
     // Back to the state a fresh watcher would be in. Carrying `usedBackup` or a reason across a
     // change of folder would describe the old one.
     this.lastReason = paths === null ? 'unknownPlatform' : 'noFile'

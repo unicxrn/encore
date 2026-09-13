@@ -22,6 +22,55 @@ import { ScoreFileWatcher } from './score-watcher'
  * to the files. The diff itself is tested against a real database in score-store.test.ts.
  */
 
+/**
+ * A hold on one read, so the orderings an overlapping read produces are written down rather than
+ * raced for.
+ *
+ * The bytes come off the disk first and only the answer is delayed, which is what a slow read is:
+ * the held refresh comes back holding what was there when it looked, exactly as the race it
+ * stands in for does. Null in every test that does not install one, and the wrapper below is a
+ * pass through then.
+ */
+let heldRead: ((path: string) => Promise<void> | null) | null = null
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const bytes = await actual.readFile(...args)
+      await heldRead?.(String(args[0]))
+      return bytes
+    }
+  }
+})
+
+interface Hold {
+  /** Resolves once a read in the directory has been made and is being held. */
+  reached: Promise<void>
+  /** Let it finish. */
+  release: () => void
+}
+
+/** Hold the first read made in `dir`. Every read after it, there or anywhere, goes straight through. */
+function holdFirstReadIn(dir: string): Hold {
+  let arrive = (): void => {}
+  let open = (): void => {}
+  const reached = new Promise<void>((resolve) => {
+    arrive = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  heldRead = (path) => {
+    if (!path.startsWith(dir)) return null
+    heldRead = null
+    arrive()
+    return gate
+  }
+  return { reached, release: open }
+}
+
 const SKRTING = 'e54e9a0521444e81bd1fed4f3f3a3201'
 
 function spec(over: Partial<ChartSpec> = {}): ChartSpec {
@@ -107,6 +156,7 @@ function throwsOnImport(): ScoreImportResult {
 
 const open: ScoreFileWatcher[] = []
 afterEach(async () => {
+  heldRead = null
   for (const w of open.splice(0)) await w.stop()
 })
 
@@ -306,6 +356,23 @@ describe('ScoreFileWatcher.refresh', () => {
     expect(h.watcher.usedBackup).toBe(false)
   })
 
+  it('throws away the older of two overlapping reads of one folder', async () => {
+    // Nothing sequences two refreshes, and the game rewrites both files after every song, so the
+    // slower of two reads landing last is ordinary. Its records are the older ones and they must
+    // not be written over the newer ones.
+    const h = harness()
+    h.write([spec({ playCount: 2 })])
+    const hold = holdFirstReadIn(h.dir)
+    const older = h.watcher.refresh()
+    await hold.reached
+    h.write([spec({ playCount: 5 })])
+    expect(await h.watcher.refresh()).toBe(true)
+    expect(h.imported.at(-1)?.[0].playCount).toBe(5)
+    hold.release()
+    expect(await older).toBe(false)
+    expect(h.imported.at(-1)?.[0].playCount).toBe(5)
+  })
+
   it('reports an import that threw rather than rejecting', async () => {
     // The store takes a merged list and can refuse it: `score_bests` is keyed on
     // (checksum, variant) and its own constraints are the last word. The caller that is not
@@ -456,6 +523,28 @@ describe('ScoreFileWatcher.retarget', () => {
     await h.watcher.retarget(scoreDataPathsIn(to.dir))
     expect(h.watcher.usedBackup).toBe(false)
     expect(h.watcher.reason).toBe('noFile')
+  })
+
+  it('throws away a read of the folder it was pointed away from', async () => {
+    // The read was started against the old folder and resolves after the switch. Importing it
+    // would not merely be stale: the store deletes every chart the list it is given does not
+    // mention, so the old folder's scores would replace the new folder's outright, while the
+    // status went on naming the new folder and saying ok.
+    const from = harness()
+    const to = harness()
+    from.write([spec({ playCount: 2 })])
+    to.write([spec({ playCount: 40 })])
+    const hold = holdFirstReadIn(from.dir)
+    const inFlight = from.watcher.refresh()
+    await hold.reached
+    await from.watcher.retarget(scoreDataPathsIn(to.dir))
+    expect(from.imported).toHaveLength(1)
+    expect(from.imported[0][0].playCount).toBe(40)
+    hold.release()
+    expect(await inFlight).toBe(false)
+    expect(from.imported).toHaveLength(1)
+    expect(from.watcher.watchedFolder).toBe(to.dir)
+    expect(from.watcher.reason).toBe('ok')
   })
 
   it('keeps watching, in the new folder, when it was watching before', async () => {
