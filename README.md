@@ -195,7 +195,8 @@ A few conventions that make review quick:
   offscreen window, which never appears on a desktop, and prints what layout made of it at a given
   window size. Explore's paging bug was a window size the jsdom tests could not have a view on.
 
-Commits are plain prose in the imperative: what changed and why it had to.
+Commits are one line of plain prose in the imperative, and no body. The reasoning belongs in
+a comment beside the code it explains, where the next person will actually meet it.
 
 ### Cutting a release
 
