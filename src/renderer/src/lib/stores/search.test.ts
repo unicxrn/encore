@@ -1177,6 +1177,46 @@ describe('how far Explore will append', () => {
     expect(get(search.results)).toHaveLength(AUTO_APPEND_CAP)
   })
 
+  it('keeps paging while songs are missing, though the rows have passed the count', async () => {
+    // `found` counts songs and a page carries every version of one, so rows and `found` are
+    // different units. Measured on `/search "metallica"`: found=511, 26 rows for 25 distinct
+    // songs on most pages, and comparing the two stopped at 525 rows covering 475 songs with the
+    // last 36 unreachable and the button gone. Here every song has a second version, which is the
+    // same shape sooner: two pages are 100 rows and only 50 of the 100 songs.
+    let asked = 0
+    const withAlternates = (): SearchResult => {
+      const n = ++asked
+      return {
+        found: 100,
+        out_of: 100,
+        page: n,
+        data: Array.from({ length: 50 }, (_, i) => {
+          const songId = (n - 1) * 25 + Math.floor(i / 2)
+          return makeChart(songId * 2 + (i % 2), songId, `S${songId}`, i % 2 ? 'Alt' : 'C')
+        })
+      }
+    }
+    const fetchFn = vi.fn().mockImplementation(() => ok(withAlternates()))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+
+    await search.loadMore()
+    expect(get(search.results)).toHaveLength(100)
+    expect(get(search.groups)).toHaveLength(50)
+    expect(get(search.hasMore)).toBe(true)
+
+    await search.loadMore()
+    await search.loadMore()
+
+    // Every song `found` counted is now on screen, so this is the end and the button goes.
+    expect(get(search.groups)).toHaveLength(100)
+    expect(get(search.hasMore)).toBe(false)
+    const spent = fetchFn.mock.calls.length
+    await search.loadMore()
+    expect(fetchFn).toHaveBeenCalledTimes(spent)
+  })
+
   it('stops asking once a page comes back empty, whatever the count says', async () => {
     // `found` counts songs and a page carries every version of one, so the two do not have to
     // meet. Without this an appending list would ask for page after page of nothing.

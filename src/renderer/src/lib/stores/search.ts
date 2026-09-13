@@ -148,10 +148,18 @@ export interface SearchStore {
   /**
    * Whether another page exists.
    *
-   * Both halves matter. `found` is the service's count and the rows can overshoot it, because a
-   * page carries every version of a song it lists while `found` counts songs, so rows past `found`
-   * is the ordinary end of the data. A page that comes back empty is the other end, and without it
-   * an appending list would ask for page after page of nothing.
+   * Songs against songs. `found` counts SONGS, and a page carries every version of each one it
+   * lists, so rows and `found` are different units and comparing them ended a query before its
+   * end. Measured against `/search "metallica"`, which answers `found=511` and delivers 26 rows
+   * for 25 distinct songs on most pages: the extra row per page accumulated until 525 rows
+   * covering 475 songs read as past the count, the button disappeared, and the last 36 songs were
+   * unreachable. The same measurement is what says grouping is the right unit: distinct songs
+   * accumulate 25 a page with no repeats across pages and land on 511 exactly, on page 21.
+   *
+   * A page that comes back empty is the other end and stays, because it is the only terminator
+   * that does not depend on `found` being right. It costs one request past the last page, and
+   * only on a query where `found` undercounts the songs the pages actually carry; on the measured
+   * one the group count stops paging at page 21 and page 22 is never asked for.
    */
   hasMore: Readable<boolean>
   /**
@@ -240,8 +248,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
   const exhausted = writable(false)
   const hasMore = derived(
-    [results, found, exhausted],
-    ([rows, total, done]) => !done && rows.length > 0 && rows.length < total
+    [groups, results, found, exhausted],
+    ([songs, rows, total, done]) => !done && rows.length > 0 && songs.length < total
   )
   // The query the rows on screen were asked for. Written when a run STARTS, never when one is
   // scheduled; see `PendingRun`.
