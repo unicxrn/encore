@@ -8,6 +8,7 @@ import type {
   QueuedDownload,
   Settings
 } from '../shared/schemas'
+import type { ChartRemoval } from '../shared/chart-removal'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from '../main/assets/art'
 import type { LibraryCandidate } from '../main/catalog/detect-library'
@@ -92,6 +93,10 @@ const api = {
   // Opens the system file manager with this chart selected. Changes nothing on disk. Rejects
   // for a path outside the configured library folders.
   chartReveal: (path: string): Promise<void> => ipcRenderer.invoke(IPC.chartReveal, path),
+  // Moves the chart to the system Trash and forgets its catalog row. Resolves with what
+  // happened; rejects when the trash failed, in which case nothing changed. Rejects for a path
+  // outside the configured library folders.
+  chartRemove: (path: string): Promise<ChartRemoval> => ipcRenderer.invoke(IPC.chartRemove, path),
   chartLyricLines: (req: {
     path: string
     chartType: 'folder' | 'sng'

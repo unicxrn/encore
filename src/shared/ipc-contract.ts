@@ -16,8 +16,9 @@ export const IPC = {
   catalogFacets: 'catalog:facets',
   // What the library holds more than one copy of, grouped in SQL. Read from the catalog, not
   // from disk, so unlike the issue scan there is nothing to start and nothing to cancel: it is
-  // one query and it answers immediately. It reports what is duplicated and where each copy is;
-  // nothing in Encore removes a chart.
+  // one query and it answers immediately. It reports what is duplicated and where each copy is,
+  // including what each copy holds around the notes, which is what a user needs before removing
+  // one of two charts the checksum calls identical.
   catalogDuplicates: 'catalog:duplicates',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
@@ -29,6 +30,11 @@ export const IPC = {
   // duplicates report offers to do about a duplicate: show the user both copies so they can
   // decide on their own filesystem. Refused for a path outside the configured library folders.
   chartReveal: 'chart:reveal',
+  // Moves one chart to the operating system's Trash, then forgets its catalog row, in that
+  // order. Refused for a path outside the configured library folders, on the same check
+  // chart:reveal makes. There is no permanent delete behind this and no second channel that
+  // unlinks: a trash that fails leaves the chart and its row untouched and says so.
+  chartRemove: 'chart:remove',
   chartLyricLines: 'chart:lyric-lines',
   windowControl: 'window:control',
   dialogPickFolder: 'dialog:pick-folder',

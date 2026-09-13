@@ -41,6 +41,7 @@ const deps = (): IpcDeps => ({
     unidentifiedCharts: 0
   }),
   revealChart: vi.fn(),
+  removeChart: vi.fn().mockResolvedValue({ path: '/library/Rush - YYZ', outcome: 'trashed' }),
   checkUpdates: vi.fn().mockResolvedValue({ verdicts: [], failed: 0, requests: 0 }),
   lastUpdates: vi.fn().mockReturnValue([]),
   cancelUpdateCheck: vi.fn(),
@@ -277,6 +278,21 @@ describe('registerIpc', () => {
     expect(d.revealChart).not.toHaveBeenCalled()
     await ipc.invoke(IPC.chartReveal, '/library/Rush - YYZ')
     expect(d.revealChart).toHaveBeenCalledWith('/library/Rush - YYZ')
+  })
+
+  it('refuses to remove a chart named by nothing at all', async () => {
+    // Same reasoning as the reveal above, and a sharper consequence: the containment check is in
+    // main/index.ts, where the library folders are, but an empty path must not reach it at all.
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.chartRemove, '')).rejects.toThrow()
+    expect(d.removeChart).not.toHaveBeenCalled()
+    await expect(ipc.invoke(IPC.chartRemove, '/library/Rush - YYZ')).resolves.toEqual({
+      path: '/library/Rush - YYZ',
+      outcome: 'trashed'
+    })
+    expect(d.removeChart).toHaveBeenCalledWith('/library/Rush - YYZ')
   })
 
   it('validates download requests', async () => {

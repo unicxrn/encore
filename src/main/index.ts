@@ -16,6 +16,8 @@ import { readLyricLines } from './catalog/lyric-lines'
 import { detectChartLibraries } from './catalog/detect-library'
 import { openCatalog, type CatalogDb } from './catalog/db'
 import { findDuplicates } from './catalog/duplicates'
+import { withCopySizes } from './catalog/chart-size'
+import { removeChart } from './catalog/remove-chart'
 import {
   chartFacets,
   chartsExistByMeta,
@@ -525,7 +527,9 @@ function wireIpc(): {
     countCharts: (f) => countCharts(db, f),
     chartsExistByMeta: (keys) => chartsExistByMeta(db, keys),
     chartFacets: () => chartFacets(db),
-    duplicateCharts: () => findDuplicates(db),
+    // Sizes are added on top of the query rather than inside it, and only for the tier that
+    // offers a removal: the report itself never touches the filesystem. See chart-size.ts.
+    duplicateCharts: () => withCopySizes(findDuplicates(db)),
     // The library containment check is the same one the writers make, for a call that writes
     // nothing: the path arrives from the renderer, and `shell.showItemInFolder` hands it
     // straight to the desktop. `showItemInFolder` selects the chart inside its parent folder,
@@ -537,6 +541,17 @@ function wireIpc(): {
       }
       shell.showItemInFolder(path)
     },
+    // Settings are re-read per call, exactly as revealChart does, so a library folder removed in
+    // Settings a moment ago cannot still authorise a removal inside it.
+    //
+    // `shell.trashItem` is the whole disposal path. Electron's own failure modes reach the
+    // renderer as a rejection: it throws on a filesystem with no trash, on a file it cannot
+    // move, and on Linux when the desktop portal it needs is not there. All three leave the
+    // chart on disk, which is why the row is not touched until this resolves.
+    removeChart: (path) =>
+      removeChart(db, path, loadSettings(settingsPath).libraryFolders, {
+        trash: (target) => shell.trashItem(target)
+      }),
     startScan: () => runScan(),
     cancelScan: () => scanner.cancel(),
     // Targeted re-index after an asset write. The alternative, waiting for the watcher's

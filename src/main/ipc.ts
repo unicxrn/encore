@@ -12,6 +12,7 @@ import {
   Settings,
   SettingsSchema
 } from '../shared/schemas'
+import type { ChartRemoval } from '../shared/chart-removal'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from './assets/art'
 import type { LyricsSearchResult } from './assets/lyrics'
@@ -69,6 +70,19 @@ export interface IpcDeps {
    * handing an arbitrary one to the desktop shell is not a thing to do on trust.
    */
   revealChart: (path: string) => void
+  /**
+   * Move one chart to the OS Trash and drop its catalog row, in that order.
+   *
+   * The only thing in Encore that takes something away, so the shape of the answer matters as
+   * much as the action: it resolves with what happened (`trashed`, or `already-gone` for a chart
+   * that had already left the disk) and rejects when the trash itself failed, which is the case
+   * where the chart is still there and the user has to be told rather than reassured.
+   *
+   * Refuses a path outside the configured library folders, on the same containment check the
+   * writers and `revealChart` use. One path per call by design; see removeChart in
+   * catalog/remove-chart.ts for the ordering argument.
+   */
+  removeChart: (path: string) => Promise<ChartRemoval>
   startScan: () => void
   /**
    * Abort the running library scan, if there is one. Resolves as soon as the signal has been
@@ -368,6 +382,10 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   // there (see `revealChart` in index.ts). The non-empty check catches a caller sending nothing
   // at all, which would otherwise mean "open the file manager on ''".
   ipcMain.handle(IPC.chartReveal, (_e, raw) => deps.revealChart(z.string().min(1).parse(raw)))
+  // Same shape of payload and the same non-empty check, for a call that does rather more than
+  // open a window. The containment check that actually protects anything is in main (see
+  // `removeChart` in index.ts); this one only refuses a caller that named no chart at all.
+  ipcMain.handle(IPC.chartRemove, (_e, raw) => deps.removeChart(z.string().min(1).parse(raw)))
   ipcMain.handle(IPC.downloadAdd, (_e, raw) => deps.addDownload(DownloadRequestSchema.parse(raw)))
   ipcMain.handle(IPC.downloadCancel, (_e, raw) => deps.cancelDownload(z.string().parse(raw)))
   ipcMain.handle(IPC.downloadRetry, (_e, raw) => deps.retryDownload(z.string().parse(raw)))
