@@ -275,6 +275,19 @@ describe('mergeScoreFiles', () => {
     expect(merge(buildScoreData([oneRow]), buildScoresExt([TWO_ROW]))).toBeNull()
   })
 
+  it('refuses a chart that repeats a variant, on either side', () => {
+    // Once on each side, and the scoredata one is the side that used to be waved through: its
+    // rows each find a partner by variant, the row counts agree, and the merge handed back two
+    // rows carrying one variant. `score_bests` is keyed on (checksum, variant), so the import
+    // that followed threw UNIQUE constraint failed rather than storing anything.
+    const twice: ChartSpec = {
+      ...TWO_ROW,
+      rows: [TWO_ROW.rows[1], { ...TWO_ROW.rows[0], variant: TWO_ROW.rows[1].variant }]
+    }
+    expect(merge(buildScoreData([twice]), buildScoresExt([TWO_ROW]))).toBeNull()
+    expect(merge(buildScoreData([TWO_ROW]), buildScoresExt([twice]))).toBeNull()
+  })
+
   it('refuses a file that repeats a checksum', () => {
     // Once on each side, because the two are caught by different checks. A repeat in scoresext
     // with a shorter scoredata still leaves the deduplicated map the right size, so only a check

@@ -388,7 +388,15 @@ export function mergeScoreFiles(data: ScoreDataFile, ext: ScoresExtFile): ChartB
     }
 
     const rows: ChartBestRow[] = []
+    // Checked on this side as well as on ext's, because nothing else here can see it. A variant
+    // repeated in `scoredata.bin` alone still finds its ext partner, and the row counts still
+    // match, so the merge used to hand back two rows sharing one variant. The store keys
+    // `score_bests` on (checksum, variant), so the import then threw UNIQUE constraint failed
+    // from inside a file watcher callback, on every song the user finished.
+    const dataVariants = new Set<number>()
     for (const row of chart.rows) {
+      if (dataVariants.has(row.variant)) return null
+      dataVariants.add(row.variant)
       const extRow = extByVariant.get(row.variant)
       if (extRow === undefined) return null
       rows.push({
