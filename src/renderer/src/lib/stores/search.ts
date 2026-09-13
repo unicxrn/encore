@@ -12,7 +12,8 @@ export interface SearchConfig {
 /**
  * How many results Explore appends on its own before it stops and asks.
  *
- * There are 95,262 charts, so "append until the end" has no end: 3,811 requests, 95,262 cards and
+ * The catalog holds tens of thousands of charts and grows, so "append until the end" has no end:
+ * thousands of requests, that many cards and
  * as many album art requests, in a list nothing can scroll. Somewhere it has to stop, and a button
  * is a better place to stop than a browser running out of memory.
  *

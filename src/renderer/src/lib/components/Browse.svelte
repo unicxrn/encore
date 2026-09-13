@@ -166,7 +166,7 @@
    *
    * The decision is consumed rather than left standing. Left standing it would fire again the
    * instant `$loading` went back to false, which is before the observer has had a chance to say
-   * the sentinel moved, and a scroll to the end of a 95,262 chart catalog would then run pages
+   * the sentinel moved, and a scroll to the end of a catalog this size would then run pages
    * off as fast as the network answered.
    *
    * That alone stops too early. An observer only speaks when the sentinel crosses the edge of its
