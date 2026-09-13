@@ -807,6 +807,50 @@ describe("the backup's lifecycle around a fix", () => {
     await expect(undo(fixture)).rejects.toThrow(/checksum Clone Hero records/)
   })
 
+  /**
+   * MUTATION: the restore's hash assertion, provoked into firing on its own.
+   *
+   * `assertRestoreHash` is a backstop and every ordinary path stops short of it, so the whole
+   * suite passed with the call deleted. This is the hole it covers, driven end to end.
+   *
+   * A `.sng` `extraValue` repair records the header key it removed so the undo can put it back,
+   * and a manifest naming a HASHED key instead reaches the archive: `restoreBackup` never runs
+   * `assertKeyIsNotHashed` over `backup.metadata`, and each earlier guard declines for its own
+   * reason. `assertChartUnchanged` returns on the archive stamp, which has not moved since the
+   * repair, so it never looks at the keys. `assertIniReaderUnchanged` short-circuits, because the
+   * backup names no file at all and so no `.ini`. `assertRestoreChecksum` cannot see it, because
+   * the chart file itself is never touched and Clone Hero's checksum covers nothing else.
+   *
+   * The manifest is edited by hand because there is no supported way to produce one; that is the
+   * point. Delete the `assertRestoreHash` call from `restoreBackup` and this test goes green.
+   */
+  it('MUTATION: refuses an undo whose manifest puts back a hashed header key', async () => {
+    const fixture = sngChart({}, { diff_bass: '4' })
+    const before = await scanChartIssues(fixture.chartPath, 'sng')
+    await applyFix(extraValueRow(fixture.chartPath), fixture.ctx)
+
+    const id = onlyBackupId(fixture.storeDir)
+    const manifest = join(fixture.storeDir, id, 'backup.json')
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as {
+      metadata: { key: string; value: string | null }[]
+    }
+    // What the repair really recorded: one unhashed rating, which is all `extraValue` can remove.
+    expect(parsed.metadata).toEqual([{ key: 'diff_bass', value: '4' }])
+    writeFileSync(
+      manifest,
+      JSON.stringify({ ...parsed, metadata: [{ key: 'pro_drums', value: 'False' }] }, null, 2)
+    )
+
+    await expect(undo(fixture)).rejects.toThrow(/changed the chart hash/)
+
+    // The write did land, and did move the hash: the refusal is the assertion firing, not the
+    // restore declining to do anything. Clone Hero's checksum sat still through all of it, which
+    // is why `assertRestoreChecksum` is no substitute here.
+    const after = await scanChartIssues(fixture.chartPath, 'sng')
+    expect(after.chartHash).not.toBe(before.chartHash)
+    expect(after.cloneHeroChecksum).toBe(before.cloneHeroChecksum)
+  })
+
   it('spends the backup: a chart cannot be un-undone', async () => {
     const fixture = folderChart({ 'album.png': SMALL_ART })
     await applyFix(albumArtRow(fixture.chartPath), fixture.ctx)
