@@ -192,6 +192,27 @@ export interface SearchStore {
   loadMore: () => Promise<void>
 }
 
+/**
+ * A run that has been asked for and has not started.
+ *
+ * Typing schedules a run one debounce out, and for that window the previous query's rows are
+ * still on screen and still the only thing anything can act on. So nothing a run changes about
+ * the store is done when the run is asked for: it is recorded here and applied when the run
+ * starts, and `loadMore` refuses while one is waiting.
+ *
+ * Setting `query`, `page` and the applied filters at schedule time instead left the store
+ * describing the new query while the old query's rows were up, and `loadMore` reads all three:
+ * it asked for page 2 of a query whose page 1 had not been fetched yet (so the top 25 matches
+ * were never loaded and two requests both went to page 2), and it appended an unfiltered page
+ * under a filtered one.
+ */
+interface PendingRun {
+  /** The term the run will ask for. */
+  query: string
+  /** Whether starting it drops the applied advanced filters; see `setQuery`. */
+  dropsAdvanced: boolean
+}
+
 export function createSearch(config: SearchConfig = {}): SearchStore {
   const { fetchFn = fetch, debounceMs = 300, retryDelayMs } = config
   const results = writable<ChartData[]>([])
@@ -222,14 +243,19 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     [results, found, exhausted],
     ([rows, total, done]) => !done && rows.length > 0 && rows.length < total
   )
+  // The query the rows on screen were asked for. Written when a run STARTS, never when one is
+  // scheduled; see `PendingRun`.
   let query = '*'
-  // The last query we started a run for, or null before the first one. This is
+  // The last query a run was asked for, or null before the first one. This is
   // what "already answered" means, independent of whether the answer was rows,
-  // no rows, or an error.
+  // no rows, or an error. Moves at schedule time rather than at run time,
+  // because what it answers is "has this question been put to us", and a
+  // question waiting out the debounce has been.
   let lastRan: string | null = null
   let page = 1
   let instrument: string | null = null
   let difficulty: string | null = null
+  let pending: PendingRun | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let controller: AbortController | null = null
   let scrollTop = 0
@@ -286,12 +312,49 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     }
   }
 
-  function search(next: string): void {
-    query = next
-    lastRan = next
-    page = 1
+  /** The drop half of the rule in `setQuery`, done when the run that causes it starts. */
+  function dropAppliedAdvanced(): void {
+    const dropping = get(activeCount)
+    if (dropping === 0) return
+    advancedApplied.set(emptyAdvanced())
+    advancedDropped.set(dropping)
+  }
+
+  /** Forget a scheduled run without applying any of it. */
+  function cancelPending(): void {
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void run(false), debounceMs)
+    timer = null
+    pending = null
+  }
+
+  /**
+   * Apply what a scheduled run was going to apply, and cancel it.
+   *
+   * Every immediate path (a filter change, Search in the panel, Clear) goes through this rather
+   * than throwing the pending run away, because a click lands on what is in the boxes, including
+   * a keystroke still inside the debounce window. Discarding it would answer the click with the
+   * term before that keystroke.
+   */
+  function takePending(): void {
+    const next = pending
+    cancelPending()
+    if (!next) return
+    query = next.query
+    if (next.dropsAdvanced) dropAppliedAdvanced()
+  }
+
+  function startPending(): void {
+    if (!pending) return
+    takePending()
+    page = 1
+    void run(false)
+  }
+
+  function schedule(next: PendingRun): void {
+    cancelPending()
+    pending = next
+    lastRan = next.query
+    timer = setTimeout(startPending, debounceMs)
   }
 
   function setQuery(value: string): void {
@@ -321,25 +384,26 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     // still holds every field the user filled in and one press of Search (or of Restore, below)
     // asks the same question again. A rule that destroyed the form instead would make an
     // accidental keystroke in the title bar cost a filter set someone built.
-    const dropping = get(activeCount)
-    if (dropping > 0) {
-      advancedApplied.set(emptyAdvanced())
-      advancedDropped.set(dropping)
-    }
-    search(next)
+    //
+    // The drop happens when the run starts, not here: for the debounce window the filtered rows
+    // are still the ones on screen, and a count that had already fallen to zero described neither
+    // the rows above it nor the request that had not been made yet.
+    schedule({ query: next, dropsAdvanced: true })
   }
 
   function retry(): void {
-    search(query)
+    // The question last put to us, which is the pending one if the debounce is still running.
+    schedule({ query: lastRan ?? query, dropsAdvanced: false })
   }
 
   function setFilters(nextInstrument: string | null, nextDifficulty: string | null): void {
     instrument = nextInstrument
     difficulty = nextDifficulty
     filters.set({ instrument, difficulty })
+    // A filter change is a click, not typing: skip the debounce, and carry any term still inside
+    // it into this run rather than dropping it.
+    takePending()
     page = 1
-    // A filter change is a click, not typing: skip the debounce.
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 
@@ -401,13 +465,22 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
    * await, so a second call made in the same turn (a scroll that crosses the sentinel twice, a
    * double click on the button) sees it already true and returns having spent nothing.
    *
+   * The pending guard is the same idea one step earlier. A scheduled run has not touched
+   * `loading` yet, and the button stays live through the whole debounce window, so without this
+   * the next page of a query that is about to be replaced gets fetched and thrown away. What it
+   * cost before it was thrown away is in `PendingRun`.
+   *
+   * `hasMore` rather than a count of its own, so the store refuses exactly what the button and
+   * the sentinel are hidden for; a second opinion here is a second place for the end of the data
+   * to be wrong.
+   *
    * Called both by the sentinel below the cap and by the button at it, and raising the cap here
    * rather than in the button is what keeps that one path. Below the cap the raise cannot fire;
    * at it, the only caller left is a deliberate click, and a click is the user asking for another
    * cap's worth.
    */
   async function loadMore(): Promise<void> {
-    if (get(loading) || get(exhausted) || get(results).length >= get(found)) return
+    if (pending || get(loading) || !get(hasMore)) return
     const held = get(results).length
     if (held >= get(autoCap)) autoCap.set(held + AUTO_APPEND_CAP)
     page += 1
@@ -429,9 +502,10 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     query = '*'
     lastRan = '*'
     globalQuery.set('')
+    // A press of Search, like a filter change, is a click rather than typing, and it carries any
+    // term still inside the debounce window with it.
+    takePending()
     page = 1
-    // A press of Search, like a filter change, is a click rather than typing.
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 
@@ -452,8 +526,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     // Clearing a form that was not narrowing anything changes no answer, and re-asking the same
     // question would spend one of the 50 requests a minute to get the rows already on screen.
     if (!wasNarrowed) return
+    takePending()
     page = 1
-    if (timer) clearTimeout(timer)
     void run(false)
   }
 

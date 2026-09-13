@@ -687,6 +687,107 @@ function draftWith(edit: (q: AdvancedQuery) => void): AdvancedQuery {
   return query
 }
 
+const asked = (fetchFn: ReturnType<typeof vi.fn>): { search: string; page: number }[] =>
+  (fetchFn.mock.calls as [string, RequestInit][]).map(
+    ([, init]) => JSON.parse(String(init.body)) as { search: string; page: number }
+  )
+
+/**
+ * The debounce window, which is 300ms of the store holding a query nothing has answered yet.
+ *
+ * Explore's Load more button is live throughout it, and so is the sentinel that presses it by
+ * scrolling. What that used to reach was a store half moved to the new query: the page counter
+ * back at 1 for a page nobody had fetched, the term already replaced, the applied filters already
+ * emptied. These pin that a scheduled run is one thing that happens all at once.
+ */
+describe('a query waiting out the debounce', () => {
+  /** `found` far enough above a page that paging never runs out during one of these. */
+  const rows = (n: number): SearchResult =>
+    result(
+      Array.from({ length: n }, (_, i) => `S${i}`),
+      9999
+    )
+
+  it('does not let loadMore skip the first page of the query that replaced it', async () => {
+    // Reproduced before the fix as [{page:1,"first"},{page:2,"second"},{page:2,"second"}]: the
+    // new query's top 25 matches were never fetched, and two requests went to the same page.
+    const fetchFn = vi.fn().mockImplementation(() => ok(rows(25)))
+    const search = createSearch({ fetchFn, debounceMs: 20 })
+    search.setQuery('first')
+    await new Promise((r) => setTimeout(r, 60))
+
+    search.setQuery('second')
+    await search.loadMore()
+    await new Promise((r) => setTimeout(r, 60))
+
+    expect(asked(fetchFn).map((b) => [b.search, b.page])).toEqual([
+      ['first', 1],
+      ['second', 1]
+    ])
+  })
+
+  it('does not append a page the filters above it were not asked with', async () => {
+    // Reproduced before the fix as an advanced page 1 with a plain page 2 appended under it, in
+    // one list: `setQuery` emptied the applied filters where it stood, so the append that landed
+    // inside the window went to the other endpoint.
+    const fetchFn = vi.fn().mockImplementation(() => ok(rows(25)))
+    const search = createSearch({ fetchFn, debounceMs: 20 })
+    search.setAdvancedDraft(draftWith((q) => (q.flags.modchart = true)))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 60))
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+
+    search.setQuery('metallica')
+    await search.loadMore()
+    await new Promise((r) => setTimeout(r, 60))
+
+    expect((fetchFn.mock.calls as [string, RequestInit][]).map(([url]) => url)).toEqual([
+      'https://api.enchor.us/search/advanced',
+      'https://api.enchor.us/search'
+    ])
+    // One page replaced the other rather than being appended to it.
+    expect(get(search.results)).toHaveLength(25)
+  })
+
+  it('keeps the applied filters describing the rows on screen until the new ones land', async () => {
+    // The count is on the Advanced button and drives the Clear chip beside it. Dropping the
+    // filters where the keystroke lands takes both away 300ms before the rows they describe are
+    // replaced, which says the list on screen is unfiltered while it is not.
+    const fetchFn = vi.fn().mockImplementation(() => ok(rows(25)))
+    const search = createSearch({ fetchFn, debounceMs: 20 })
+    search.setAdvancedDraft(draftWith((q) => (q.flags.modchart = true)))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 60))
+    expect(get(search.advancedCount)).toBe(1)
+
+    search.setQuery('metallica')
+    expect(get(search.advancedCount)).toBe(1)
+    expect(get(search.advancedDropped)).toBe(0)
+
+    await new Promise((r) => setTimeout(r, 60))
+    expect(get(search.advancedCount)).toBe(0)
+    expect(get(search.advancedDropped)).toBe(1)
+  })
+
+  it('carries a term still inside the window into the filter change that interrupts it', async () => {
+    // A click is immediate and lands on what is in the boxes. Throwing the scheduled run away
+    // would answer the click with the term before the last keystroke.
+    const fetchFn = vi.fn().mockImplementation(() => ok(rows(25)))
+    const search = createSearch({ fetchFn, debounceMs: 20 })
+    search.setQuery('first')
+    await new Promise((r) => setTimeout(r, 60))
+
+    search.setQuery('second')
+    search.setFilters('drums', 'expert')
+    await new Promise((r) => setTimeout(r, 60))
+
+    expect(asked(fetchFn).map((b) => [b.search, b.page])).toEqual([
+      ['first', 1],
+      ['second', 1]
+    ])
+  })
+})
+
 describe('advanced search', () => {
   it('starts with nothing applied, so a plain query goes to /search', async () => {
     const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
