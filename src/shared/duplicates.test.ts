@@ -46,14 +46,16 @@ describe('what a removal would lose', () => {
     // The reason this asks about the whole group rather than about the copy next to it: art
     // held by two of three survives either of those two being removed, and saying "only copy
     // with album art" over both of them would be false over both.
+    // The copy that also has the art is deliberately LAST, so a check that only looked at the
+    // copy next to this one would call the first one unique and be wrong about it.
     const a = copy('/lib/a', { hasAlbumArt: true })
-    const b = copy('/lib/b', { hasAlbumArt: true })
-    const c = copy('/lib/c', { hasLyrics: true })
+    const b = copy('/lib/b', { hasLyrics: true })
+    const c = copy('/lib/c', { hasAlbumArt: true })
     const group = [a, b, c]
 
     expect(assetsOnlyHere(a, group)).toEqual([])
-    expect(assetsOnlyHere(b, group)).toEqual([])
-    expect(assetsOnlyHere(c, group)).toEqual(['lyrics'])
+    expect(assetsOnlyHere(b, group)).toEqual(['lyrics'])
+    expect(assetsOnlyHere(c, group)).toEqual([])
   })
 
   it('matches the copy against the group by path, not by identity', () => {
