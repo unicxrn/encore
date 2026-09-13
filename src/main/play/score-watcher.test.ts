@@ -54,7 +54,9 @@ interface Harness {
   writeBackup: (charts: ChartSpec[]) => void
 }
 
-function harness(opts: { dirExists?: boolean } = {}): Harness {
+function harness(
+  opts: { dirExists?: boolean; importCharts?: (charts: ChartBest[]) => ScoreImportResult } = {}
+): Harness {
   const root = tmpDir('score-watcher')
   const dir = join(root, 'Clone Hero')
   if (opts.dirExists !== false) mkdirSync(dir, { recursive: true })
@@ -64,6 +66,8 @@ function harness(opts: { dirExists?: boolean } = {}): Harness {
   let stored = ''
   const importCharts = (charts: ChartBest[]): ScoreImportResult => {
     imported.push(charts)
+    // Recorded above first, so a store that refuses still shows what it was handed.
+    if (opts.importCharts !== undefined) return opts.importCharts(charts)
     const next = JSON.stringify(charts)
     const wrote = next !== stored
     stored = next
@@ -94,6 +98,11 @@ function harness(opts: { dirExists?: boolean } = {}): Harness {
     write,
     writeBackup
   }
+}
+
+/** A store that refuses what it is handed, as `importScoreBests` does on a constraint. */
+function throwsOnImport(): ScoreImportResult {
+  throw new Error('UNIQUE constraint failed: score_bests.checksum, score_bests.variant')
 }
 
 const open: ScoreFileWatcher[] = []
@@ -294,6 +303,31 @@ describe('ScoreFileWatcher.refresh', () => {
     expect(h.watcher.usedBackup).toBe(true)
     h.write([spec({ playCount: 12 })])
     expect(await h.watcher.refresh()).toBe(true)
+    expect(h.watcher.usedBackup).toBe(false)
+  })
+
+  it('reports an import that threw rather than rejecting', async () => {
+    // The store takes a merged list and can refuse it: `score_bests` is keyed on
+    // (checksum, variant) and its own constraints are the last word. The caller that is not
+    // awaited is the chokidar callback in start(), where a rejection is an unhandled one in the
+    // main process, once per finished song for as long as the file stays that way.
+    const h = harness({ importCharts: throwsOnImport })
+    h.write([spec()])
+    await expect(h.watcher.refresh()).resolves.toBe(false)
+  })
+
+  it('does not report ok after an import that threw', async () => {
+    // The status used to be written before the import ran, so a throw left `ok` standing beside
+    // a `lastImportAt` of null and nothing stored: a user reading that has been told their
+    // scores are in when they are not.
+    const h = harness({ importCharts: throwsOnImport })
+    h.write([spec()])
+    h.writeBackup([spec({ playCount: 1 })])
+    writeFileSync(join(h.dir, SCORE_DATA_FILE), Uint8Array.from([9, 9, 9]))
+    await h.watcher.refresh()
+    expect(h.watcher.reason).not.toBe('ok')
+    expect(h.watcher.lastImportAt).toBeNull()
+    // The backup flag describes a read that reached the tables, and this one did not.
     expect(h.watcher.usedBackup).toBe(false)
   })
 

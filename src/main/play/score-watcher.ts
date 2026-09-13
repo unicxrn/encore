@@ -195,7 +195,8 @@ export class ScoreFileWatcher {
    * a UI needs refreshing. Never rejects. The ways this comes back false, commonest first: the
    * files say what was already stored (every read after the first, all session long), a file is
    * missing (no Clone Hero, or a version that has never written `scoresext.bin`), a file could
-   * not be read, one of them did not parse, and the two did not agree with each other.
+   * not be read, one of them did not parse, the two did not agree with each other, the read was
+   * overtaken by a later one, and the import threw on what they held.
    *
    * ENOENT is separated from every other read failure only to set the status, because the two
    * mean different things to a user: "Clone Hero has recorded no scores here" against "there are
@@ -236,9 +237,23 @@ export class ScoreFileWatcher {
       this.lastReason = 'unreadable'
       return false
     }
+    // The import runs before any of this is written down, and that order is the point. These
+    // three describe a read that reached the tables, and setting them first left a status saying
+    // `ok` with a fresh timestamp over tables nothing had been written to.
+    let result: ScoreImportResult
+    try {
+      result = this.importCharts(merged)
+    } catch {
+      // Swallowed rather than rethrown, and the module's own premise is the reason: these are
+      // another program's undocumented files, so anything derived from them can be wrong in a
+      // way no check here anticipated. The one caller that is not awaited is the chokidar
+      // callback in `start`, where a rejection is an unhandled one in the main process, and the
+      // game rewrites both files after every song. One failure value, as the parsers have.
+      this.lastReason = 'unreadable'
+      return false
+    }
     this.lastReason = 'ok'
     this.backupUsed = usedBackup
-    const result = this.importCharts(merged)
     this.lastImport = new Date().toISOString()
     if (!result.wrote) return false
     this.onImport?.(result)
