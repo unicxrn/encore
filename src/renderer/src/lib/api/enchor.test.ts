@@ -175,8 +175,8 @@ describe('searchCharts and the advanced endpoint', () => {
       per_page: 25,
       instrument: 'drums',
       difficulty: 'expert',
-      // Typed in minutes, sent in seconds.
-      minLength: 600
+      // Minutes on both sides: the service counts length in minutes; see ADVANCED_RANGES.
+      minLength: 10
     })
   })
 
