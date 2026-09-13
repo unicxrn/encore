@@ -815,7 +815,7 @@ describe('Browse advanced search', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
   })
 
-  it('names the unit on the length range, which the API counts in seconds', async () => {
+  it('names the unit on the length range, which is the minutes the API counts', async () => {
     await openPanel()
     expect(screen.getByLabelText('Lowest length, in min')).toBeTruthy()
     expect(screen.getByLabelText('Highest length, in min')).toBeTruthy()

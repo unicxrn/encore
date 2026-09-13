@@ -769,7 +769,7 @@ describe('advanced search', () => {
     expect(lastBody(fetchFn)).toMatchObject({
       instrument: 'drums',
       difficulty: 'expert',
-      minLength: 600
+      minLength: 10
     })
   })
 
