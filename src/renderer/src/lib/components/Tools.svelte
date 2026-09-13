@@ -14,6 +14,7 @@
   import {
     explainIssue,
     ISSUE_GROUPS,
+    videoConversionPurpose,
     type IssueGroupId,
     type IssueSeverity
   } from '../../../../shared/issue-labels'
@@ -52,6 +53,17 @@
 
   // ── state ──────────────────────────────────────────────────────────────────
   /**
+   * Which machine this is, straight from the preload's `process.platform`.
+   *
+   * Read once, not reactive: it cannot change while the process runs. It decides whether a
+   * `badVideo` row is a fault or a note about somewhere else, which is a question about the
+   * machine and not about the chart. So it is answered here, at presentation time, and nothing
+   * about it is written into a scan row: the rows a scan produced last month are read correctly
+   * by whichever machine opens them, and none of this needs a rescan.
+   */
+  const platform = encore().platform
+
+  /**
    * `$state.raw`, not `$state`, for two reasons that both bite at this size.
    *
    * A real library reports 24,151 rows, and `$state` hands every one of them out through a proxy
@@ -70,6 +82,10 @@
   // Charting-craft notes are off by default: on a real library they outnumber the actionable
   // findings by around a hundred to one, and they are the reason the list read as noise.
   let showQuality = $state(false)
+  // Off by default for a different reason: these are not faults on this machine, so they do not
+  // belong in a list of what is wrong with the library. The repair summary above the list is
+  // where the conversion stays reachable, and it is drawn whether this is on or off.
+  let showPortability = $state(false)
 
   // Inline CSV export state. rowCount is set only when a kind filter was
   // active at export time, so the SAVED line can show how many rows went out.
@@ -151,8 +167,9 @@
   // ── derived: explained, filtered and grouped rows ──────────────────────────
   const explainedRows = $derived(
     rows.map((row): ExplainedRow => {
-      // Description is passed because missingValue's severity depends on it.
-      const { label, meaning, group, severity } = explainIssue(row.code, row.description)
+      // Description is passed because missingValue's severity depends on it, and platform
+      // because badVideo's does.
+      const { label, meaning, group, severity } = explainIssue(row.code, row.description, platform)
       return {
         ...row,
         label,
@@ -172,17 +189,31 @@
   // Severity is applied before everything else, so the chip counts and the totals line
   // always describe the list actually on screen.
   const severityRows = $derived(
-    showQuality ? explainedRows : explainedRows.filter((r) => r.severity === 'blocking')
+    explainedRows.filter(
+      (r) =>
+        r.severity === 'blocking' ||
+        (r.severity === 'quality' && showQuality) ||
+        (r.severity === 'portability' && showPortability)
+    )
   )
   const qualityCount = $derived(explainedRows.filter((r) => r.severity === 'quality').length)
+  const portabilityCount = $derived(
+    explainedRows.filter((r) => r.severity === 'portability').length
+  )
 
   // Only categories that actually turned something up become chips: an empty
   // "Missing files" filter is noise.
+  //
+  // 'portability' is left out on purpose. It holds exactly the rows the toggle beside these
+  // chips governs, so a category chip for it would be a second control with the same name doing
+  // a subset of the same job.
   const groupChips = $derived(
-    ISSUE_GROUPS.map((g) => ({
-      ...g,
-      count: severityRows.filter((r) => r.group === g.id).length
-    })).filter((g) => g.count > 0)
+    ISSUE_GROUPS.filter((g) => g.id !== 'portability')
+      .map((g) => ({
+        ...g,
+        count: severityRows.filter((r) => r.group === g.id).length
+      }))
+      .filter((g) => g.count > 0)
   )
 
   const filteredRows = $derived(
@@ -261,6 +292,13 @@
     const groups: {
       actionCode: FixActionCode
       title: string
+      /**
+       * The severity of the rows in this group, which is the same for all of them: an action
+       * covers one or two codes, and the only code whose severity moves with the platform is
+       * `badVideo`, whose action covers nothing else. It is what separates a repair from a
+       * conversion of something that is not broken here.
+       */
+      severity: IssueSeverity
       rows: ExplainedRow[]
       chartPaths: string[]
     }[] = []
@@ -269,7 +307,13 @@
       if (fix === null) continue
       let group = groups.find((g) => g.actionCode === fix.actionCode)
       if (group === undefined) {
-        group = { actionCode: fix.actionCode, title: fix.title, rows: [], chartPaths: [] }
+        group = {
+          actionCode: fix.actionCode,
+          title: fix.title,
+          severity: row.severity,
+          rows: [],
+          chartPaths: []
+        }
         groups.push(group)
       }
       group.rows.push(row)
@@ -278,8 +322,29 @@
     return groups
   })
 
+  /**
+   * The two halves of the summary, split by whether the rows behind an action are faults here.
+   *
+   * A `badVideo` group on Windows is an offer, not a repair: those charts play. Counting it under
+   * "Encore can fix N of these charts" would put the fault framing back one line above the row
+   * that just stopped claiming it.
+   */
+  const repairGroups = $derived(fixGroups.filter((g) => g.severity !== 'portability'))
+  const portabilityGroups = $derived(fixGroups.filter((g) => g.severity === 'portability'))
+
+  /** What converting is for, when it is not a repair. Null on Linux, where it is one. */
+  const conversionPurpose = $derived(videoConversionPurpose(platform))
+
   const fixableChartCount = $derived(
-    new Set(explainedRows.filter((r) => r.fix !== null).map((r) => r.chartPath)).size
+    new Set(
+      explainedRows
+        .filter((r) => r.fix !== null && r.severity !== 'portability')
+        .map((r) => r.chartPath)
+    ).size
+  )
+
+  const portabilityChartCount = $derived(
+    new Set(portabilityGroups.flatMap((g) => g.chartPaths)).size
   )
 
   /**
@@ -291,8 +356,12 @@
   const hiddenFixableCount = $derived.by(() => {
     // Counted in charts, because the line above it is counted in charts. A chart with two
     // repairable rows of which one is on screen is not hidden.
-    const onScreen = new Set(visibleRows.filter((r) => r.fix !== null).map((r) => r.chartPath))
-    const everywhere = new Set(explainedRows.filter((r) => r.fix !== null).map((r) => r.chartPath))
+    // Portability rows are excluded from both sides: they are not counted in the line this
+    // number qualifies, and they are kept off screen by design rather than by a filter the user
+    // set, so reporting them as hidden would be an answer to a question nobody asked.
+    const repairable = (r: ExplainedRow): boolean => r.fix !== null && r.severity !== 'portability'
+    const onScreen = new Set(visibleRows.filter(repairable).map((r) => r.chartPath))
+    const everywhere = new Set(explainedRows.filter(repairable).map((r) => r.chartPath))
     let hidden = 0
     for (const chartPath of everywhere) if (!onScreen.has(chartPath)) hidden += 1
     return hidden
@@ -574,6 +643,19 @@
     if (plan !== null) void runFixes(plan)
   }
 
+  /**
+   * Whether the plan on screen is only a conversion of things that are not broken here.
+   *
+   * `every`, not `some`: a chart whose two repairable rows are one bad cover and one mp4 video is
+   * being repaired, and the confirmation should say so. Only a plan made entirely of portability
+   * rows gets the softer verb.
+   */
+  const confirmIsConversion = $derived(
+    confirming !== null &&
+      confirming.rows.length > 0 &&
+      confirming.rows.every((r) => r.severity === 'portability')
+  )
+
   /** The distinct charts a plan touches, in order, for the confirmation's list. */
   const confirmCharts = $derived.by(() => {
     if (confirming === null) return []
@@ -727,7 +809,10 @@
     // Any withholding (category chips or hidden quality notes) makes the row count worth
     // reporting, so a much smaller file than the headline issue count is never a surprise.
     const filtered =
-      groupFilter.length > 0 || fixFocus !== null || (!showQuality && qualityCount > 0)
+      groupFilter.length > 0 ||
+      fixFocus !== null ||
+      (!showQuality && qualityCount > 0) ||
+      (!showPortability && portabilityCount > 0)
     try {
       const path = await encore().saveTextFile({ defaultName: 'encore-issues.csv', content })
       csvState =
@@ -843,7 +928,7 @@
        silent about 54 of the 61 repairable charts in a real library. (Distinct charts over the
        219-chart reference library, not "62 of 71", which added per-code chart counts together
        and double-counts every chart carrying more than one code.) -->
-  {#if fixGroups.length > 0 && fixable !== null}
+  {#if repairGroups.length > 0 && fixable !== null}
     <div class="fixable">
       <div class="fx-head">
         <h2 class="fx-title">
@@ -856,7 +941,7 @@
           </p>
         {/if}
       </div>
-      {#each fixGroups as group (group.actionCode)}
+      {#each repairGroups as group (group.actionCode)}
         {@const blocked = fixBlockedReason(group.actionCode)}
         <div class="fx-row">
           <span class="fx-label">{group.title}</span>
@@ -910,10 +995,81 @@
           </p>
         {/if}
       {/each}
-      {#if ffmpegError}
-        <p class="fx-blocked mono">ERROR: {ffmpegError}</p>
-      {/if}
     </div>
+  {/if}
+
+  <!-- ── what Encore can convert, which is not the same as what it can repair ────────────────
+       Only ever drawn off Linux, because `portability` is only ever reached off Linux. The
+       heading counts charts and says what is true of them rather than calling them broken, and
+       the sentence under it says what the conversion buys and what it costs, because the answer
+       to "why would I re-encode a video that works" has to be on screen beside the button. -->
+  {#if portabilityGroups.length > 0 && fixable !== null}
+    <div class="fixable portable">
+      <div class="fx-head">
+        <h2 class="fx-title">
+          {portabilityChartCount} chart{portabilityChartCount === 1 ? '' : 's'}
+          {portabilityChartCount === 1 ? 'has' : 'have'} a video Clone Hero cannot play on Linux
+        </h2>
+        {#if conversionPurpose}
+          <p class="fx-note">{conversionPurpose}</p>
+        {/if}
+      </div>
+      {#each portabilityGroups as group (group.actionCode)}
+        {@const blocked = fixBlockedReason(group.actionCode)}
+        <div class="fx-row">
+          <span class="fx-label">{group.title}</span>
+          <span class="fx-count mono">
+            {group.chartPaths.length} CHART{group.chartPaths.length === 1 ? '' : 'S'}
+            {#if group.rows.length !== group.chartPaths.length}
+              · {group.rows.length} VIDEOS
+            {/if}
+          </span>
+          <button
+            class="hairline"
+            class:on={fixFocus === group.actionCode}
+            aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
+            onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
+          >
+            {fixFocus === group.actionCode ? 'Showing' : 'Show'}
+          </button>
+          {#if blocked === null}
+            <!-- "Convert", never "Fix": there is nothing here to fix on this machine. -->
+            <button
+              class="btn-primary fx-fix"
+              disabled={fixRunning}
+              aria-label={`Convert all ${group.chartPaths.length}: ${group.title}`}
+              onclick={() => confirmGroup(group.actionCode)}
+            >
+              Convert all {group.chartPaths.length}
+            </button>
+          {/if}
+        </div>
+        {#if blocked !== null}
+          <p class="fx-blocked">
+            {blocked}
+            <button
+              class="hairline"
+              disabled={ffmpegInstalling}
+              onclick={() => void installFfmpeg()}
+            >
+              {#if !ffmpegInstalling}
+                Install ffmpeg
+              {:else if ffmpegJob?.percent != null}
+                Installing… {ffmpegJob.percent}%
+              {:else}
+                Installing…
+              {/if}
+            </button>
+          </p>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Outside both summaries: the install button is in whichever of them is on screen, and on a
+       machine with no repairs at all the conversion block is the only one there is. -->
+  {#if ffmpegError}
+    <p class="fx-blocked mono">ERROR: {ffmpegError}</p>
   {/if}
 
   <!-- ── a run in flight, and what it left behind ───────────────────────────── -->
@@ -1036,6 +1192,21 @@
             <span class="chip-count mono">{qualityCount}</span>
           </button>
         {/if}
+        <!-- Never drawn on Linux: nothing is graded portability there. Off by default because
+             these charts are not faulty on this machine, and the totals line beside this chip
+             counts faults. -->
+        {#if portabilityCount > 0}
+          <button
+            class="chip quality-toggle"
+            class:on={showPortability}
+            aria-pressed={showPortability}
+            title="Charts carrying a file that another platform Clone Hero runs on cannot use. Encore does not count these as faults here."
+            onclick={() => (showPortability = !showPortability)}
+          >
+            Plays here, not everywhere
+            <span class="chip-count mono">{portabilityCount}</span>
+          </button>
+        {/if}
       </div>
     {/if}
 
@@ -1055,12 +1226,18 @@
            hiding, so `severityRows` can be empty while the list below it is full. -->
     {:else if severityRows.length === 0 && fixFocus === null && !scanning}
       <p class="empty">
-        Nothing is broken. Every chart plays. The {qualityCount} finding{qualityCount === 1
-          ? ''
-          : 's'} above {qualityCount === 1 ? 'is a' : 'are'} charting quality note{qualityCount ===
-        1
-          ? ''
-          : 's'}. Turn them on to read them.
+        Nothing is broken.
+        {#if qualityCount > 0}
+          The {qualityCount} finding{qualityCount === 1 ? '' : 's'} above {qualityCount === 1
+            ? 'is a'
+            : 'are'} charting quality note{qualityCount === 1 ? '' : 's'}.
+        {/if}
+        {#if portabilityCount > 0}
+          {portabilityCount} chart{portabilityCount === 1 ? '' : 's'}
+          {portabilityCount === 1 ? 'carries' : 'carry'} a video Clone Hero cannot play on Linux, which
+          Encore does not count as a fault here.
+        {/if}
+        Turn them on above to read them.
       </p>
     {:else if sections.length > 0}
       {#each sections as section (section.id)}
@@ -1105,14 +1282,15 @@
                          disabled button, no tooltip implying we could help if only you asked.
                          Most of a real report is these, and its worth is that it is honest. -->
                     {#if row.fix !== null && fixReady(row.fix.actionCode)}
+                      {@const verb = row.severity === 'portability' ? 'Convert' : 'Fix'}
                       <button
                         class="hairline i-fix"
                         disabled={fixRunning}
                         title={row.fix.describe}
-                        aria-label={`Fix ${row.label} in ${chartPath}`}
+                        aria-label={`${verb} ${row.label} in ${chartPath}`}
                         onclick={() => confirmRow(row)}
                       >
-                        Fix
+                        {verb}
                       </button>
                     {/if}
                   </div>
@@ -1187,7 +1365,8 @@
         }}
       >
         <h2 class="c-title" id="fix-confirm-title">
-          Fix {confirmCharts.length} chart{confirmCharts.length === 1 ? '' : 's'}?
+          {confirmIsConversion ? 'Convert' : 'Fix'}
+          {confirmCharts.length} chart{confirmCharts.length === 1 ? '' : 's'}?
         </h2>
         <p class="c-what">{confirming.title}</p>
         <ul class="c-list">
@@ -1220,7 +1399,8 @@
         <div class="c-actions">
           <button class="hairline" onclick={() => (confirming = null)}>Cancel</button>
           <button class="btn-primary" bind:this={confirmButton} onclick={startConfirmed}>
-            Fix {confirmCharts.length} chart{confirmCharts.length === 1 ? '' : 's'}
+            {confirmIsConversion ? 'Convert' : 'Fix'}
+            {confirmCharts.length} chart{confirmCharts.length === 1 ? '' : 's'}
           </button>
         </div>
       </div>
@@ -1502,6 +1682,13 @@
     border-radius: var(--radius);
     padding: 10px 12px 11px;
     flex-shrink: 0;
+  }
+  /* The conversion panel shares the repair panel's shell, and is set back from it on purpose:
+     same kind of offer, lower stakes. Nothing in this file can verify that under jsdom; it is a
+     desktop-QA claim. What the tests do pin is that the two panels are separate elements with
+     separate wording, which is what stops a working chart being counted as a broken one. */
+  .portable .fx-title {
+    color: var(--text-2);
   }
   /* The undo panel is the fixable panel's counterpart and shares its shell deliberately: one is
      what Encore can do to the library, the other is what it can take back. */

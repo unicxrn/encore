@@ -14,6 +14,17 @@ import Tools from './Tools.svelte'
  * about the issue report, and a panel with findings would put extra buttons and paths on screen
  * for each of them to step around. Duplicates.svelte.test.ts is where the panel itself is tested.
  */
+/**
+ * Which machine the view thinks it is on.
+ *
+ * Every stub in this file names one, because the `badVideo` row's severity, wording and group all
+ * depend on it now. Linux is what the assertions here are written against: it is where Clone Hero
+ * really cannot play an mp4, so it is the platform on which the whole report reads as it always
+ * did. `describe('Tools: a video that only fails on Linux')` at the end of this file is where the
+ * other platforms are pinned.
+ */
+const ON_LINUX = { platform: 'linux' }
+
 const NO_DUPLICATES = {
   catalogDuplicates: (): Promise<DuplicateReport> =>
     Promise.resolve({
@@ -33,6 +44,7 @@ const NO_DUPLICATES = {
 function stubEncore(rows: ChartIssueRow[]): void {
   vi.stubGlobal('encore', {
     ...NO_DUPLICATES,
+    ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     saveTextFile: (): Promise<string | null> => Promise.resolve(null)
@@ -238,7 +250,8 @@ interface FixStub {
 function stubFixes(
   rows: ChartIssueRow[],
   fixable: FixableCode[] = ALL_FIXABLE,
-  freshRows: (row: ChartIssueRow) => ChartIssueRow[] = () => []
+  freshRows: (row: ChartIssueRow) => ChartIssueRow[] = () => [],
+  platform = 'linux'
 ): FixStub {
   const stub: FixStub = {
     fix: vi.fn((row: ChartIssueRow) => Promise.resolve(freshRows(row))),
@@ -248,6 +261,8 @@ function stubFixes(
   }
   vi.stubGlobal('encore', {
     ...NO_DUPLICATES,
+    ...ON_LINUX,
+    platform,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: stub.scan,
     saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -330,6 +345,7 @@ describe('Tools: finding the repairs the filters are hiding', () => {
     // offer. The report itself still renders.
     vi.stubGlobal('encore', {
       ...NO_DUPLICATES,
+      ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -399,6 +415,7 @@ describe('Tools: confirming a repair', () => {
     stubFixes(repairable)
     vi.stubGlobal('encore', {
       ...NO_DUPLICATES,
+      ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -509,6 +526,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
     const cancel = vi.fn(() => Promise.resolve())
     vi.stubGlobal('encore', {
       ...NO_DUPLICATES,
+      ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -560,6 +578,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
     })
     vi.stubGlobal('encore', {
       ...NO_DUPLICATES,
+      ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -622,6 +641,7 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
   const cancel = vi.fn(() => Promise.resolve())
   vi.stubGlobal('encore', {
     ...NO_DUPLICATES,
+    ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(last),
     issuesScan: (): Promise<ChartIssueRow[]> => pending,
     issuesScanCancel: cancel,
@@ -768,6 +788,7 @@ function stubUndo(
   }
   vi.stubGlobal('encore', {
     ...NO_DUPLICATES,
+    ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
     issuesScan: stub.scan,
     saveTextFile: (): Promise<string | null> => Promise.resolve(null),
@@ -963,5 +984,149 @@ describe('Tools: the confirmation keeps the keyboard inside it', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(stub.fix).not.toHaveBeenCalled()
     await waitFor(() => expect(document.activeElement).toBe(from))
+  })
+})
+
+/**
+ * The one finding whose answer depends on the machine reading it.
+ *
+ * scan-chart raises `badVideo` for video.mp4/.avi/.mpeg and words it "will not work on Linux".
+ * Encore reported it identically everywhere, so a Windows user was told a chart that plays is
+ * faulty and offered a VP8 re-encode to repair it. The conversion still has a use there, for
+ * anyone who shares charts or moves between machines, so it is kept and re-framed rather than
+ * hidden: what changes is that it stops being counted as breakage.
+ *
+ * jsdom applies no CSS and computes no layout, so none of this checks how the two panels LOOK or
+ * where they sit. What it checks is which numbers the row is counted in, which words are on
+ * screen, and that the button is still there and still works.
+ */
+const videoAndFault: ChartIssueRow[] = [
+  {
+    chartPath: '/library/Rush - YYZ',
+    kind: 'folder',
+    code: 'badVideo',
+    description: '"video.mp4" will not work on Linux and should be converted to .webm.'
+  },
+  {
+    chartPath: '/library/Rush - Tom Sawyer',
+    kind: 'folder',
+    code: 'noAudio',
+    description: 'No audio files were found.'
+  }
+]
+
+async function renderOn(platform: string, rows = videoAndFault): Promise<FixStub> {
+  const stub = stubFixes(rows, ALL_FIXABLE, undefined, platform)
+  render(Tools)
+  await screen.findByText('SHOW')
+  return stub
+}
+
+describe('Tools: a video that only fails on Linux', () => {
+  it('counts it among the faults on Linux, where it is one', async () => {
+    // The regression guard for the platform this was always right about. Nothing below this
+    // milestone's change should have moved here.
+    await renderOn('linux')
+
+    expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
+    expect(screen.getByText("Video won't play on Linux")).toBeTruthy()
+    expect(await screen.findByText(/Encore can fix 1 of these chart/)).toBeTruthy()
+    // No second panel: converting IS the repair here, and the repair summary already says so.
+    expect(screen.queryByText(/cannot play on Linux$/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Convert all/ })).toBeNull()
+  })
+
+  it('does not count it among the faults on Windows', async () => {
+    await renderOn('win32')
+
+    // One fault in the library, and it is the missing audio. The chart with the mp4 plays.
+    expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
+    expect(screen.getByText('No audio')).toBeTruthy()
+    expect(screen.queryByText("Video won't play on Linux")).toBeNull()
+    // And it is not folded into the repair summary's count either, which would put the fault
+    // framing back one line above the row that stopped claiming it.
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /Encore can fix/ })).toBeNull()
+    })
+  })
+
+  it('keeps Convert reachable on Windows, and says what it is for', async () => {
+    await renderOn('win32')
+
+    expect(
+      await screen.findByRole('heading', { name: /1 chart has a video Clone Hero cannot play/ })
+    ).toBeTruthy()
+    // The sentence that has to be there: these charts work, so the offer has to justify itself
+    // and name its cost rather than reading as an accusation.
+    expect(screen.getByText(/Nothing is wrong with these charts as they are/)).toBeTruthy()
+    expect(screen.getByText(/costs time and some image quality/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Convert all 1:/ })).toBeTruthy()
+    // "Fix all" is the repair summary's wording and does not belong on something unbroken.
+    expect(screen.queryByRole('button', { name: /^Fix all/ })).toBeNull()
+  })
+
+  it('puts the rows on screen from the conversion panel, worded for this machine', async () => {
+    await renderOn('win32')
+    await screen.findByRole('heading', { name: /cannot play on Linux/ })
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Show: Convert the video to WebM/ }))
+
+    expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
+    expect(screen.getByText(/This video plays here/)).toBeTruthy()
+    // The claim that was false here: Clone Hero on this machine plays it.
+    expect(screen.queryByText(/The video is fine, but Clone Hero on Linux cannot/)).toBeNull()
+    expect(screen.getByRole('button', { name: /^Convert Video won't play/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Fix Video won't play/ })).toBeNull()
+  })
+
+  it('still converts, and still names the exact files, when asked to', async () => {
+    const stub = await renderOn('win32')
+    await screen.findByRole('heading', { name: /cannot play on Linux/ })
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Convert all 1:/ }))
+
+    const card = dialog()
+    expect(within(card).getByRole('heading', { name: /^Convert 1 chart\?/ })).toBeTruthy()
+    expect(within(card).getByText('/library/Rush - YYZ')).toBeTruthy()
+    expect(within(card).getByText(/Convert video\.mp4 to video\.webm/)).toBeTruthy()
+    expect(within(card).getByText(/35 to 70 seconds/)).toBeTruthy()
+
+    await fireEvent.click(within(card).getByRole('button', { name: /^Convert 1 chart/ }))
+
+    await waitFor(() => {
+      expect(stub.fix).toHaveBeenCalledWith(videoAndFault[0])
+    })
+  })
+
+  it('lets a Windows user read the rows without turning the charting notes on', async () => {
+    await renderOn('win32')
+
+    // Its own chip, because the charting-quality toggle is about how a chart was made and this
+    // is not that.
+    const chip = screen.getByRole('button', { name: /Plays here, not everywhere/ })
+    expect(chip.getAttribute('aria-pressed')).toBe('false')
+    await fireEvent.click(chip)
+
+    expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
+    // Under its own heading. "Other problems" would be a category of one thing that is not one.
+    expect(screen.getByRole('heading', { name: 'Plays here, not everywhere' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Other problems' })).toBeNull()
+    expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
+  })
+
+  it('does not guess about macOS in either direction', async () => {
+    await renderOn('darwin')
+
+    // Not counted as a fault, because nobody has checked that it is one.
+    expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Plays here, not everywhere/ }))
+    const meaning = await screen.findByText(/Nobody has checked what it does on this platform/)
+    expect(meaning).toBeTruthy()
+    // And not claimed to work either, which is the Windows sentence.
+    expect(screen.queryByText(/This video plays here/)).toBeNull()
+    expect(
+      await screen.findByRole('heading', { name: /1 chart has a video Clone Hero cannot play/ })
+    ).toBeTruthy()
   })
 })

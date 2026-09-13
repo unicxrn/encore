@@ -17,17 +17,24 @@
 
 import type { ChartIssueType, FolderIssueType, MetadataIssueType } from 'scan-chart'
 
-export type IssueGroupId = 'missing' | 'chart' | 'damaged' | 'metadata' | 'other'
+export type IssueGroupId = 'missing' | 'chart' | 'damaged' | 'metadata' | 'other' | 'portability'
 
 /**
  * `blocking`: Clone Hero cannot play this chart, or will show it wrong. Worth acting on.
  * `quality`: the chart plays fine; this is a note about how it was charted.
+ * `portability`: not a fault on the machine reading it, but it would matter on another platform
+ * Clone Hero runs on. Counted among neither the faults nor the charting notes, because it is
+ * about where the chart is played rather than about the chart.
  *
- * The split exists because scan-chart is a charting linter, and on a real library its
+ * The first split exists because scan-chart is a charting linter, and on a real library its
  * craft-level checks outnumber the actionable ones by around a hundred to one. Showing both
  * in one undifferentiated list buries the handful of charts that are genuinely broken.
+ *
+ * The third exists because one of scan-chart's codes, `badVideo`, is about a container Clone
+ * Hero cannot play on Linux and can play on Windows. Reported as a fault on Windows it tells a
+ * user something is wrong with a chart that works, and offers a lossy re-encode to repair it.
  */
-export type IssueSeverity = 'blocking' | 'quality'
+export type IssueSeverity = 'blocking' | 'quality' | 'portability'
 
 export interface IssueExplanation {
   label: string
@@ -58,7 +65,14 @@ export const ISSUE_GROUPS: { id: IssueGroupId; label: string; blurb: string }[] 
     label: 'Metadata problems',
     blurb: 'Song details Clone Hero will reject or display incorrectly.'
   },
-  { id: 'other', label: 'Other problems', blurb: 'Anything that does not fit the groups above.' }
+  { id: 'other', label: 'Other problems', blurb: 'Anything that does not fit the groups above.' },
+  {
+    id: 'portability',
+    label: 'Plays here, not everywhere',
+    blurb:
+      'Encore does not count these as faults on this machine. They carry a file that another ' +
+      'platform Clone Hero runs on cannot use.'
+  }
 ]
 
 type IssueCode = FolderIssueType | MetadataIssueType | ChartIssueType | 'scanFailed'
@@ -196,6 +210,9 @@ const EXPLANATIONS: Record<IssueCode, Omit<IssueExplanation, 'severity'>> = {
     meaning: 'The same stem appears more than once, so playback may use the wrong file.',
     group: 'damaged'
   },
+  // The Linux answer, and the only one this map holds. `badVideo` is the one code whose
+  // severity and wording depend on the machine reading it, so explainIssue routes it through
+  // badVideoExplanation() before this entry is ever used directly.
   badVideo: {
     // scan-chart emits this for video.mp4/.avi/.mpeg: the file is fine, but the
     // container doesn't play on Linux and should be converted to .webm.
@@ -353,6 +370,70 @@ const EXPLANATIONS: Record<IssueCode, Omit<IssueExplanation, 'severity'>> = {
   }
 }
 
+const VERIFIED_BROKEN_PLATFORM = 'linux'
+const VIDEO_PLAYS_PLATFORM = 'win32'
+
+/**
+ * What is actually known about `badVideo`, per platform, and the three answers are not equally
+ * well founded.
+ *
+ * scan-chart raises this for video.mp4/.avi/.mpeg and words it "will not work on Linux", which is
+ * the whole of its claim. Linux is the verified case, and the reason the conversion exists.
+ *
+ * Windows is the weaker of the two claims made here. Those containers are what Unity plays
+ * through Media Foundation, which is its Windows-only backend, and Windows is a platform Encore
+ * itself is built and run on; nobody here has sat in front of Clone Hero on Windows and watched
+ * an mp4 background. That is enough to stop asserting breakage, which is what reporting a fault
+ * does, and it is why the sentence below says the video plays and promises nothing past that.
+ *
+ * Everything else, macOS included, is unchecked and deliberately left that way. Calling it a
+ * fault there asserts something nobody has looked at; calling it fine asserts the opposite.
+ * Saying it has not been checked is the only one of the three that needs no knowledge Encore
+ * does not have, and not counting it as a fault follows from that: a fault is a claim.
+ *
+ * `.webm` is what scan-chart asks for and what the conversion produces, so it is what gets a
+ * background playing on Linux. That is the claim made for it, and no wider one.
+ */
+function badVideoExplanation(platform: string): IssueExplanation {
+  if (platform === VERIFIED_BROKEN_PLATFORM) {
+    return { ...EXPLANATIONS.badVideo, severity: 'blocking' }
+  }
+  // The label is true on every platform, so it does not move. Only what it MEANS for the person
+  // reading it does.
+  return {
+    label: EXPLANATIONS.badVideo.label,
+    meaning:
+      platform === VIDEO_PLAYS_PLATFORM
+        ? 'This video plays here. Clone Hero on Linux cannot play this format, so the chart ' +
+          'would lose its background there. Converting it to .webm makes it play on both, at ' +
+          'some cost in image quality.'
+        : 'Clone Hero on Linux cannot play this format. Nobody has checked what it does on this ' +
+          'platform, so Encore does not call it broken here. Converting it to .webm makes it ' +
+          'play on Linux too, at some cost in image quality.',
+    group: 'portability',
+    severity: 'portability'
+  }
+}
+
+/**
+ * Why someone on this machine might convert a video that is not broken on it, or null when the
+ * conversion is a repair and the view already says so.
+ *
+ * Null on Linux: there the row is a fault, it sits with the other faults, and the repair summary
+ * above it already explains itself. Everywhere else the Convert action has to justify its own
+ * existence, because the charts it is offered for work.
+ */
+export function videoConversionPurpose(platform: string): string | null {
+  if (platform === VERIFIED_BROKEN_PLATFORM) return null
+  return platform === VIDEO_PLAYS_PLATFORM
+    ? 'These play here. Converting them to .webm makes them play on Linux as well, which is ' +
+        'worth it if you share charts or move between machines. It re-encodes the video, so it ' +
+        'costs time and some image quality. Nothing is wrong with these charts as they are.'
+    : 'Clone Hero on Linux cannot play these, and nobody has checked what it does with them on ' +
+        'this platform. Converting them to .webm is what gets them playing on Linux. It ' +
+        're-encodes the video, so it costs time and some image quality.'
+}
+
 /** `noAlbumArt` → `No album art`. Last resort so an unmapped code is never shown bare. */
 export function humanizeCode(code: string): string {
   const spaced = code
@@ -366,11 +447,21 @@ export function humanizeCode(code: string): string {
 /**
  * Never returns null: an unknown code falls back to a humanized label under "Other problems".
  *
- * `description` is scan-chart's own text for this specific row. It is optional because most
- * callers only have a code, and it only affects `missingValue`, the one code whose severity
- * cannot be decided from the code alone.
+ * `description` is scan-chart's own text for this specific row. It only affects `missingValue`,
+ * the one code whose severity cannot be decided from the code alone, and is `undefined` for the
+ * callers that have no description to hand.
+ *
+ * `platform` is required rather than defaulted because `badVideo` means different things on
+ * different machines, and a default would silently pick one of them. Callers pass Node's
+ * `process.platform`, which reaches the renderer through the preload. An unrecognised value is
+ * treated as a platform nobody has checked, which is the honest answer for one.
  */
-export function explainIssue(code: string, description?: string): IssueExplanation {
+export function explainIssue(
+  code: string,
+  description: string | undefined,
+  platform: string
+): IssueExplanation {
+  if (code === 'badVideo') return badVideoExplanation(platform)
   const explanation = EXPLANATIONS[code] ?? {
     label: humanizeCode(code),
     meaning:
