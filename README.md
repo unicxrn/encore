@@ -197,6 +197,16 @@ A few conventions that make review quick:
 
 Commits are one line of plain prose in the imperative.
 
+### What goes in which release
+
+The patch number carries small things: bug fixes, an improvement to something that already
+exists, a measurement, a wording change. The minor number carries features. So 0.3.1 is a better
+0.3.0, and 0.4.0 is the one that can do something 0.3.x could not.
+
+The split is for the reader of the changelog, who should be able to tell from the version alone
+whether an upgrade is worth reading about. It also keeps a patch release cheap to cut, which is
+what makes a small fix worth shipping rather than saving up.
+
 ### Cutting a release
 
 `CHANGELOG.md` is the source, and everything else is a copy of it. It is written by hand in
