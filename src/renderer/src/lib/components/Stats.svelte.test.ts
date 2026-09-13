@@ -67,6 +67,7 @@ const lifetime = (over: Partial<LifetimeScores> = {}): LifetimeScores => ({
     scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
     lastImportAt: null,
     usedBackup: false,
+    pairRefused: false,
     folderSource: 'probe' as const
   },
   totals: {
@@ -189,6 +190,32 @@ describe('Stats: no score file to read', () => {
     const text = await pageText()
     expect(text).toContain('could not read it')
     expect(text).toContain('fixes itself')
+  })
+
+  it('says a refused pair is not a damaged install, because it need not be', async () => {
+    // Both score files read and decoded and Encore could not match them to each other. Encore
+    // matches their rows on a field nobody decoded, so this can be a healthy pair shaped unlike
+    // the one install the format was read from, and it takes the whole library with it. The
+    // sentence for a file that could not be read would send that user after damage they do not
+    // have.
+    renderStats(
+      status({ reason: 'noFile', available: false }),
+      stats(),
+      insights(),
+      lifetime({
+        status: {
+          ...lifetime().status,
+          reason: 'unreadable',
+          pairRefused: true
+        }
+      })
+    )
+
+    const text = await pageText()
+    expect(text).toContain('could not match them to each other')
+    expect(text).toContain('not a damaged install')
+    // The other sentence, which is about a file rather than about the pair.
+    expect(text).not.toContain('could not be read')
   })
 })
 
@@ -633,6 +660,7 @@ const owner = lifetime({
     scoresExtPath: '/home/player/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
     lastImportAt: '2026-09-12T10:00:00.000Z',
     usedBackup: false,
+    pairRefused: false,
     folderSource: 'probe' as const
   },
   totals: {

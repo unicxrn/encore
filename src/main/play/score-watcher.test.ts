@@ -247,6 +247,46 @@ describe('ScoreFileWatcher.refresh', () => {
     expect(await h.watcher.refresh()).toBe(true)
   })
 
+  it('tells a refused pair apart from a file it could not read', async () => {
+    // Both are `unreadable` and they are not the same thing to a user. The merge keys its rows
+    // on a field nobody has decoded, so a pair Encore cannot put together may be a healthy one
+    // shaped unlike the single install the format was read from, and it takes the whole library
+    // with it. Calling that a file that could not be read sends the user after damage they do
+    // not have.
+    const refused = harness()
+    refused.write([spec()])
+    writeFileSync(
+      join(refused.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    expect(await refused.watcher.refresh()).toBe(false)
+    expect(refused.watcher.reason).toBe('unreadable')
+    expect(refused.watcher.pairRefused).toBe(true)
+
+    const damaged = harness()
+    damaged.write([spec()])
+    writeFileSync(join(damaged.dir, SCORE_DATA_FILE), Uint8Array.from([9, 9, 9]))
+    expect(await damaged.watcher.refresh()).toBe(false)
+    expect(damaged.watcher.reason).toBe('unreadable')
+    expect(damaged.watcher.pairRefused).toBe(false)
+  })
+
+  it('drops the refused flag as soon as a read succeeds again', async () => {
+    // A torn pair is the commonest way to raise it and it lasts one read, so it describes the
+    // read that just finished rather than the session, as the backup flag does.
+    const h = harness()
+    h.write([spec()])
+    writeFileSync(
+      join(h.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    await h.watcher.refresh()
+    expect(h.watcher.pairRefused).toBe(true)
+    h.write([spec({ playCount: 4 })])
+    expect(await h.watcher.refresh()).toBe(true)
+    expect(h.watcher.pairRefused).toBe(false)
+  })
+
   it('ignores the backup while the primary pair reads', async () => {
     // A backup is older than its primary by definition. Preferring one, or merging the two, would
     // drop plays that are sitting in a file Encore can read perfectly well.
@@ -508,6 +548,21 @@ describe('ScoreFileWatcher.retarget', () => {
     expect(h.watcher.reason).toBe('unknownPlatform')
     expect(h.watcher.watchedPaths).toBeNull()
     expect(h.watcher.watchedFolder).toBeNull()
+  })
+
+  it('drops the refused flag when the folder is cleared to none', async () => {
+    // The one path that clears nothing of its own afterwards: with no paths there is no read to
+    // describe, and a flag left standing would describe a folder the watcher has been taken off.
+    const h = harness()
+    h.write([spec()])
+    writeFileSync(
+      join(h.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    await h.watcher.refresh()
+    expect(h.watcher.pairRefused).toBe(true)
+    await h.watcher.retarget(null)
+    expect(h.watcher.pairRefused).toBe(false)
   })
 
   it('carries no state across the change of folder', async () => {

@@ -143,6 +143,7 @@ export class ScoreFileWatcher {
   private lastReason: PlayAvailability
   private lastImport: string | null = null
   private backupUsed = false
+  private refusedPair = false
   /**
    * Bumped by every read and by every retarget, and checked once a read's bytes are back.
    *
@@ -192,6 +193,29 @@ export class ScoreFileWatcher {
   }
 
   /**
+   * Whether the last read refused a pair of files that had both parsed.
+   *
+   * `unreadable` covers two states that are not the same thing to a user. One is a file Encore
+   * could not decode: a half written save, a version tag it does not know, a truncated file. The
+   * other is two files that decoded cleanly and could not be matched into one record, and that
+   * is a pair Encore does not understand rather than an install that is broken.
+   *
+   * The distinction earns its keep because of what the merge keys on. Every row is matched by
+   * variant alone, and the variant is not decoded (see scoredata.ts): `difficulty` sits in the
+   * same row and nothing establishes whether the game treats it as part of the key. If it does,
+   * then a user who has played one chart at two difficulties has a repeated variant in both
+   * files, the merge refuses, and the refusal takes their whole library with it, permanently.
+   * Reporting that as "could not be read" would send them looking for damage they do not have.
+   *
+   * A flag beside `reason` rather than a fifth `PlayAvailability`, for the reason `usedBackup`
+   * gives: the enum is what the scorestats channel answers with too, and a read of that one file
+   * has no pair to refuse.
+   */
+  get pairRefused(): boolean {
+    return this.refusedPair
+  }
+
+  /**
    * When the files were last read and imported without refusal, ISO 8601, or null before that
    * has happened at all. Set by a read that found nothing new as well as by one that wrote,
    * because both mean the stored data is current as of then.
@@ -232,6 +256,9 @@ export class ScoreFileWatcher {
     // because everything this read knows is about a folder or a moment that has been superseded,
     // and the read that superseded it has already said, or is about to say, what the state is.
     if (this.generation !== generation) return false
+    // Cleared for this read rather than at each of the outcomes below, exactly one of which sets
+    // it. Like `usedBackup` it describes the last read that finished, not the session.
+    this.refusedPair = false
     if (data.parsed.length === 0 || ext.parsed.length === 0) {
       // A side is `noFile` only when neither its primary nor its backup was there at all, which
       // is the ordinary "no Clone Hero, or a version too old to have written this file" case.
@@ -254,12 +281,16 @@ export class ScoreFileWatcher {
       }
     }
     if (merged === null) {
+      // Both sides parsed, or there would be no pair to try, so this is the refusal that is
+      // about the pair and not about a file. See `pairRefused` for why that is worth saying.
       this.lastReason = 'unreadable'
+      this.refusedPair = true
       return false
     }
-    // The import runs before any of this is written down, and that order is the point. These
-    // three describe a read that reached the tables, and setting them first left a status saying
-    // `ok` with a fresh timestamp over tables nothing had been written to.
+    // The import runs before any of the three lines below it, and that order is the point. They
+    // describe a read that reached the tables, and `ok` used to be set ahead of the import, so a
+    // throw left the status saying the scores had been read with nothing stored and no time
+    // stamped against them.
     let result: ScoreImportResult
     try {
       result = this.importCharts(merged)
@@ -349,6 +380,7 @@ export class ScoreFileWatcher {
     // change of folder would describe the old one.
     this.lastReason = paths === null ? 'unknownPlatform' : 'noFile'
     this.backupUsed = false
+    this.refusedPair = false
     await this.stop()
     if (wasWatching) await this.start()
     else await this.refresh()

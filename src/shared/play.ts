@@ -354,6 +354,22 @@ export interface LifetimeScoreStatus {
    */
   usedBackup: boolean
   /**
+   * Whether the last read refused a pair of files that had both parsed.
+   *
+   * Only ever true alongside `unreadable`, and it splits that state in two. Without it the same
+   * word covers a file Encore could not decode and two files it decoded perfectly and could not
+   * match to each other, and only the first of those is a reason to go and look at an install.
+   * The second is Encore's reading of the pair falling short, which is a real possibility here:
+   * the rows are matched on a field the format work never decoded (see main/play/scoredata.ts),
+   * so a healthy pair shaped differently from the one sample would be refused whole. A screen
+   * that says "could not be read" to that user is wrong about what happened and about what they
+   * should do next.
+   *
+   * A flag rather than a fifth `PlayAvailability` value, for the reason `usedBackup` gives just
+   * above: the enum is shared with the scorestats channel, which reads one file and has no pair.
+   */
+  pairRefused: boolean
+  /**
    * Where the folder came from: the user's setting, or Encore's own probe.
    *
    * The paths above say where Encore looked; this says who chose. A user whose override is in
