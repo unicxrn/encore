@@ -7,46 +7,15 @@
 # a source map embedding /home/<account>/... being the usual way -- so this reads the artifacts
 # themselves rather than the settings that were supposed to keep them out.
 #
-# The patterns are derived, not hardcoded, so this file names nobody and works unchanged for any
-# contributor:
-#
-#   - the building account name and the last segment of $HOME
-#   - whitespace-separated patterns in $ENCORE_FORBIDDEN
-#   - one pattern per line in .identity-forbidden, which is gitignored -- put a real name there
+# The patterns are derived rather than hardcoded, so this file names nobody. See
+# identity-patterns.sh, which the commit-msg hook reads too.
 #
 # Matching is case-insensitive and binary-safe, so a hit inside a compiled blob still counts.
 set -euo pipefail
 
 dist="${1:-dist}"
-declare -a forbidden=()
-
-account="$(id -un 2>/dev/null || true)"
-[ -n "$account" ] && forbidden+=("$account")
-home_leaf="$(basename "${HOME:-}" 2>/dev/null || true)"
-[ -n "$home_leaf" ] && [ "$home_leaf" != "$account" ] && forbidden+=("$home_leaf")
-
-if [ -n "${ENCORE_FORBIDDEN:-}" ]; then
-  read -r -a extra <<< "$ENCORE_FORBIDDEN"
-  forbidden+=("${extra[@]}")
-fi
-
-local_list="$(dirname "$0")/../.identity-forbidden"
-if [ -f "$local_list" ]; then
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    case "$line" in \#*) continue ;; esac
-    forbidden+=("$line")
-  done < "$local_list"
-fi
-
-# "root" and other service accounts are not identities worth failing a CI build over, and a
-# one-or-two character pattern would match everything.
-declare -a patterns=()
-for p in "${forbidden[@]}"; do
-  [ "${#p}" -ge 4 ] || continue
-  [ "$p" = "root" ] && continue
-  patterns+=("$p")
-done
+# shellcheck source=identity-patterns.sh
+source "$(dirname "$0")/identity-patterns.sh"
 
 if [ "${#patterns[@]}" -eq 0 ]; then
   echo "identity check: nothing to look for (no account name, \$ENCORE_FORBIDDEN or .identity-forbidden)"

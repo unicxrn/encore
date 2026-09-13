@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Refuse a commit message that carries the identity of the machine it was written on.
+#
+# `check-artifact-identity.sh` has always read the binaries for this, and nothing read the
+# messages. Merging from a sibling clone puts its absolute path in git's default merge subject,
+# which published the owner's account name in five commits and cost a history rewrite to undo.
+# A rewrite cannot really take a message back once it is on a public remote, so the cheap moment
+# to catch it is here, before the commit exists.
+#
+# Enable it with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+msg_file="$1"
+# shellcheck source=../scripts/identity-patterns.sh
+source "$(dirname "$0")/../scripts/identity-patterns.sh"
+
+[ "${#patterns[@]}" -eq 0 ] && exit 0
+
+fail=0
+for pat in "${patterns[@]}"; do
+  if grep -qi -- "$pat" "$msg_file"; then
+    echo "commit-msg: the message contains '$pat'" >&2
+    fail=1
+  fi
+done
+
+# Caught even when the account name is not in it: a home path identifies the machine either way,
+# and /home/<someone-else> is no more publishable than your own.
+if grep -qiE '(/home/|/Users/)[A-Za-z0-9._-]+/' "$msg_file"; then
+  echo "commit-msg: the message contains an absolute home path" >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo >&2
+  echo "Rewrite the subject. A merge from a sibling clone needs an explicit -m:" >&2
+  echo "  git merge --no-edit -m 'Merge the thing it brought in' FETCH_HEAD" >&2
+  exit 1
+fi
