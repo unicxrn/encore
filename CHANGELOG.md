@@ -12,6 +12,21 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- A chart carrying a `video.mp4`, `.avi` or `.mpeg` background is no longer counted as a fault on
+  Windows. scan-chart raises this because Clone Hero on Linux cannot play those containers, and
+  Encore repeated the finding identically on Windows, where those containers are the ones Unity's
+  Windows video backend is built around. Calling that broken, and offering a VP8 re-encode to
+  repair it, is an accusation Encore cannot back. Such charts are now left out of the Windows
+  issue count and out of the categories the broken ones sit in, with their own chip for reading
+  them, and the conversion keeps its place under a heading that says what it buys, a background
+  that also plays on Linux, and what it costs, time and some image quality. Linux is unchanged:
+  there it is breakage, it is counted as breakage, and converting is the repair. On macOS, and on
+  any other platform Node reports, nobody here has checked what Clone Hero does with an mp4, so
+  the row says exactly that and is not counted as a fault either. Every platform reads the rows
+  the last scan already produced, so none of this needs re-scanning.
+
 ### Fixed
 
 - Adding lyrics to a chart destroyed every byte of the chart file that was not valid UTF-8. Encore
