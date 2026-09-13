@@ -153,6 +153,51 @@ describe('duplicate detection', () => {
       expect(group.copies.map((c) => c.chartType).sort()).toEqual(['folder', 'sng'])
     })
 
+    it('carries what each copy holds around the notes, which the checksum does not cover', () => {
+      // The reason tier 1 can be true about two charts and still be about to destroy something.
+      // The checksum is an MD5 over the chart file alone, so a copy can match byte for byte and
+      // be the only one of the two with a video.
+      upsertChart(
+        db,
+        chart('/lib/a', {
+          name: 'YYZ',
+          artist: 'Rush',
+          charter: 'Ann',
+          cloneHeroChecksum: md5('a'),
+          hasAlbumArt: true,
+          hasVideo: true
+        })
+      )
+      upsertChart(
+        db,
+        chart('/lib/b', {
+          name: 'YYZ',
+          artist: 'Rush',
+          charter: 'Ann',
+          cloneHeroChecksum: md5('a'),
+          hasAlbumArt: true,
+          hasLyrics: true
+        })
+      )
+
+      const [group] = findDuplicates(db).identical
+      const [a, b] = group.copies
+      expect([a.hasAlbumArt, a.hasVideo, a.hasBackground, a.hasLyrics]).toEqual([
+        true,
+        true,
+        false,
+        false
+      ])
+      expect([b.hasAlbumArt, b.hasVideo, b.hasBackground, b.hasLyrics]).toEqual([
+        true,
+        false,
+        false,
+        true
+      ])
+      // Left for withCopySizes, which is the only part of this report that touches a filesystem.
+      expect(a.sizeBytes).toBeNull()
+    })
+
     it('never groups two charts that simply have no checksum yet', () => {
       // Null is "not known", and treating two unknowns as equal would report a library scanned
       // before scan version 7 as one enormous pile of identical charts.

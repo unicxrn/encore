@@ -35,6 +35,11 @@ const copy = (path: string, fields: Partial<DuplicateCopy> = {}): DuplicateCopy 
   songLength: 300_000,
   modifiedTime: 1,
   cloneHeroChecksum: 'a'.repeat(32),
+  hasAlbumArt: false,
+  hasVideo: false,
+  hasBackground: false,
+  hasLyrics: false,
+  sizeBytes: null,
   ...fields
 })
 

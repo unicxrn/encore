@@ -6,9 +6,11 @@
  * implies they should, and it would bury the one case that really is pure waste. So the report
  * keeps them apart and each tier carries its own sentence about what it is.
  *
- * Nothing here removes anything. The report says what is duplicated and where each copy lives;
- * what to do about it is the user's, on their own filesystem. See DUPLICATE_TIERS for the wording
- * each tier is presented with, which is the part that has to stay honest.
+ * Only tier 1 offers to remove a copy, and only because its claim is the one that survives being
+ * acted on: the copies hold the same notes byte for byte. Tiers 2 and 3 are listings, and a
+ * button on either of them would be Encore inviting a user to throw away a chart it has no
+ * grounds to call spare. See DUPLICATE_TIERS for the wording each tier is presented with, which
+ * is the part that has to stay honest.
  */
 
 /** One chart in a duplicate group, as much of its catalog row as the report shows. */
@@ -27,6 +29,27 @@ export interface DuplicateCopy {
    * with no readable chart file, and for any row not rescanned since Encore started recording it.
    */
   cloneHeroChecksum: string | null
+  /**
+   * What this copy holds around the notes, straight off the catalog row.
+   *
+   * Carried because the checksum does NOT cover any of it. Two copies can be the same chart file
+   * and still differ in every one of these four, so "these are identical, remove one" can be a
+   * true statement about the charts and a loss of the album art, the video or the synced lyrics
+   * in the same moment. They are on the row already; showing them is a read, not a scan.
+   */
+  hasAlbumArt: boolean
+  hasVideo: boolean
+  hasBackground: boolean
+  hasLyrics: boolean
+  /**
+   * Size of the chart on disk in bytes: the file for a .sng, the whole folder for a folder chart.
+   *
+   * Filled for tier 1 copies only, which are the ones a removal can be offered on, because it is
+   * the one field here that is not already in the catalog and has to be read from the filesystem.
+   * Null everywhere else, and null for a copy whose size could not be read, which is also what a
+   * chart that has since left the disk looks like.
+   */
+  sizeBytes: number | null
 }
 
 /**
@@ -107,6 +130,43 @@ export interface DuplicateReport {
   unidentifiedCharts: number
 }
 
+/**
+ * The four things that live OUTSIDE the chart file, in the order a copy lists them.
+ *
+ * This list is the whole reason a tier 1 group shows every copy's contents rather than
+ * nominating one to keep. `cloneHeroChecksum` is an MD5 over the chart file alone, so none of
+ * these is in it: a copy can be byte-identical to its twin and be the only one of the two with
+ * a background video.
+ */
+export type CopyAssetKey = 'hasAlbumArt' | 'hasVideo' | 'hasBackground' | 'hasLyrics'
+
+export const COPY_ASSETS: { key: CopyAssetKey; label: string }[] = [
+  { key: 'hasAlbumArt', label: 'album art' },
+  { key: 'hasVideo', label: 'video' },
+  { key: 'hasBackground', label: 'background' },
+  { key: 'hasLyrics', label: 'lyrics' }
+]
+
+/** Which of the four this copy has, as labels, in COPY_ASSETS order. */
+export function assetsHeld(copy: DuplicateCopy): string[] {
+  return COPY_ASSETS.filter((asset) => copy[asset.key]).map((asset) => asset.label)
+}
+
+/**
+ * Which of the four this copy has that NO other copy in its group has.
+ *
+ * The set that a removal would actually lose, which is a narrower question than "what does this
+ * one have that the one next to it does not": in a group of three, art held by two of them
+ * survives either of those two being removed. `group` is the whole group, this copy included;
+ * copies are matched by path, since that is what identifies a row.
+ */
+export function assetsOnlyHere(copy: DuplicateCopy, group: DuplicateCopy[]): string[] {
+  const others = group.filter((other) => other.path !== copy.path)
+  return COPY_ASSETS.filter(
+    (asset) => copy[asset.key] && others.every((other) => !other[asset.key])
+  ).map((asset) => asset.label)
+}
+
 export type DuplicateTierId = 'identical' | 'versions' | 'alternates'
 
 /**
@@ -129,7 +189,8 @@ export const DUPLICATE_TIERS: {
     blurb:
       'These copies hold the same notes, byte for byte. Clone Hero shows each of them as a ' +
       'separate song. Keeping one loses nothing from the chart itself, though the copies can ' +
-      'still differ in album art, video or lyrics, so both are listed.'
+      'still differ in album art, video or lyrics, so each one lists what it holds and nothing ' +
+      'is chosen for you.'
   },
   {
     id: 'versions',

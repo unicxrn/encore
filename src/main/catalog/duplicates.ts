@@ -25,7 +25,7 @@ import { stripRichText } from '../../shared/format'
 
 /** The columns a duplicate row needs. Shared by both statements so the mapping below is one. */
 const COPY_COLUMNS = `path, chartType, name, artist, album, charter, songLength, modifiedTime,
-	cloneHeroChecksum`
+	cloneHeroChecksum, hasAlbumArt, hasVideo, hasBackground, hasLyrics`
 
 /**
  * Tier 1: every chart whose Clone Hero checksum is shared with at least one other chart.
@@ -87,6 +87,10 @@ interface CopyRow {
   songLength: number | null
   modifiedTime: number
   cloneHeroChecksum: string | null
+  hasAlbumArt: number
+  hasVideo: number
+  hasBackground: number
+  hasLyrics: number
 }
 
 function toCopy(row: CopyRow): DuplicateCopy {
@@ -102,7 +106,17 @@ function toCopy(row: CopyRow): DuplicateCopy {
     charter: row.charter,
     songLength: row.songLength,
     modifiedTime: row.modifiedTime,
-    cloneHeroChecksum: row.cloneHeroChecksum
+    cloneHeroChecksum: row.cloneHeroChecksum,
+    // NOT NULL INTEGER columns, written as 0 or 1 by the scanner. Anything non-zero reads as
+    // present, which is the safe direction: a copy wrongly said to hold art is one the user
+    // looks at, where one wrongly said to lack it is one they remove.
+    hasAlbumArt: row.hasAlbumArt !== 0,
+    hasVideo: row.hasVideo !== 0,
+    hasBackground: row.hasBackground !== 0,
+    hasLyrics: row.hasLyrics !== 0,
+    // Read from the filesystem, not from the catalog, and only for the tier that offers a
+    // removal. See withCopySizes in chart-size.ts: nothing in this module opens a file.
+    sizeBytes: null
   }
 }
 
