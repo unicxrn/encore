@@ -813,7 +813,7 @@
         <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
           {#if art}
             <!-- Decorative: the title and artist beside it already name the chart, so alt text
-               here would only repeat them to a screen reader. -->
+                 here would only repeat them to a screen reader. -->
             <img
               class="thumb"
               src={art}
@@ -827,14 +827,14 @@
           <span class="song">
             <span class="title-line">
               <!-- title fallback is the file/folder name, not the full path: paths are unreadable
-                 in a list, and a chart can legitimately have no parsed title. -->
+                   in a list, and a chart can legitimately have no parsed title. -->
               <span class="title" title={chart.path}>
                 {chartTitle(chart)}
               </span>
               <!-- Only for an `alternate` verdict already in main's memory. `current` earns no ink
-                 in a list, and a chart nobody has checked must not look checked. The words are
-                 Detail's: "different version", never "newer", because nothing in the Chorus API
-                 orders two uploads of a chart. -->
+                   in a list, and a chart nobody has checked must not look checked. The words are
+                   Detail's: "different version", never "newer", because nothing in the Chorus API
+                   orders two uploads of a chart. -->
               {#if $verdicts.get(chart.path)?.kind === 'alternate'}
                 <span
                   class="badge mono"
@@ -844,9 +844,9 @@
                 </span>
               {/if}
               <!-- Inside the title line rather than as a column of its own: the grid has no room
-                 to spare, and a seventh track would be empty down its whole length for the
-                 many users with no play data at all. Absent when there is no record, so it
-                 costs nothing on a row that has none. -->
+                   to spare, and a seventh track would be empty down its whole length for the
+                   many users with no play data at all. Absent when there is no record, so it
+                   costs nothing on a row that has none. -->
               {#if play}
                 <span class="badge mono plays" title={play.title}>
                   {#if play.count === null}
@@ -862,16 +862,16 @@
           </span>
           <span class="charter">{stripRichText(chart.charter)}</span>
           <!-- One grid child: the each block stays inside this span so the row's five columns
-             keep matching .row's five tracks. -->
+               keep matching .row's five tracks. -->
           <span class="diffs mono">
             {#each diffCells(chart) as cell (cell.letter)}
               <span class="d">{cell.letter}{cell.text}</span>
             {/each}
           </span>
           <!-- Year and length sit together at the end, and both are sortable columns: the user
-             has to be able to see the thing they just ordered the list by. An empty cell for a
-             chart with no year, not a placeholder glyph: the length beside it already spends
-             one, and two in a row reads as an error. -->
+               has to be able to see the thing they just ordered the list by. An empty cell for a
+               chart with no year, not a placeholder glyph: the length beside it already spends
+               one, and two in a row reads as an error. -->
           <span class="year mono">{chart.year ?? ''}</span>
           <span class="len mono">{msToTime(chart.songLength)}</span>
         </button>
