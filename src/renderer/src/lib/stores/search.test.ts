@@ -1004,6 +1004,46 @@ describe('advanced search', () => {
     })
   })
 
+  it('leaves the search term alone when an empty panel is submitted', async () => {
+    // The panel is a `<form>` and Enter in any of its thirty controls submits it, so Search is
+    // pressed with nothing in the boxes more often than it looks. It used to send the wildcard
+    // and empty the search box: terms went out as ['metallica', '*'] and `advancedDropped` stayed
+    // at 0, so nothing on screen explained where the word had gone.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    globalQuery.set('metallica')
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    // Nothing changed, so nothing was asked: the rows on screen already answer this.
+    expect(fetchFn).toHaveBeenCalledTimes(spent)
+    expect(lastBody(fetchFn)).toMatchObject({ search: 'metallica' })
+    expect(get(globalQuery)).toBe('metallica')
+    globalQuery.set('')
+  })
+
+  it('still clears the filters when an empty panel is submitted over applied ones', async () => {
+    // The other reading of an empty form: it is also how someone empties the boxes by hand and
+    // presses Search. The filters go, the term that was there stays, and the answer is re-asked.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setAdvancedDraft(draftWith((q) => (q.flags.modchart = true)))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(1)
+
+    search.setAdvancedDraft(emptyAdvanced())
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(get(search.advancedCount)).toBe(0)
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+  })
+
   it('keeps a draft that was typed but never searched', async () => {
     const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
     const search = createSearch({ fetchFn, debounceMs: 5 })

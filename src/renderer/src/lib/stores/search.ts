@@ -492,24 +492,36 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   }
 
   function applyAdvanced(): void {
-    advancedApplied.set(cloneAdvanced(get(advancedDraft)))
-    advancedDropped.set(0)
-    // The other half of the rule in `setQuery`, and the reason neither search box has to be
-    // disabled: the endpoint about to answer ignores the term, so the box is emptied rather than
-    // left showing a word that had no part in the results. `lastRan` moves with it, so Explore's
-    // mount effect finds the wildcard already answered instead of spending a second request on
-    // the rows this run is fetching.
-    query = '*'
-    lastRan = '*'
-    globalQuery.set('')
+    const next = cloneAdvanced(get(advancedDraft))
+    const narrowing = advancedCount(next) > 0
+    // A form with nothing in it, submitted while nothing was applied, is not a question. The
+    // panel is a `<form>`, so Enter in any of its thirty controls submits it, and taking the term
+    // over for a query that ends up narrowed by nothing threw away what was typed in the search
+    // box with nothing left to say so: `advancedDropped` counts filters and there were none.
+    if (!narrowing && get(activeCount) === 0) return
     // A press of Search, like a filter change, is a click rather than typing, and it carries any
     // term still inside the debounce window with it.
     takePending()
+    advancedApplied.set(next)
+    advancedDropped.set(0)
+    if (narrowing) {
+      // The other half of the rule in `setQuery`, and the reason neither search box has to be
+      // disabled: the endpoint about to answer ignores the term, so the box is emptied rather
+      // than left showing a word that had no part in the results. `lastRan` moves with it, so
+      // Explore's mount effect finds the wildcard already answered instead of spending a second
+      // request on the rows this run is fetching. Only when something is actually narrowing:
+      // with an empty form the endpoint is `/search`, which honours the term.
+      query = '*'
+      lastRan = '*'
+      globalQuery.set('')
+    }
     page = 1
     void run(false)
   }
 
   function restoreAdvanced(): void {
+    // Offered only while the draft holds something (Explore gates the button on
+    // `advancedDraftCount`), so it never lands on the empty-form case `applyAdvanced` returns on.
     applyAdvanced()
   }
 
