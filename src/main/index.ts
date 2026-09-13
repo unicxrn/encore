@@ -802,6 +802,7 @@ function wireIpc(): {
         scoresExtPath: scoreFiles.watchedPaths?.scoresExt ?? null,
         lastImportAt: scoreFiles.lastImportAt,
         usedBackup: scoreFiles.usedBackup,
+        pairRefused: scoreFiles.pairRefused,
         folderSource: scoreFolderSource
       },
       totals: lifetimeTotals(db),

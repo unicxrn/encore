@@ -764,6 +764,16 @@
           no location for it has been established on this system.
         {:else if lifetime.status.reason === 'noFile'}
           there is none at <span class="mono path">{lifetime.status.scoreDataPath}</span>.
+        {:else if lifetime.status.reason === 'unreadable' && lifetime.status.pairRefused}
+          <!-- Both files read and decoded, and Encore could not put them together. Worded apart
+               from the line below because the two send a reader somewhere different: this one
+               must not have them hunting through an install that is fine. Encore matches the
+               rows on a field nobody has decoded, so a pair it cannot read together may be a
+               perfectly good one shaped unlike the single sample the format was read from. -->
+          Encore read both files at <span class="mono path">{lifetime.status.scoreDataPath}</span>
+          and could not match them to each other. A read that lands while Clone Hero is saving looks like
+          this and clears at the next song. One that stays means a pair Encore cannot read together, not
+          a damaged install: nothing has been written to either file.
         {:else if lifetime.status.reason === 'unreadable'}
           what is at <span class="mono path">{lifetime.status.scoreDataPath}</span>
           could not be read.

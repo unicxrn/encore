@@ -167,6 +167,7 @@ const deps = (): IpcDeps => ({
       scoresExtPath: '/home/u/.config/unity3d/srylain Inc_/Clone Hero/scoresext.bin',
       lastImportAt: '2026-09-12T09:00:00.000Z',
       usedBackup: false,
+      pairRefused: false,
       folderSource: 'probe'
     },
     totals: {

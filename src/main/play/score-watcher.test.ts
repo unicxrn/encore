@@ -22,6 +22,55 @@ import { ScoreFileWatcher } from './score-watcher'
  * to the files. The diff itself is tested against a real database in score-store.test.ts.
  */
 
+/**
+ * A hold on one read, so the orderings an overlapping read produces are written down rather than
+ * raced for.
+ *
+ * The bytes come off the disk first and only the answer is delayed, which is what a slow read is:
+ * the held refresh comes back holding what was there when it looked, exactly as the race it
+ * stands in for does. Null in every test that does not install one, and the wrapper below is a
+ * pass through then.
+ */
+let heldRead: ((path: string) => Promise<void> | null) | null = null
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const bytes = await actual.readFile(...args)
+      await heldRead?.(String(args[0]))
+      return bytes
+    }
+  }
+})
+
+interface Hold {
+  /** Resolves once a read in the directory has been made and is being held. */
+  reached: Promise<void>
+  /** Let it finish. */
+  release: () => void
+}
+
+/** Hold the first read made in `dir`. Every read after it, there or anywhere, goes straight through. */
+function holdFirstReadIn(dir: string): Hold {
+  let arrive = (): void => {}
+  let open = (): void => {}
+  const reached = new Promise<void>((resolve) => {
+    arrive = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  heldRead = (path) => {
+    if (!path.startsWith(dir)) return null
+    heldRead = null
+    arrive()
+    return gate
+  }
+  return { reached, release: open }
+}
+
 const SKRTING = 'e54e9a0521444e81bd1fed4f3f3a3201'
 
 function spec(over: Partial<ChartSpec> = {}): ChartSpec {
@@ -54,7 +103,9 @@ interface Harness {
   writeBackup: (charts: ChartSpec[]) => void
 }
 
-function harness(opts: { dirExists?: boolean } = {}): Harness {
+function harness(
+  opts: { dirExists?: boolean; importCharts?: (charts: ChartBest[]) => ScoreImportResult } = {}
+): Harness {
   const root = tmpDir('score-watcher')
   const dir = join(root, 'Clone Hero')
   if (opts.dirExists !== false) mkdirSync(dir, { recursive: true })
@@ -64,6 +115,8 @@ function harness(opts: { dirExists?: boolean } = {}): Harness {
   let stored = ''
   const importCharts = (charts: ChartBest[]): ScoreImportResult => {
     imported.push(charts)
+    // Recorded above first, so a store that refuses still shows what it was handed.
+    if (opts.importCharts !== undefined) return opts.importCharts(charts)
     const next = JSON.stringify(charts)
     const wrote = next !== stored
     stored = next
@@ -96,8 +149,14 @@ function harness(opts: { dirExists?: boolean } = {}): Harness {
   }
 }
 
+/** A store that refuses what it is handed, as `importScoreBests` does on a constraint. */
+function throwsOnImport(): ScoreImportResult {
+  throw new Error('UNIQUE constraint failed: score_bests.checksum, score_bests.variant')
+}
+
 const open: ScoreFileWatcher[] = []
 afterEach(async () => {
+  heldRead = null
   for (const w of open.splice(0)) await w.stop()
 })
 
@@ -186,6 +245,46 @@ describe('ScoreFileWatcher.refresh', () => {
     expect(h.watcher.reason).toBe('unreadable')
     h.write([spec({ playCount: 3 })])
     expect(await h.watcher.refresh()).toBe(true)
+  })
+
+  it('tells a refused pair apart from a file it could not read', async () => {
+    // Both are `unreadable` and they are not the same thing to a user. The merge keys its rows
+    // on a field nobody has decoded, so a pair Encore cannot put together may be a healthy one
+    // shaped unlike the single install the format was read from, and it takes the whole library
+    // with it. Calling that a file that could not be read sends the user after damage they do
+    // not have.
+    const refused = harness()
+    refused.write([spec()])
+    writeFileSync(
+      join(refused.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    expect(await refused.watcher.refresh()).toBe(false)
+    expect(refused.watcher.reason).toBe('unreadable')
+    expect(refused.watcher.pairRefused).toBe(true)
+
+    const damaged = harness()
+    damaged.write([spec()])
+    writeFileSync(join(damaged.dir, SCORE_DATA_FILE), Uint8Array.from([9, 9, 9]))
+    expect(await damaged.watcher.refresh()).toBe(false)
+    expect(damaged.watcher.reason).toBe('unreadable')
+    expect(damaged.watcher.pairRefused).toBe(false)
+  })
+
+  it('drops the refused flag as soon as a read succeeds again', async () => {
+    // A torn pair is the commonest way to raise it and it lasts one read, so it describes the
+    // read that just finished rather than the session, as the backup flag does.
+    const h = harness()
+    h.write([spec()])
+    writeFileSync(
+      join(h.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    await h.watcher.refresh()
+    expect(h.watcher.pairRefused).toBe(true)
+    h.write([spec({ playCount: 4 })])
+    expect(await h.watcher.refresh()).toBe(true)
+    expect(h.watcher.pairRefused).toBe(false)
   })
 
   it('ignores the backup while the primary pair reads', async () => {
@@ -294,6 +393,48 @@ describe('ScoreFileWatcher.refresh', () => {
     expect(h.watcher.usedBackup).toBe(true)
     h.write([spec({ playCount: 12 })])
     expect(await h.watcher.refresh()).toBe(true)
+    expect(h.watcher.usedBackup).toBe(false)
+  })
+
+  it('throws away the older of two overlapping reads of one folder', async () => {
+    // Nothing sequences two refreshes, and the game rewrites both files after every song, so the
+    // slower of two reads landing last is ordinary. Its records are the older ones and they must
+    // not be written over the newer ones.
+    const h = harness()
+    h.write([spec({ playCount: 2 })])
+    const hold = holdFirstReadIn(h.dir)
+    const older = h.watcher.refresh()
+    await hold.reached
+    h.write([spec({ playCount: 5 })])
+    expect(await h.watcher.refresh()).toBe(true)
+    expect(h.imported.at(-1)?.[0].playCount).toBe(5)
+    hold.release()
+    expect(await older).toBe(false)
+    expect(h.imported.at(-1)?.[0].playCount).toBe(5)
+  })
+
+  it('reports an import that threw rather than rejecting', async () => {
+    // The store takes a merged list and can refuse it: `score_bests` is keyed on
+    // (checksum, variant) and its own constraints are the last word. The caller that is not
+    // awaited is the chokidar callback in start(), where a rejection is an unhandled one in the
+    // main process, once per finished song for as long as the file stays that way.
+    const h = harness({ importCharts: throwsOnImport })
+    h.write([spec()])
+    await expect(h.watcher.refresh()).resolves.toBe(false)
+  })
+
+  it('does not report ok after an import that threw', async () => {
+    // The status used to be written before the import ran, so a throw left `ok` standing beside
+    // a `lastImportAt` of null and nothing stored: a user reading that has been told their
+    // scores are in when they are not.
+    const h = harness({ importCharts: throwsOnImport })
+    h.write([spec()])
+    h.writeBackup([spec({ playCount: 1 })])
+    writeFileSync(join(h.dir, SCORE_DATA_FILE), Uint8Array.from([9, 9, 9]))
+    await h.watcher.refresh()
+    expect(h.watcher.reason).not.toBe('ok')
+    expect(h.watcher.lastImportAt).toBeNull()
+    // The backup flag describes a read that reached the tables, and this one did not.
     expect(h.watcher.usedBackup).toBe(false)
   })
 
@@ -409,6 +550,21 @@ describe('ScoreFileWatcher.retarget', () => {
     expect(h.watcher.watchedFolder).toBeNull()
   })
 
+  it('drops the refused flag when the folder is cleared to none', async () => {
+    // The one path that clears nothing of its own afterwards: with no paths there is no read to
+    // describe, and a flag left standing would describe a folder the watcher has been taken off.
+    const h = harness()
+    h.write([spec()])
+    writeFileSync(
+      join(h.dir, SCORES_EXT_FILE),
+      buildScoresExt([spec({ checksum: '5c8056b089373b38fc272824180be26c' })])
+    )
+    await h.watcher.refresh()
+    expect(h.watcher.pairRefused).toBe(true)
+    await h.watcher.retarget(null)
+    expect(h.watcher.pairRefused).toBe(false)
+  })
+
   it('carries no state across the change of folder', async () => {
     // The backup flag describes the last read of the OLD folder. Carrying it would tell a user
     // their newly chosen folder is a save behind when nothing has been read from it yet.
@@ -422,6 +578,28 @@ describe('ScoreFileWatcher.retarget', () => {
     await h.watcher.retarget(scoreDataPathsIn(to.dir))
     expect(h.watcher.usedBackup).toBe(false)
     expect(h.watcher.reason).toBe('noFile')
+  })
+
+  it('throws away a read of the folder it was pointed away from', async () => {
+    // The read was started against the old folder and resolves after the switch. Importing it
+    // would not merely be stale: the store deletes every chart the list it is given does not
+    // mention, so the old folder's scores would replace the new folder's outright, while the
+    // status went on naming the new folder and saying ok.
+    const from = harness()
+    const to = harness()
+    from.write([spec({ playCount: 2 })])
+    to.write([spec({ playCount: 40 })])
+    const hold = holdFirstReadIn(from.dir)
+    const inFlight = from.watcher.refresh()
+    await hold.reached
+    await from.watcher.retarget(scoreDataPathsIn(to.dir))
+    expect(from.imported).toHaveLength(1)
+    expect(from.imported[0][0].playCount).toBe(40)
+    hold.release()
+    expect(await inFlight).toBe(false)
+    expect(from.imported).toHaveLength(1)
+    expect(from.watcher.watchedFolder).toBe(to.dir)
+    expect(from.watcher.reason).toBe('ok')
   })
 
   it('keeps watching, in the new folder, when it was watching before', async () => {

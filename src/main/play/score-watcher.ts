@@ -143,6 +143,22 @@ export class ScoreFileWatcher {
   private lastReason: PlayAvailability
   private lastImport: string | null = null
   private backupUsed = false
+  private refusedPair = false
+  /**
+   * Bumped by every read and by every retarget, and checked once a read's bytes are back.
+   *
+   * `refresh` takes its paths before its first await and `retarget` swaps them before its own, so
+   * a read already in flight when the folder changes resolves holding the OLD folder's records
+   * with nothing to stop it storing them. That is not merely stale: `importScoreBests` deletes
+   * every stored chart the list it is given does not mention, so the old folder's scores replace
+   * the new folder's wholesale, the status goes on reporting the new folder and `ok`, and nothing
+   * re-reads until a file changes or Encore restarts. Two refreshes of one folder carry the same
+   * hazard in the small, since the older read can be the one that lands last.
+   *
+   * So a read that is no longer the newest one throws its own result away, and the read that
+   * overtook it is left to say what the state is.
+   */
+  private generation = 0
 
   constructor(opts: ScoreFileWatcherOptions) {
     this.paths = opts.paths
@@ -177,6 +193,29 @@ export class ScoreFileWatcher {
   }
 
   /**
+   * Whether the last read refused a pair of files that had both parsed.
+   *
+   * `unreadable` covers two states that are not the same thing to a user. One is a file Encore
+   * could not decode: a half written save, a version tag it does not know, a truncated file. The
+   * other is two files that decoded cleanly and could not be matched into one record, and that
+   * is a pair Encore does not understand rather than an install that is broken.
+   *
+   * The distinction earns its keep because of what the merge keys on. Every row is matched by
+   * variant alone, and the variant is not decoded (see scoredata.ts): `difficulty` sits in the
+   * same row and nothing establishes whether the game treats it as part of the key. If it does,
+   * then a user who has played one chart at two difficulties has a repeated variant in both
+   * files, the merge refuses, and the refusal takes their whole library with it, permanently.
+   * Reporting that as "could not be read" would send them looking for damage they do not have.
+   *
+   * A flag beside `reason` rather than a fifth `PlayAvailability`, for the reason `usedBackup`
+   * gives: the enum is what the scorestats channel answers with too, and a read of that one file
+   * has no pair to refuse.
+   */
+  get pairRefused(): boolean {
+    return this.refusedPair
+  }
+
+  /**
    * When the files were last read and imported without refusal, ISO 8601, or null before that
    * has happened at all. Set by a read that found nothing new as well as by one that wrote,
    * because both mean the stored data is current as of then.
@@ -195,7 +234,8 @@ export class ScoreFileWatcher {
    * a UI needs refreshing. Never rejects. The ways this comes back false, commonest first: the
    * files say what was already stored (every read after the first, all session long), a file is
    * missing (no Clone Hero, or a version that has never written `scoresext.bin`), a file could
-   * not be read, one of them did not parse, and the two did not agree with each other.
+   * not be read, one of them did not parse, the two did not agree with each other, the read was
+   * overtaken by a later one, and the import threw on what they held.
    *
    * ENOENT is separated from every other read failure only to set the status, because the two
    * mean different things to a user: "Clone Hero has recorded no scores here" against "there are
@@ -207,10 +247,18 @@ export class ScoreFileWatcher {
       return false
     }
     const p = this.paths
+    const generation = (this.generation += 1)
     const [data, ext] = await Promise.all([
       readCandidates([p.scoreData, p.scoreDataBackup], parseScoreData),
       readCandidates([p.scoresExt, p.scoresExtBackup], parseScoresExt)
     ])
+    // Overtaken while the reads were out: see `generation`. Not even the reason is recorded,
+    // because everything this read knows is about a folder or a moment that has been superseded,
+    // and the read that superseded it has already said, or is about to say, what the state is.
+    if (this.generation !== generation) return false
+    // Cleared for this read rather than at each of the outcomes below, exactly one of which sets
+    // it. Like `usedBackup` it describes the last read that finished, not the session.
+    this.refusedPair = false
     if (data.parsed.length === 0 || ext.parsed.length === 0) {
       // A side is `noFile` only when neither its primary nor its backup was there at all, which
       // is the ordinary "no Clone Hero, or a version too old to have written this file" case.
@@ -233,12 +281,30 @@ export class ScoreFileWatcher {
       }
     }
     if (merged === null) {
+      // Both sides parsed, or there would be no pair to try, so this is the refusal that is
+      // about the pair and not about a file. See `pairRefused` for why that is worth saying.
+      this.lastReason = 'unreadable'
+      this.refusedPair = true
+      return false
+    }
+    // The import runs before any of the three lines below it, and that order is the point. They
+    // describe a read that reached the tables, and `ok` used to be set ahead of the import, so a
+    // throw left the status saying the scores had been read with nothing stored and no time
+    // stamped against them.
+    let result: ScoreImportResult
+    try {
+      result = this.importCharts(merged)
+    } catch {
+      // Swallowed rather than rethrown, and the module's own premise is the reason: these are
+      // another program's undocumented files, so anything derived from them can be wrong in a
+      // way no check here anticipated. The one caller that is not awaited is the chokidar
+      // callback in `start`, where a rejection is an unhandled one in the main process, and the
+      // game rewrites both files after every song. One failure value, as the parsers have.
       this.lastReason = 'unreadable'
       return false
     }
     this.lastReason = 'ok'
     this.backupUsed = usedBackup
-    const result = this.importCharts(merged)
     this.lastImport = new Date().toISOString()
     if (!result.wrote) return false
     this.onImport?.(result)
@@ -306,10 +372,15 @@ export class ScoreFileWatcher {
     // renderer asks where Encore is reading as soon as its own call resolves. Swapping the paths
     // after an await would answer that question with the folder the user just stopped using.
     this.paths = paths
+    // Bumped here, in the same breath and for the same reason: a read of the old folder that is
+    // already in flight has to be invalidated before this method yields, or it resolves during
+    // the `stop` below and imports the folder the user just left. See `generation`.
+    this.generation += 1
     // Back to the state a fresh watcher would be in. Carrying `usedBackup` or a reason across a
     // change of folder would describe the old one.
     this.lastReason = paths === null ? 'unknownPlatform' : 'noFile'
     this.backupUsed = false
+    this.refusedPair = false
     await this.stop()
     if (wasWatching) await this.start()
     else await this.refresh()

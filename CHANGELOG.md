@@ -34,6 +34,24 @@ release.
   written in Clone Hero's colour tags was a group of its own. Two versions by one charter, one of
   them styled, were reported as two people having charted the song, which is the one tier the
   report says is not a problem. It now groups on the name a chart reads as.
+- Clone Hero's score files were read as a pair, and a chart that listed the same score row twice
+  in `scoredata.bin` and once in `scoresext.bin` was accepted instead of refused. The import that
+  followed failed on the two rows sharing one key, and because the game rewrites both files after
+  every song, it failed again every time a song finished. Such a pair is now refused the way every
+  other mismatch between the two files already was.
+- An import that failed reported itself as having worked: the status said the scores were read,
+  and stamped no time against them, over tables nothing had been written to. A failed import now
+  says so, and it can no longer take Encore down with it.
+- Changing the score folder in Settings while a read of the old one was still running let the old
+  folder's scores land afterwards and replace the new folder's, while the status named the new
+  folder and said all was well. Nothing re-read until a file changed or Encore restarted. A read
+  that a later one has overtaken is now thrown away, which covers the same hazard between two
+  ordinary reads of one folder.
+- Encore had one sentence for two states of Clone Hero's score files: a file it could not decode,
+  and two files it decoded perfectly and could not match to each other. Only the first is worth
+  going to look at an install for. The second now says that it is a pair Encore cannot read
+  together rather than a damaged install, since Encore matches the two files on a field that has
+  never been decoded and a healthy pair shaped unlike the one it was read from would land there.
 
 ## [0.3.0] - 2026-09-13
 
