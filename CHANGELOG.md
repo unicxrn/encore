@@ -16,10 +16,21 @@ release.
 
 - A third column, to the right of whatever you are looking at, holding the chart you last opened:
   its cover, name, artist and charter, a note highway you can play it in, the instrument and
-  difficulty that highway uses, and what the chart is missing around its notes. It keeps that
-  chart while you go to Settings or Stats rather than emptying out, which is the same thing the
-  player bar under it already does. It is hidden below a window width of 1120px, where the
-  columns either side of the view leave it too little room to be worth the space.
+  difficulty that highway uses, what that instrument and difficulty are made of, and what the
+  chart is missing around its notes. It keeps that chart while you go to Settings or Stats rather
+  than emptying out, which is the same thing the player bar under it already does. It is hidden
+  below a window width of 1120px, where the columns either side of the view leave it too little
+  room to be worth the space.
+- The column says what the track you picked is made of: how many notes it has, the fastest
+  stretch of it in notes per second, and how long the song runs. A drum chart that needs a double
+  pedal says so, beside the drums and nowhere else. A chart with no cover shows its initial
+  rather than an empty square.
+- The column offers the one action its chart can answer: Download for a chart on Chorus Encore,
+  Show in folder for one in your library. There is no favourite and no setlist behind either of
+  those, so neither is drawn.
+- Installed's rows can fill that column without opening the chart. The mark at the end of a row
+  puts it in the column and leaves the list, its filters and its place on screen exactly where
+  they were.
 - The sidebar carries the things it had nowhere to say before: which game the library belongs to,
   two quick actions, which chart source Explore searches, and whether a newer Encore exists. Two
   of those offer more than Encore can do yet, and say so on the control rather than looking live:
@@ -80,6 +91,9 @@ release.
 
 ### Fixed
 
+- Narrowing the window under 1120px while the chart column was playing something left the chart
+  playing behind the hidden column, with the player bar still handing it the transport and
+  nothing on screen able to stop it. The column now gives the preview back as it goes.
 - The selected row in the Asset Studio no longer fades out through a hardcoded copy of an accent
   colour that has since moved. It looked the same and would have stopped looking the same the
   first time anyone touched it.
