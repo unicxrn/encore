@@ -1235,7 +1235,7 @@
      reads as a chip rather than a stray word. --lh-flat plus 1px padding and border comes to
      16px, under the title's 17.5px (14px at --lh-tight), so the line, and the row, never grow.
      --accent-text rather than --text-3: it is the one thing in the list that asks for a look, and
-     that token is the readable accent (7.2:1 on --bg). Both classes in the selector because the
+     that token is the readable accent (7.3:1 on --bg). Both classes in the selector because the
      `.mono` rule below sets --text-3 and is declared later; at equal specificity it won, and the
      badge rendered grey on screen while this comment promised violet. */
   .badge.mono {

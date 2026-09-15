@@ -264,11 +264,11 @@
   }
   /* The panel-open state, built to be nothing the page marker is. The page row is a
      surface-2 fill with the accent bar in the gutter; this row keeps a transparent
-     ground. A fill was tried and rejected: --accent-dim composited over --bg is
-     #1d1530, which measures 1.01:1 against --surface-2, i.e. the same slab to the
-     eye, and the two lit rows the audit found would have been back. What carries the
+     ground. A fill was tried and rejected: --accent-dim, #1d1440, measures 1.01:1
+     against --surface-2, i.e. the same slab to the eye, and the two lit rows the audit
+     found would have been back. What carries the
      state instead is the glyph turning violet and a chevron at the row's far edge
-     pointing at the panel it opened, both in --accent-text: 7.2:1 on --bg (tokens.css),
+     pointing at the panel it opened, both in --accent-text: 7.3:1 on --bg (tokens.css),
      well past the 3:1 a non-text state indicator needs. The label lifts to text-1 like
      the page row's so the row reads as engaged, not merely hovered.
 
@@ -329,7 +329,7 @@
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
     /* --accent-text, not --accent: 13px text on the surface-1 card, where --accent measures
-       4.38:1 (see tokens.css). Hover goes to text-1 like the app's other quiet controls. */
+       4.29:1 (see tokens.css). Hover goes to text-1 like the app's other quiet controls. */
     color: var(--accent-text);
     cursor: pointer;
     transition: color var(--t-fast) var(--ease);
