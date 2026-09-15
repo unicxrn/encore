@@ -123,7 +123,7 @@
      Clone Hero has six parts (guitar, rhythm, bass, drums, keys, vocals) and ten entries in
      INSTRUMENT_ORDER, because four of those entries are the same part on a different
      controller: guitar co-op is guitar, and the GHL four are guitar, bass, rhythm and guitar
-     co-op on a six-fret guitar. So they take their part's colour, and `instrumentColor` in
+     co-op on a six-fret guitar. So they take their part's colour, and `instrumentColorVar` in
      matrix.ts is the one place that mapping lives.
 
      What that spends and what it buys. It spends the ability to tell guitar from guitar (GHL)
