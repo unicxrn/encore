@@ -27,6 +27,17 @@ release.
 
 ### Changed
 
+- Explore's filter header asks three different questions rather than two. Instrument is which of
+  the ten parts Chorus Encore can filter to, difficulty is which charted difficulties exist, and
+  intensity is how hard the chart is, which is the same number the rows draw as pips. The last
+  one is what "expert, but not brutal" needs, and it is off until an instrument is chosen,
+  because a chart is rated one instrument at a time. Its lowest end goes past the six the scale
+  is drawn to, since charters rate past it and the service answers on what they wrote. There is
+  no Vocals filter: Chorus Encore refuses one, though a chart's vocal difficulty still shows on
+  its row.
+- Explore can put the results in an order. Eleven of them, reaching all eight fields Chorus
+  Encore sorts by, including the charts changed most recently, which nothing surfaced before.
+  There is no download or popularity order, because Chorus Encore does not keep one.
 - Explore's results say what Chorus actually knows about a chart. Every row now carries the real
   album cover, the artist with the album and the year, a difficulty reading per instrument, and
   a Download button of its own beside the "IN LIBRARY" mark. The three flags that survived the
