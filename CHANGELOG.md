@@ -10,6 +10,28 @@ describes the build that is running, and `scripts/release-notes.mjs` reads a ver
 write that release's notes on GitHub. See the contributing section of the README for how to cut a
 release.
 
+## [Unreleased]
+
+### Changed
+
+- The design tokens are the redesign's scale rather than the two surfaces, three text levels and
+  one accent that came before: six ground steps, two borders, four steps of elevation, five
+  instrument colours, three semantic colours and three radii. This is groundwork and nothing has
+  been rebuilt on top of it yet, so the app is the same app. The names the components already
+  read are now aliases of steps in the new scale, which is why most of it looks unchanged.
+- What did move, on every screen: the dimmest text colour is dimmer, hover states on links and
+  the player's progress are a lighter violet than the pink-violet they were, the wash behind a
+  selected row is a flat colour rather than a tint that changed with whatever it sat on, and
+  hairlines are violet cast rather than white at low opacity. Scrollbar thumbs moved with the
+  hairlines.
+
+### Fixed
+
+- The version buttons in a chart's detail panel have the border they were written to have, and a
+  version note reporting an error is red rather than grey. Both have asked since 0.1.0 for a
+  colour the stylesheet never defined, so one drew no border at all and the other fell back to
+  the colour of ordinary text.
+
 ## [0.3.1] - 2026-09-13
 
 ### Changed
