@@ -132,7 +132,11 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     frame: false,
-    backgroundColor: '#0a0a0e',
+    // The one copy of --ground-1 that lives outside tokens.css, and it has to be a literal: this
+    // is what Chromium paints before the renderer's first frame, so it is decided in main before
+    // any stylesheet exists. Kept equal to --ground-1 so the window does not flash a second
+    // near-black on the way up. If the ground scale moves, this moves with it.
+    backgroundColor: '#0a0914',
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
