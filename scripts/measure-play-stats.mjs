@@ -34,6 +34,14 @@
  * 9. Does a row badged from Clone Hero's table stay exactly as tall as one badged from Encore's
  *    log and one with no badge at all? A lifetime count has more digits, and the badge lives
  *    inside the title line.
+ * 10. Does the rail's content still fit the column once the art, the stats and the action are in
+ *    it, and how much room is left for the blocks that only appear sometimes? Documented at
+ *    `RAIL`, which reads every one of them per element rather than taking the column's word for
+ *    it, and at `RAIL_EMPTY` for the state a cold start opens in.
+ * 11. Does Installed's second row action leave the title enough width to be a title? The row is a
+ *    fixed grid whose only flexible track is the name, so anything added beside it comes out of
+ *    that. `LIST` reports the button; `scripts/measure-explore-row.mjs` with VIEW=installed is
+ *    what measures the title itself.
  *
  * The five questions above those, about the app shell's frame rather than about any one page,
  * are documented at `FRAME` below. They run first, on Home, because a frame that has collapsed
@@ -114,7 +122,10 @@ const charts = checksums.map((sum, i) => ({
   genre: 'Rock',
   charter: 'someone',
   year: 1981,
-  songLength: 273000,
+  // Chart 0 is the one the rail is measured on, and it runs long on purpose: 10:34 is the widest
+  // string the LENGTH cell can realistically hold, and a five-character time is what would push
+  // the three stat cells past the column if they were sized too tightly.
+  songLength: i === 0 ? 634000 : 273000,
   chartType: 'folder',
   folderHash: 'chart-' + i,
   modifiedTime: 0,
@@ -123,6 +134,22 @@ const charts = checksums.map((sum, i) => ({
   diffGuitar: 4,
   diffBass: 3,
   diffDrums: 5,
+  // What the rail's stats strip reads. Five digits on the drum chart for the same reason the
+  // length runs long: a thousands separator is the widest a note count gets in practice, and a
+  // peak rate with a decimal is the widest the rate gets.
+  noteCounts: [
+    { instrument: 'guitar', difficulty: 'expert', count: 1420 },
+    { instrument: 'guitar', difficulty: 'hard', count: 980 },
+    { instrument: 'bass', difficulty: 'expert', count: 611 },
+    { instrument: 'drums', difficulty: 'expert', count: 12345 }
+  ],
+  maxNps: [
+    { instrument: 'guitar', difficulty: 'expert', nps: 12.25 },
+    { instrument: 'drums', difficulty: 'expert', nps: 24.6 }
+  ],
+  // Only on the chart the rail is opened with, so the flag beside the three cells is measured
+  // in the row it has to fit into rather than assumed to fit.
+  has2xKick: i === 0,
   albumArtMd5: null
 }))
 const answers = {
@@ -131,6 +158,12 @@ const answers = {
   catalogCount: () => charts.length,
   catalogFacets: () => ({ artists: ['Rush'], genres: ['Rock'], charters: ['someone'], years: [1981] }),
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
+  // main's own words for the one way a reveal is refused, so the line the rail draws for it is
+  // measured at the length it will really be. Read only by the last step of the run, after every
+  // ordinary measurement has been taken.
+  chartReveal: (path) => {
+    throw new Error('Refusing to open a path outside the library folders: ' + path)
+  },
   downloadList: () => [],
   updatesLast: () => [],
   // The real shape main pushes: state is an object with a kind, not a bare string. It was a
@@ -507,31 +540,142 @@ const SIDEBAR = `(() => {
  * inside it overflows that width, whether the art box stayed square once the column decided its
  * size, and whether the whole column fits its own height or scrolls. jsdom answers all four
  * with zero.
+ *
+ * Step five added three things to this column, and each one is a new way to break it. The art
+ * box now draws a letter, which can overflow a box it is too large for. The stats strip puts
+ * three labelled cells and a flag on one line, which is four things in 342px of usable width and
+ * the first candidate for a sideways scroll. And the action row adds a full-width button whose
+ * word is longer than the button is when the column narrows. All three are read below, per
+ * element, with the clipping measured rather than eyeballed: an ellipsised label and a label
+ * that fits look identical in a screenshot, and only one of them is readable.
  */
 const RAIL = `(() => {
   const round = (n) => Math.round(n)
   const rail = document.querySelector('.rail')
   if (!rail) return { present: false }
   const box = (el) => el.getBoundingClientRect()
+  const text = (el) => (el ? el.textContent.replace(/\\s+/g, ' ').trim() : null)
+  // Clipped, whichever way it is clipped: an ellipsis, an overflow:hidden crop, or a line clamp
+  // all leave the scroll box larger than the painted one.
+  const clipped = (el) => el.scrollWidth > el.clientWidth + 1
   const art = rail.querySelector('.art')
   const viewport = rail.querySelector('.viewport')
   const health = [...rail.querySelectorAll('.health-row')]
   const wide = [...rail.querySelectorAll('*')].filter(
     (el) => round(box(el).right) > round(box(rail).right)
   )
+  const placeholder = rail.querySelector('.art.placeholder')
+  const flag = rail.querySelector('.stats .flag')
   return {
     present: true,
     width: round(box(rail).width),
     // A square art box: the aspect-ratio only holds if the column gave it a width to square.
     artWidth: art ? round(box(art).width) : null,
     artHeight: art ? round(box(art).height) : null,
+    // The letter an artless chart shows. It must sit inside the 88px box, not overflow it.
+    monogram: text(placeholder),
+    monogramOverflows: placeholder
+      ? placeholder.scrollWidth > placeholder.clientWidth + 1 ||
+        placeholder.scrollHeight > placeholder.clientHeight + 1
+      : null,
+    // One button, full width, and its word has to fit inside it whole.
+    actions: [...rail.querySelectorAll('.actions button')].map((b) => ({
+      label: text(b),
+      width: round(box(b).width),
+      height: round(box(b).height),
+      clipped: clipped(b)
+    })),
+    // Three cells and, on a drum chart with a double pedal, a fourth thing beside them. A cell
+    // whose label is clipped has stopped saying which number it is.
+    stats: [...rail.querySelectorAll('.stats .stat')].map((s) => ({
+      label: text(s.querySelector('.stat-label')),
+      value: text(s.querySelector('.stat-value')),
+      width: round(box(s).width),
+      labelClipped: clipped(s.querySelector('.stat-label')),
+      valueClipped: clipped(s.querySelector('.stat-value'))
+    })),
+    statsHeight: rail.querySelector('.stats')
+      ? round(box(rail.querySelector('.stats')).height)
+      : null,
+    flag: flag ? { text: text(flag), width: round(box(flag).width), clipped: clipped(flag) } : null,
     viewportWidth: viewport ? round(box(viewport).width) : null,
     viewportHeight: viewport ? round(box(viewport).height) : null,
+    // The one block whose height this run cannot observe directly: the state line is empty while
+    // nothing is playing, and nothing can play here (no network, no chart files). Computed from
+    // its own resolved font metrics plus the gap it would reclaim, so the figure is read off the
+    // stylesheet rather than guessed, and \`spare\` above can be checked against it.
+    stateLineCost: (() => {
+      const st = rail.querySelector('.state')
+      if (!st) return null
+      const cs = getComputedStyle(st)
+      const lh = cs.lineHeight === 'normal' ? parseFloat(cs.fontSize) * 1.2 : parseFloat(cs.lineHeight)
+      const gap = parseFloat(getComputedStyle(st.parentElement).rowGap) || 0
+      return round(lh + gap)
+    })(),
     healthRows: health.length,
     healthStates: health.map((r) => r.getAttribute('data-state')),
     title: (rail.querySelector('.title')?.textContent ?? '').trim(),
     // Anything sticking out past the column's right edge is content the user cannot read.
     childrenPastRightEdge: wide.length,
+    // Every block in the column with the height it took, in order. The total is what decides
+    // whether the rail scrolls, and this is the only way to see which block to spend on.
+    sections: [...rail.children].map((el) => ({
+      name: el.className || el.tagName.toLowerCase(),
+      height: round(box(el).height)
+    })),
+    // What the blocks actually use, and what is left. \`scrollHeight\` cannot answer this: it
+    // never reports less than the client height, so a column with room to spare and one filled
+    // exactly to the brim both read as the same number. The last child's bottom edge plus the
+    // column's own bottom padding is the real figure, and \`spare\` is the headroom the transient
+    // blocks (a refused reveal's reason, the state line once something is playing) have to fit
+    // into before the column starts scrolling.
+    usedHeight: (() => {
+      const last = rail.children[rail.children.length - 1]
+      if (!last) return 0
+      const pad = parseFloat(getComputedStyle(rail).paddingBottom) || 0
+      return round(box(last).bottom - box(rail).top + pad)
+    })(),
+    spare: (() => {
+      const last = rail.children[rail.children.length - 1]
+      if (!last) return null
+      const pad = parseFloat(getComputedStyle(rail).paddingBottom) || 0
+      return round(box(rail).top + rail.clientHeight - box(last).bottom - pad)
+    })(),
+    clientHeight: rail.clientHeight,
+    scrollsSideways: rail.scrollWidth > rail.clientWidth + 1,
+    scrollsDown: rail.scrollHeight > rail.clientHeight + 1
+  }
+})()`
+
+/**
+ * The rail before the first chart of the session, which is the only time the empty state shows.
+ *
+ * It is the state every cold start opens in, and the one thing that can go wrong with it is that
+ * the three sections added around it push it off centre or out of the column. Read on Home,
+ * before anything has been clicked.
+ */
+const RAIL_EMPTY = `(() => {
+  const round = (n) => Math.round(n)
+  const rail = document.querySelector('.rail')
+  if (!rail) return { present: false }
+  const empty = rail.querySelector('.empty')
+  const line = rail.querySelector('.empty-line')
+  const note = rail.querySelector('.empty-note')
+  const b = (el) => (el ? el.getBoundingClientRect() : null)
+  const eb = b(empty)
+  const rb = b(rail)
+  return {
+    present: true,
+    width: round(rb.width),
+    line: line ? line.textContent.trim() : null,
+    note: note ? note.textContent.trim() : null,
+    // No chart, so none of the three new blocks may be drawn at all.
+    actions: rail.querySelectorAll('.actions').length,
+    stats: rail.querySelectorAll('.stats').length,
+    art: rail.querySelectorAll('.art').length,
+    // The empty block is centred by \`margin: auto 0\`, so its top gap and bottom gap match.
+    gapAbove: eb ? round(eb.top - rb.top) : null,
+    gapBelow: eb ? round(rb.bottom - eb.bottom) : null,
     scrollsSideways: rail.scrollWidth > rail.clientWidth + 1,
     scrollsDown: rail.scrollHeight > rail.clientHeight + 1
   }
@@ -573,10 +717,26 @@ const LIST = `(() => {
     // Clone Hero's own count says so in the hover; Encore's log says so in its own words.
     fromCloneHero: (badgeOf(r).getAttribute('title') ?? '').includes("Clone Hero's own count")
   }))
+  // Step five put a second action on every row. The row is a fixed six-column grid and the two
+  // buttons are its siblings, so the thing to watch is whether the pair takes width off the
+  // grid and whether the row got taller for it.
+  const preview = [...document.querySelectorAll('.to-rail')]
+  const wrap = document.querySelector('.row-wrap')
   return {
     rows: rows.length,
     badgedRows: badged.length,
     badges,
+    previewButtons: preview.length,
+    previewWidth: preview.length ? round(preview[0].getBoundingClientRect().width) : null,
+    // Hidden with the column it feeds, by App.svelte's own media query and no second copy of
+    // the number. Zero here under a narrow window is the pass, not a missing control.
+    previewVisible: preview.length
+      ? getComputedStyle(preview[0]).display !== 'none'
+      : null,
+    // The two actions plus the grid have to add up to the wrapper, or one of them is overflowing
+    // it and the row is scrolling sideways inside the list.
+    wrapWidth: wrap ? round(wrap.getBoundingClientRect().width) : null,
+    rowGridWidth: rows.length ? round(rows[0].getBoundingClientRect().width) : null,
     distinctRowHeights: [...new Set(heights)],
     badgedHeight: badged.length ? round(badged[0].getBoundingClientRect().height) : null,
     bareHeight: bare.length ? round(bare[0].getBoundingClientRect().height) : null,
@@ -612,6 +772,8 @@ app.whenReady().then(async () => {
   console.log('frame      ', JSON.stringify(await evalIn(win, FRAME), null, 1))
   console.log('sidebar    ', JSON.stringify(await evalIn(win, SIDEBAR), null, 1))
   console.log('home       ', JSON.stringify(await evalIn(win, HOME), null, 1))
+  // Before anything has been opened, which is the only moment the rail's empty state exists.
+  console.log('rail/empty ', JSON.stringify(await evalIn(win, RAIL_EMPTY), null, 1))
 
   const statsTab = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Stats')`
   await waitFor(win, statsTab)
@@ -627,6 +789,13 @@ app.whenReady().then(async () => {
   await sleep(500)
   console.log('installed  ', JSON.stringify(await evalIn(win, LIST), null, 1))
 
+  // Installed's per-row Preview button, which fills the rail without leaving the list. Measured
+  // here rather than after the click below, because the click is what takes the list away.
+  await evalIn(win, `document.querySelector('.to-rail').click(), 1`)
+  await waitFor(win, `document.querySelector('.rail .art')`)
+  await sleep(400)
+  console.log('rail/listed', JSON.stringify(await evalIn(win, RAIL), null, 1))
+
   // Opening a chart is what fills the rail, and a rail with something in it is the case where
   // it can push the frame around: the art box is square and sized off the column, the title
   // wraps, and the health list grows. Measured after the empty case for that reason.
@@ -635,6 +804,28 @@ app.whenReady().then(async () => {
   await sleep(400)
   console.log('rail       ', JSON.stringify(await evalIn(win, RAIL), null, 1))
   console.log('frame/chart', JSON.stringify(await evalIn(win, FRAME), null, 1))
+
+  // The drum track, which is the widest the stats strip gets: five digits of notes, a peak rate
+  // with a decimal, and the 2X KICK flag beside all three on the same line.
+  await evalIn(
+    win,
+    `(() => {
+      const sel = document.querySelectorAll('.rail .picks select')[0]
+      sel.value = 'drums'
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+      return 1
+    })()`
+  )
+  await sleep(300)
+  console.log('rail/drums ', JSON.stringify(await evalIn(win, RAIL), null, 1))
+
+  // Last, because it is the only state that adds height the column had not already accounted
+  // for: a refused reveal wraps its reason over as many lines as the reason needs. \`spare\` in
+  // the reads above is what this has to fit inside before the column starts scrolling.
+  await evalIn(win, `[...document.querySelectorAll('.rail .actions button')][0].click(), 1`)
+  await waitFor(win, `document.querySelector('.rail .act-error')`)
+  await sleep(200)
+  console.log('rail/error ', JSON.stringify(await evalIn(win, RAIL), null, 1))
 
   app.exit(0)
 })
