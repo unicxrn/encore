@@ -9,7 +9,7 @@ export interface SearchParams {
   page?: number
   instrument?: string | null
   difficulty?: string | null
-  sort?: { type: string; direction: 'asc' | 'desc' }
+  sort?: SortChoice | null
   /**
    * The advanced panel's fields. A query with none of them filled in goes to `/search`, and one
    * with any of them goes to `/search/advanced`; see `searchCharts`.
@@ -35,6 +35,75 @@ export const INSTRUMENTS: readonly FilterOption[] = [
   { value: 'rhythmghl', label: 'Rhythm (GHL)' },
   { value: 'guitarcoopghl', label: 'Co-op (GHL)' }
 ]
+
+/**
+ * What `sort.type` may be, measured rather than copied.
+ *
+ * Sending `downloads` answers 400 and names the whole enum back:
+ * `["name","artist","album","genre","year","charter","length","modifiedTime"]` (2026-09-15).
+ * There is no downloads, popularity or rating sort here, and a header offering one would be
+ * offering a request the service refuses. Chart Manager can sort by downloads because it also
+ * queries RhythmVerse; Encore does not, so it cannot.
+ */
+export const SORT_FIELDS = [
+  'name',
+  'artist',
+  'album',
+  'genre',
+  'year',
+  'charter',
+  'length',
+  'modifiedTime'
+] as const
+
+export type SortField = (typeof SORT_FIELDS)[number]
+
+export interface SortChoice {
+  type: SortField
+  direction: 'asc' | 'desc'
+}
+
+export interface SortOption {
+  /** What the select carries and the store holds. Empty string is the service's own order. */
+  readonly value: string
+  readonly label: string
+  /** Null sends `sort: null`, which is what the endpoint does when nobody asks. */
+  readonly sort: SortChoice | null
+}
+
+/**
+ * The orders Explore offers, one option per question rather than one per field-and-direction.
+ *
+ * Sixteen combinations exist and eleven are here. The five text fields get A to Z only: nobody
+ * browses a catalog backwards through the alphabet, and a list of sixteen is a worse control
+ * than a list of eleven. Year and length get both ends because both ends are real questions,
+ * and `modifiedTime` gets only the recent end because "the charts fixed since I last looked" is
+ * the question and "the ones nobody has touched since 2013" is not.
+ *
+ * Every one of the eight fields the endpoint takes is reachable from this list.
+ */
+export const SORT_OPTIONS: readonly SortOption[] = [
+  { value: '', label: 'Best match', sort: null },
+  {
+    value: 'modifiedTime:desc',
+    label: 'Recently updated',
+    sort: { type: 'modifiedTime', direction: 'desc' }
+  },
+  { value: 'name:asc', label: 'Name A-Z', sort: { type: 'name', direction: 'asc' } },
+  { value: 'artist:asc', label: 'Artist A-Z', sort: { type: 'artist', direction: 'asc' } },
+  { value: 'album:asc', label: 'Album A-Z', sort: { type: 'album', direction: 'asc' } },
+  { value: 'charter:asc', label: 'Charter A-Z', sort: { type: 'charter', direction: 'asc' } },
+  { value: 'genre:asc', label: 'Genre A-Z', sort: { type: 'genre', direction: 'asc' } },
+  { value: 'year:desc', label: 'Year, newest', sort: { type: 'year', direction: 'desc' } },
+  { value: 'year:asc', label: 'Year, oldest', sort: { type: 'year', direction: 'asc' } },
+  { value: 'length:desc', label: 'Longest', sort: { type: 'length', direction: 'desc' } },
+  { value: 'length:asc', label: 'Shortest', sort: { type: 'length', direction: 'asc' } }
+]
+
+/** The option a stored key names, or the service's own order for a key nothing matches. */
+export function sortFor(value: string): SortChoice | null {
+  return SORT_OPTIONS.find((opt) => opt.value === value)?.sort ?? null
+}
 
 export const DIFFICULTIES: readonly FilterOption[] = [
   { value: null, label: 'Any difficulty' },

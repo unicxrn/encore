@@ -1,5 +1,5 @@
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store'
-import { searchCharts, type ChartData } from '../api/enchor'
+import { searchCharts, sortFor, type ChartData } from '../api/enchor'
 import { advancedCount, cloneAdvanced, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 import { globalQuery } from './global-search'
 
@@ -178,8 +178,28 @@ export interface SearchStore {
    * Whether Explore has appended as much as it will without being asked. See `AUTO_APPEND_CAP`.
    */
   atAutoCap: Readable<boolean>
+  /**
+   * Which of `SORT_OPTIONS` the results were asked for, by its `value`. Empty is the service's
+   * own order.
+   *
+   * Here rather than in the header for the reason the filters are: Explore is destroyed by every
+   * navigation, and a header-owned choice would go back to "Best match" while the rows it
+   * ordered stayed on screen.
+   */
+  sort: Readable<string>
   setQuery: (value: string) => void
   setFilters: (instrument: string | null, difficulty: string | null) => void
+  /** Re-runs in a different order. One of `SORT_OPTIONS`' values; anything else is that order. */
+  setSort: (value: string) => void
+  /**
+   * Sets both ends of the intensity band and re-runs.
+   *
+   * The same two advanced fields the panel's Intensity row edits, not a second copy of them:
+   * this writes `minIntensity` and `maxIntensity` into the applied query and the draft together,
+   * so the header and the panel can never disagree about what is being filtered by. Empty
+   * strings mean that end is not bounded, exactly as a blank box in the panel does.
+   */
+  setIntensity: (min: string, max: string) => void
   /** Records what the panel holds. Changes no results; `applyAdvanced` is what searches. */
   setAdvancedDraft: (next: AdvancedQuery) => void
   /** Runs the draft as the query. */
@@ -252,6 +272,9 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const advancedApplied = writable<AdvancedQuery>(emptyAdvanced())
   const advancedDraft = writable<AdvancedQuery>(emptyAdvanced())
   const advancedOpen = writable(false)
+  // The service's own order until asked otherwise, which is what a search engine's first answer
+  // should be: `sort: null` is what the endpoint does when nobody sends one.
+  const sortKey = writable('')
   const activeCount = derived(advancedApplied, advancedCount)
   const draftCount = derived(advancedDraft, advancedCount)
   const advancedDropped = writable(0)
@@ -276,6 +299,9 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   let page = 1
   let instrument: string | null = null
   let difficulty: string | null = null
+  // Read at request time rather than subscribed to, like `instrument` and `difficulty` beside
+  // it: nothing renders from this copy, the store is what the header renders from.
+  let sort = sortFor('')
   let pending: PendingRun | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let controller: AbortController | null = null
@@ -288,7 +314,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     error.set(null)
     try {
       const response = await searchCharts(
-        { search: query, page, instrument, difficulty, advanced: get(advancedApplied) },
+        { search: query, page, instrument, difficulty, sort, advanced: get(advancedApplied) },
         fetchFn,
         {
           signal: controller.signal,
@@ -421,11 +447,59 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     instrument = nextInstrument
     difficulty = nextDifficulty
     filters.set({ instrument, difficulty })
+    // Intensity is measured per instrument and is a no-op without one; see ADVANCED_RANGES.
+    // Going back to "Any instrument" therefore takes the band with it, in the same click and
+    // the same request, and the header's own control visibly returns to Any as it does. Leaving
+    // the numbers set would leave a filter on screen that the answer was not narrowed by.
+    if (instrument === null) clearIntensityFields()
     // A filter change is a click, not typing: skip the debounce, and carry any term still inside
     // it into this run rather than dropping it.
     takePending()
     page = 1
     void run(false)
+  }
+
+  /** Empties both ends of the band in the applied query and in the draft, without running. */
+  function clearIntensityFields(): void {
+    const applied = get(advancedApplied)
+    const draft = get(advancedDraft)
+    const bounded =
+      applied.numbers.minIntensity !== '' ||
+      applied.numbers.maxIntensity !== '' ||
+      draft.numbers.minIntensity !== '' ||
+      draft.numbers.maxIntensity !== ''
+    if (!bounded) return
+    advancedApplied.set(withIntensity(applied, '', ''))
+    advancedDraft.set(withIntensity(draft, '', ''))
+    draftReset.update((n) => n + 1)
+  }
+
+  function withIntensity(query: AdvancedQuery, min: string, max: string): AdvancedQuery {
+    const next = cloneAdvanced(query)
+    next.numbers.minIntensity = min
+    next.numbers.maxIntensity = max
+    return next
+  }
+
+  function setSort(value: string): void {
+    if (value === get(sortKey)) return
+    sortKey.set(value)
+    sort = sortFor(value)
+    // A click, like a filter change: no debounce, and any term still inside one comes along.
+    takePending()
+    page = 1
+    void run(false)
+  }
+
+  function setIntensity(min: string, max: string): void {
+    const applied = get(advancedApplied)
+    if (applied.numbers.minIntensity === min && applied.numbers.maxIntensity === max) return
+    // Written into the draft as well as the applied query, so an open panel shows the band the
+    // header just set rather than the one it used to hold. `draftReset` is what tells the panel
+    // to re-seed the local copy its inputs are bound to; see `advancedDraftReset`.
+    advancedDraft.set(withIntensity(get(advancedDraft), min, max))
+    draftReset.update((n) => n + 1)
+    applyQuery(withIntensity(applied, min, max))
   }
 
   function toggleExpanded(songId: number): void {
@@ -514,12 +588,24 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
 
   function applyAdvanced(): void {
     const next = cloneAdvanced(get(advancedDraft))
-    const narrowing = advancedCount(next) > 0
     // A form with nothing in it, submitted while nothing was applied, is not a question. The
     // panel is a `<form>`, so Enter in any of its thirty controls submits it, and taking the term
     // over for a query that ends up narrowed by nothing threw away what was typed in the search
     // box with nothing left to say so: `advancedDropped` counts filters and there were none.
-    if (!narrowing && get(activeCount) === 0) return
+    if (advancedCount(next) === 0 && get(activeCount) === 0) return
+    applyQuery(next)
+  }
+
+  /**
+   * Make one advanced query the applied one and run it.
+   *
+   * Shared by the panel's Search button and by the header's intensity band, because both are the
+   * same act: a set of advanced fields becoming the question. Anything that only one of them
+   * needs stays in its own caller, which is why the empty-form guard is in `applyAdvanced` and
+   * the draft write is in `setIntensity`.
+   */
+  function applyQuery(next: AdvancedQuery): void {
+    const narrowing = advancedCount(next) > 0
     // A press of Search, like a filter change, is a click rather than typing, and it carries any
     // term still inside the debounce window with it.
     takePending()
@@ -592,8 +678,11 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     advancedOpen: { subscribe: advancedOpen.subscribe },
     hasMore,
     atAutoCap,
+    sort: { subscribe: sortKey.subscribe },
     setQuery,
     setFilters,
+    setSort,
+    setIntensity,
     setAdvancedDraft,
     applyAdvanced,
     clearAdvanced,

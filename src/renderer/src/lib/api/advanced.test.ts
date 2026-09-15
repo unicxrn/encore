@@ -7,7 +7,10 @@ import {
   advancedBody,
   advancedCount,
   cloneAdvanced,
-  emptyAdvanced
+  emptyAdvanced,
+  INTENSITY_CEILINGS,
+  INTENSITY_FLOORS,
+  INTENSITY_SCALE_TOP
 } from './advanced'
 
 describe('advancedBody', () => {
@@ -162,5 +165,45 @@ describe('cloneAdvanced', () => {
     expect(original.numbers.minYear).toBe('')
     expect(original.flags.modchart).toBe(false)
     expect(original.singles.hash).toBe('')
+  })
+})
+
+describe('the intensity bounds the header offers', () => {
+  it('ends the lowest list above the scale the pips draw', () => {
+    // The ratings are not capped at 6: `{instrument: 'guitar', minIntensity: 7}` answers with
+    // 2,419 charts whose diff_guitar reads 7, 8, 9 and 20 (measured 2026-09-15). An open top
+    // option is how this list says so; a list that stopped at 6 would claim a ceiling.
+    const last = INTENSITY_FLOORS[INTENSITY_FLOORS.length - 1]
+    expect(last.value).toBe(String(INTENSITY_SCALE_TOP + 1))
+    expect(last.label).toBe(`${INTENSITY_SCALE_TOP + 1}+`)
+  })
+
+  it('sends the open top as the number it is rather than as the top of the scale', () => {
+    const open = INTENSITY_FLOORS[INTENSITY_FLOORS.length - 1]
+    const query = emptyAdvanced()
+    query.numbers.minIntensity = open.value
+    expect(advancedBody(query).minIntensity).toBe(INTENSITY_SCALE_TOP + 1)
+  })
+
+  it('offers no open top on the highest list, because Any already is one', () => {
+    const last = INTENSITY_CEILINGS[INTENSITY_CEILINGS.length - 1]
+    expect(last.value).toBe(String(INTENSITY_SCALE_TOP))
+    expect(INTENSITY_CEILINGS.map((b) => b.value)).not.toContain(String(INTENSITY_SCALE_TOP + 1))
+  })
+
+  it('opens both lists with a bound that filters nothing', () => {
+    expect(INTENSITY_FLOORS[0].value).toBe('')
+    expect(INTENSITY_CEILINGS[0].value).toBe('')
+    const query = emptyAdvanced()
+    query.numbers.minIntensity = ''
+    query.numbers.maxIntensity = ''
+    expect(advancedBody(query)).toEqual({})
+  })
+
+  it('offers whole tiers only, which is the one thing the endpoint refuses to take fractional', () => {
+    for (const bound of [...INTENSITY_FLOORS, ...INTENSITY_CEILINGS]) {
+      if (bound.value === '') continue
+      expect(Number.isInteger(Number(bound.value))).toBe(true)
+    }
   })
 })

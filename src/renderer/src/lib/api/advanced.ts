@@ -83,12 +83,67 @@ export interface RangeSpec {
  * reading of this as seconds multiplied by 60, which asked for 3 to 6 HOURS and found 16 charts,
  * and a lone maximum of 360 matched 95,284 of the 95,299 charts there are.
  */
+/**
+ * Intensity is per instrument, and only reads as one when an instrument is named.
+ *
+ * Measured against the live service on 2026-09-15. With `instrument: 'guitar'` the bounds mean
+ * exactly what they say: `minIntensity: 5` answers with `diff_guitar` of 5, 6 and 7, and
+ * `maxIntensity: 2` with 1 and 2, every row. With no instrument they mean "some instrument is
+ * in this band", and since an uncharted instrument carries -1, every chart satisfies any
+ * maximum: `maxIntensity: 1` alone answers with 95,093 of the 95,299 charts there are, and
+ * `{minIntensity: 5, maxIntensity: 5}` answers with the same 23,859 as `minIntensity: 5` on its
+ * own. That is why Explore's header disables its intensity control until an instrument is
+ * chosen, and why choosing "Any instrument" clears it.
+ */
 export const ADVANCED_RANGES: readonly RangeSpec[] = [
   { min: 'minLength', max: 'maxLength', label: 'Length', unit: 'min', step: '1' },
   { min: 'minIntensity', max: 'maxIntensity', label: 'Intensity', unit: '', step: '1' },
   { min: 'minAverageNPS', max: 'maxAverageNPS', label: 'Average NPS', unit: '', step: '0.1' },
   { min: 'minMaxNPS', max: 'maxMaxNPS', label: 'Peak NPS', unit: '', step: '0.1' },
   { min: 'minYear', max: 'maxYear', label: 'Year', unit: '', step: '1' }
+]
+
+/**
+ * Where the intensity scale is drawn to stop, which is not where the data stops.
+ *
+ * Clone Hero's own scale runs 0 to 6 and `DiffPips` saturates its six bars there. The ratings
+ * do not: `{instrument: 'guitar', minIntensity: 7}` answers with 2,419 charts whose
+ * `diff_guitar` reads 7, 8, 9 and 20 (measured 2026-09-15). So the header's lowest-intensity
+ * list ends in an open "7+" rather than at 6, and that open end is what says the scale carries
+ * on; the highest list stopping at 6 is a bound the user chose, not a claim about the scale.
+ * Nothing is clamped anywhere: a real 20 is still a 20 in the row's pips and in its name.
+ */
+export const INTENSITY_SCALE_TOP = 6
+
+/** One entry of the header's two intensity lists. A blank value is "not bounded at this end". */
+export interface IntensityBound {
+  readonly value: string
+  readonly label: string
+}
+
+const TIERS = Array.from({ length: INTENSITY_SCALE_TOP }, (_, i) => String(i + 1))
+
+/**
+ * Lowest intensity, as the header offers it.
+ *
+ * 1 to 6 and then 7+, which sends `minIntensity: 7` and has no upper end.
+ */
+export const INTENSITY_FLOORS: readonly IntensityBound[] = [
+  { value: '', label: 'Any' },
+  ...TIERS.map((tier) => ({ value: tier, label: tier })),
+  { value: String(INTENSITY_SCALE_TOP + 1), label: `${INTENSITY_SCALE_TOP + 1}+` }
+]
+
+/**
+ * Highest intensity, as the header offers it.
+ *
+ * Stops at 6 on purpose and offers no open top, because an open top is what "Any" already is.
+ * 0 is missing from both lists: it is a real tier, and "at least 0" and "at most 0" are not
+ * questions a header has to answer. The panel's two boxes take any integer, this one included.
+ */
+export const INTENSITY_CEILINGS: readonly IntensityBound[] = [
+  { value: '', label: 'Any' },
+  ...TIERS.map((tier) => ({ value: tier, label: tier }))
 ]
 
 export type AdvancedSingleField = 'modifiedAfter' | 'hash' | 'trackHash'

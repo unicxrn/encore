@@ -1269,3 +1269,223 @@ describe('how far Explore will append', () => {
     expect(lastBody(fetchFn).page).toBe(2)
   })
 })
+
+describe('result order', () => {
+  it('sends no sort until one is chosen, which is the service deciding', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.sort)).toBe('')
+    expect(lastBody(fetchFn).sort).toBeNull()
+  })
+
+  it('sends the field and the direction the chosen order stands for', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setSort('modifiedTime:desc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'modifiedTime', direction: 'desc' })
+    expect(lastBody(fetchFn).page).toBe(1)
+  })
+
+  it('re-runs from page 1, because page 2 of one order is not page 2 of another', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 500)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await search.loadMore()
+    expect(lastBody(fetchFn).page).toBe(2)
+
+    search.setSort('length:desc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).page).toBe(1)
+    expect(get(search.results).map((c) => c.name)).toEqual(['One'])
+  })
+
+  it('spends nothing on choosing the order that is already on', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('name:asc')
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+    search.setSort('name:asc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn.mock.calls.length).toBe(spent)
+  })
+
+  it('orders the advanced endpoint too, which honours sort as the plain one does', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('artist:asc')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setAdvancedDraft(draftWith((q) => (q.text.name.value = 'bloom')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'artist', direction: 'asc' })
+  })
+
+  it('keeps the order across a filter change and a new term', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('year:desc')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'year', direction: 'desc' })
+
+    search.setQuery('nirvana')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'year', direction: 'desc' })
+  })
+})
+
+describe('the intensity band', () => {
+  it('sends the two advanced fields the panel would have sent', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn)).toMatchObject({
+      instrument: 'guitar',
+      minIntensity: 4,
+      maxIntensity: 5
+    })
+  })
+
+  it('sends a floor above the drawn scale as the number it is, not clamped to six', async () => {
+    // Charters rate past 6 and the service answers on those ratings: `minIntensity: 7` with
+    // guitar chosen answers with diff_guitar of 7, 8, 9 and 20 (measured 2026-09-15). A control
+    // that sent 6 here would quietly answer a different question.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('7', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).minIntensity).toBe(7)
+    expect(lastBody(fetchFn).maxIntensity).toBeUndefined()
+  })
+
+  it('is one filter set with the panel, not a second copy of it', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('drums', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('5', '6')
+    await new Promise((r) => setTimeout(r, 20))
+    // The panel edits this object, so what the header set has to be in it.
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('5')
+    expect(get(search.advancedDraft).numbers.maxIntensity).toBe('6')
+    expect(get(search.advanced).numbers.minIntensity).toBe('5')
+  })
+
+  it('counts toward the filters the closed panel reports', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(1)
+  })
+
+  it('goes with the instrument, because it means nothing without one', async () => {
+    // Measured: with no instrument the band matches "some instrument is in it", and an uncharted
+    // instrument carries -1, so `maxIntensity: 1` alone answers with 95,093 of the 95,299 charts
+    // there are. Leaving the numbers set would leave a filter on screen narrowing nothing.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(2)
+
+    search.setFilters(null, null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(0)
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('')
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+    expect(lastBody(fetchFn).minIntensity).toBeUndefined()
+  })
+
+  it('leaves the rest of the panel alone when it clears the band', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.text.charter.value = 'someone')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('keys', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('3', '')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters(null, null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advanced).text.charter.value).toBe('someone')
+    expect(lastBody(fetchFn).charter).toEqual({ value: 'someone', exact: false, exclude: false })
+    expect(lastBody(fetchFn).minIntensity).toBeUndefined()
+  })
+
+  it('takes the term over, the way the panel does, because the endpoint ignores it', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    globalQuery.set('metallica')
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('5', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).search).toBe('*')
+    expect(get(globalQuery)).toBe('')
+    globalQuery.set('')
+  })
+
+  it('spends nothing on setting the band it is already on', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn.mock.calls.length).toBe(spent)
+  })
+})
