@@ -38,6 +38,13 @@ release.
 
 ### Changed
 
+- Clicking a result in Explore fills that column instead of opening the chart page. The list,
+  the filters, the order and your place in it all stay where they are, so comparing three
+  versions of a song costs three clicks rather than three round trips through a page. The chart
+  page is still there and still has what the column does not, the full difficulty grid, the
+  check for a newer version, and where a chart lives on disk; "All details" in the column is the
+  way to it. Below the 1120px window width where the column is not drawn, a click opens the
+  chart page as it always did, since there is nothing else it could fill.
 - Explore's filter header asks three different questions rather than two. Instrument is which of
   the ten parts Chorus Encore can filter to, difficulty is which charted difficulties exist, and
   intensity is how hard the chart is, which is the same number the rows draw as pips. The last
