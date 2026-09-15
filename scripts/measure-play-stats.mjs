@@ -440,6 +440,43 @@ const FRAME = `(() => {
   }
 })()`
 
+/**
+ * The rail with a chart in it.
+ *
+ * The column is fixed at 374px and its content is not, so the questions are whether anything
+ * inside it overflows that width, whether the art box stayed square once the column decided its
+ * size, and whether the whole column fits its own height or scrolls. jsdom answers all four
+ * with zero.
+ */
+const RAIL = `(() => {
+  const round = (n) => Math.round(n)
+  const rail = document.querySelector('.rail')
+  if (!rail) return { present: false }
+  const box = (el) => el.getBoundingClientRect()
+  const art = rail.querySelector('.art')
+  const viewport = rail.querySelector('.viewport')
+  const health = [...rail.querySelectorAll('.health-row')]
+  const wide = [...rail.querySelectorAll('*')].filter(
+    (el) => round(box(el).right) > round(box(rail).right)
+  )
+  return {
+    present: true,
+    width: round(box(rail).width),
+    // A square art box: the aspect-ratio only holds if the column gave it a width to square.
+    artWidth: art ? round(box(art).width) : null,
+    artHeight: art ? round(box(art).height) : null,
+    viewportWidth: viewport ? round(box(viewport).width) : null,
+    viewportHeight: viewport ? round(box(viewport).height) : null,
+    healthRows: health.length,
+    healthStates: health.map((r) => r.getAttribute('data-state')),
+    title: (rail.querySelector('.title')?.textContent ?? '').trim(),
+    // Anything sticking out past the column's right edge is content the user cannot read.
+    childrenPastRightEdge: wide.length,
+    scrollsSideways: rail.scrollWidth > rail.clientWidth + 1,
+    scrollsDown: rail.scrollHeight > rail.clientHeight + 1
+  }
+})()`
+
 /** Home, which used to carry the panel and now carries none of it. */
 const HOME = `(() => {
   const home = document.querySelector('.home')
@@ -528,6 +565,15 @@ app.whenReady().then(async () => {
   await waitFor(win, `document.querySelector('.badge.plays')`)
   await sleep(500)
   console.log('installed  ', JSON.stringify(await evalIn(win, LIST), null, 1))
+
+  // Opening a chart is what fills the rail, and a rail with something in it is the case where
+  // it can push the frame around: the art box is square and sized off the column, the title
+  // wraps, and the health list grows. Measured after the empty case for that reason.
+  await evalIn(win, `document.querySelector('.row').click(), 1`)
+  await waitFor(win, `document.querySelector('.detail')`)
+  await sleep(400)
+  console.log('rail       ', JSON.stringify(await evalIn(win, RAIL), null, 1))
+  console.log('frame/chart', JSON.stringify(await evalIn(win, FRAME), null, 1))
 
   app.exit(0)
 })

@@ -214,20 +214,25 @@
       <p class="empty-note">Art, instruments, the highway and what the chart is missing.</p>
     </div>
   {:else}
-    <div class="art-box">
+    <!-- Cover beside the name rather than above it. Measured: a full-width square cover put the
+         rail's content at about 920px against the 680 a default 1280x800 window gives it, so
+         the column scrolled on the size most users open. Side by side it is 632px and fits,
+         and the box that gets the height instead is the highway, which is the thing being
+         previewed. -->
+    <div class="head">
       {#if coverUrl}
         <img class="art" src={coverUrl} alt="Album art" onerror={() => (artFailed = true)} />
       {:else}
         <div class="art placeholder"></div>
       {/if}
-    </div>
-    <div class="ident selectable">
-      <!-- Deliberately not a heading. The rail restates the chart the content pane is already
-           headlining, and a second <h2> carrying the same words gives a screen reader two
-           headings for one song. The landmark's own label is what names this column. -->
-      <p class="title" {title}>{title}</p>
-      <p class="artist" title={artist}>{artist || '—'}</p>
-      <p class="charter" title={charter}>{charter ? `Charted by ${charter}` : '—'}</p>
+      <div class="ident selectable">
+        <!-- Deliberately not a heading. The rail restates the chart the content pane is
+             already headlining, and a second <h2> carrying the same words gives a screen reader
+             two headings for one song. The landmark's own label is what names this column. -->
+        <p class="title" {title}>{title}</p>
+        <p class="artist" title={artist}>{artist || '—'}</p>
+        <p class="charter" title={charter}>{charter ? `Charted by ${charter}` : '—'}</p>
+      </div>
     </div>
 
     <section class="preview" aria-label="Preview">
@@ -353,21 +358,27 @@
     color: var(--text-3);
     line-height: var(--lh-prose);
   }
-  .art-box {
-    width: 100%;
-    aspect-ratio: 1;
+  .head {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
   }
   .art {
-    width: 100%;
-    height: 100%;
+    width: 88px;
+    height: 88px;
+    flex-shrink: 0;
     display: block;
     object-fit: cover;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius);
     background: var(--ground-2);
     box-shadow: var(--elev-2);
   }
   .art.placeholder {
     border: 1px solid var(--border-1);
+  }
+  .ident {
+    min-width: 0;
+    flex: 1;
   }
   .title {
     font-size: var(--fs-emphasis);
