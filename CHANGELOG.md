@@ -71,11 +71,12 @@ release.
   one accent that came before: six ground steps, two borders, four steps of elevation, six
   instrument colours, three semantic colours and three radii. The names the components already
   read are now aliases of steps in the new scale, which is why most of it looks unchanged.
-- What did move, on every screen: the dimmest text colour is dimmer, hover states on links and
-  the player's progress are a lighter violet than the pink-violet they were, the wash behind a
-  selected row is a flat colour rather than a tint that changed with whatever it sat on, and
-  hairlines are violet cast rather than white at low opacity. Scrollbar thumbs moved with the
-  hairlines.
+- What did move, on every screen: the dimmest text colour is lighter, and now clears the
+  contrast floor on every surface the app draws it on, which it did not on the darkest of them
+  before. Hover states on links and the player's progress are a lighter violet than the
+  pink-violet they were, the wash behind a selected row is a flat colour rather than a tint that
+  changed with whatever it sat on, and hairlines are violet cast rather than white at low
+  opacity. Scrollbar thumbs moved with the hairlines.
 
 ### Fixed
 
