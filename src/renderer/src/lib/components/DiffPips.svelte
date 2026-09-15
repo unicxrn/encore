@@ -77,12 +77,16 @@
   /* --pip is the instrument's colour, set inline by the script. The fallback here is what an
      instrument key with no colour gets: the neutral text step, drawn uncoloured rather than
      drawn as some other instrument. */
+  /* `flex-shrink: 0` on both the group and the bars inside it. Measured at a 668px view before
+     this line existed: three groups drew 40px between them inside a 40px track, because a flex
+     item's default is to shrink and a 3px bar has plenty of room to shrink into. The width of
+     this thing is the information it carries, so it does not negotiate. */
   .part {
     --pip: var(--text-2);
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    min-width: 0;
+    flex-shrink: 0;
   }
   .letter {
     font-family: var(--font-mono);
@@ -98,6 +102,7 @@
   .pips {
     display: inline-flex;
     gap: 2px;
+    flex-shrink: 0;
   }
   /* 3px wide and 9px tall rather than dots: at this size a column of bars is countable at a
      glance and a row of circles is a texture. Fixed dimensions, so six of them are the same
@@ -106,6 +111,7 @@
     display: block;
     width: 3px;
     height: 9px;
+    flex-shrink: 0;
     border-radius: 1px;
     background: var(--pip);
     /* Unfilled is the same colour held well back, not a second colour: the bar the eye
@@ -119,6 +125,7 @@
      bass sits on the same grid as one with bass. */
   .dash {
     display: block;
+    flex-shrink: 0;
     width: 28px;
     height: 1px;
     background: var(--text-3);

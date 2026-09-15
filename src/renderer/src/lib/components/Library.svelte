@@ -347,6 +347,15 @@
    * Dropping absent instruments here rather than rendering an empty span keeps the `.d + .d`
    * spacing between whichever columns survive. The keys are the scanner's instrument names,
    * which is what `chart.instruments` is compared against.
+   *
+   * Still text, and not the `DiffPips` component Explore's rows use, which is a measurement
+   * rather than an oversight. Three pip groups are 133px wide whatever they say, where these
+   * cells are at most about 60: swapped in and measured with
+   * `VIEW=installed scripts/measure-explore-row.mjs` at a 668px view, which is this column at
+   * the default 1280px window, the title dropped from 112px to 86px. This row has no container
+   * query to fall back on and no slack to give, so adopting the component here means rebuilding
+   * its layout rather than changing what one cell draws. `instrumentDiff` reads the same
+   * `partState` the pips do, so the two still answer from one rule and only the drawing differs.
    */
   function diffCells(chart: ChartRecord): { letter: string; text: string }[] {
     const columns: [letter: string, key: string, diff: number | null][] = [

@@ -747,10 +747,13 @@
              thing in both layouts and switching between them is a change of shape, not of
              subject. They wrap, because a card is 148px wide and a row is not. -->
         <span class="c-diffs">{@render pips(c)}</span>
-        <span class="c-foot">
-          {@render badges(c)}
-          {@render action(c)}
-        </span>
+        <!-- No badges here, unlike the row. A card is 150px wide at the default window, and a
+             badge beside the button either wraps the button onto a line of its own or is clipped
+             by the card's edge; measured, the wrap made cards 21px taller than the ones with no
+             badge, and card heights in a gallery are what the eye lines up on. The grid is for
+             browsing by cover, the list is for comparing charts, and the flags belong with the
+             layout that has room to put them in a column. -->
+        <span class="c-foot">{@render action(c)}</span>
       </div>
     {/snippet}
     <!-- No `onscroll` here: the listener is attached to the element that actually scrolls, which
@@ -1109,7 +1112,7 @@
     display: grid;
     grid-template-columns:
       16px 26px 40px minmax(0, 1fr) minmax(0, 150px)
-      132px 10px 92px 46px;
+      136px 10px 92px 46px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1296,18 +1299,22 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Wrapping, unlike the row's, because a card is 148px and three parts do not fit across it.
+  /* `nowrap`, and the same 6px between parts the row uses, which together draw 133px. A card is
+     at least 148px wide and loses 12 to its padding, so the three groups fit with 3px to spare
+     and the overflow rule is the belt rather than the plan: a wrap here would make one card
+     taller than the ones beside it, and a gallery lines its cards up by their edges.
+
      `margin-top: auto` on the foot pins the action to the bottom of every card, so a column of
      cards has its buttons on one line whatever length of title each one carries. */
   .c-diffs {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow: hidden;
     margin-top: 4px;
   }
   .c-foot {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
     margin-top: auto;
@@ -1322,8 +1329,8 @@
     color: var(--text-3);
     border: 1px solid var(--hairline);
     border-radius: 3px;
-    padding: 1px 4px;
-    line-height: var(--lh-snug);
+    padding: 0 4px;
+    line-height: var(--lh-tight);
     white-space: nowrap;
     flex-shrink: 0;
   }
@@ -1340,6 +1347,9 @@
   .song-indented {
     padding-left: 14px;
   }
+  /* `overflow: hidden` so the chips on this line clip against the cell rather than painting
+     over the column beside it and dragging the whole list sideways, and a floor under the
+     title below so the thing that gives way is a badge and not the chart's name. */
   .title {
     font-size: var(--fs-body);
     font-weight: 600;
@@ -1349,6 +1359,7 @@
     align-items: center;
     gap: 5px;
     min-width: 0;
+    overflow: hidden;
   }
   /* The title is the row's own button, and the row around it is a plain container,
      because a button cannot hold the version toggle beside it. Reset to look like
@@ -1366,7 +1377,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    min-width: 0;
+    /* Roughly eight characters, and the point at which the chips beside it start losing
+       instead. Everything else on this line is `flex-shrink: 0`, so without a floor the title
+       is the only thing that can give: measured at a 509px view before the layout below
+       existed, a row carrying a version chip and two badges gave its title a 0px box. A row
+       that shows no title at all has stopped being a result. */
+    min-width: 64px;
     flex: 0 1 auto;
   }
   /* Sub-row title is slightly quieter */
@@ -1403,13 +1419,13 @@
     background: none;
     border: 1px solid var(--hairline);
     border-radius: 3px;
-    padding: 1px 4px;
+    padding: 0 4px;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
     cursor: pointer;
-    line-height: var(--lh-snug);
+    line-height: var(--lh-tight);
     vertical-align: middle;
     flex-shrink: 0;
   }
@@ -1429,9 +1445,9 @@
     color: var(--text-3);
     border: 1px solid var(--hairline);
     border-radius: 3px;
-    padding: 1px 4px;
+    padding: 0 4px;
     vertical-align: middle;
-    line-height: var(--lh-snug);
+    line-height: var(--lh-tight);
   }
   /* 6px between the three parts, which is half the 12px that separates a part's letter from
      the next part's pips. The gap inside a group has to read as smaller than the gap between
@@ -1494,12 +1510,17 @@
   }
   /* The flags that survived the cut, drawn like the version chip beside them: they label the
      chart, they are not something to press. */
+  /* `--lh-tight` and no vertical padding, so a chip on the title line is 17px against the
+     title's own 17.5px and the line does not grow around it. Measured at a 668px view with the
+     snug leading these had first: rows with a badge were 70px and rows without were 66px, which
+     is a list that steps as you scan it. `.ver-chip` below carries the same two values for the
+     same reason, and it is the one that has been making rows tall since 0.1.0. */
   .badge {
     border: 1px solid var(--hairline);
     border-radius: 3px;
-    padding: 1px 4px;
+    padding: 0 4px;
     color: var(--text-3);
-    line-height: var(--lh-snug);
+    line-height: var(--lh-tight);
     white-space: nowrap;
     flex-shrink: 0;
     cursor: help;
@@ -1520,35 +1541,92 @@
      one field here that is also on the chart Detail one click away. Everything else is either
      the chart's identity or a reason to download it.
 
-     760px is where the nine tracks stop leaving the title a readable share. Below it the same
-     row is two lines: the cover spans both, the charter drops under the song, and the three
-     columns at the end stay put, so the difficulty and the action are still a column the eye
-     can run down. Measured, not guessed: `scripts/measure-explore-row.mjs` reports the numbers
-     at every width the shell supports. The narrowest is 509px, which is this column at a
-     1121px window, the first width at which the rail appears. */
-  @container results (max-width: 759px) {
+     900px is where the nine tracks stop leaving the title a readable share, and it is a measured
+     number rather than a guessed one. At 788px, which is this column at a 1400px window, the
+     nine tracks left the song 160px and six of twenty-five titles hit their floor at 64px.
+     Below 900 the same row is two lines: the cover spans both, the charter drops under the
+     song, and the three columns at the end stay put, so the difficulty and the action are still
+     a column the eye can run down. That buys the title 502px at the same 1120px window where
+     the wide layout would have given it 254.
+
+     `scripts/measure-explore-row.mjs` reports all of this at every width the shell supports. */
+  @container results (max-width: 899px) {
     .row {
-      grid-template-columns: 16px 40px minmax(0, 1fr) 132px 10px 92px;
+      grid-template-columns: 16px 44px minmax(0, 1fr) 136px 10px 92px;
       grid-template-rows: auto auto;
-      row-gap: 2px;
+      row-gap: 1px;
     }
     .row .num,
     .row .len {
       display: none;
     }
+    /* Every child placed by hand rather than two of them placed and the rest left to fall
+       where they may. Auto-placement runs in passes, and an item with a definite row and an
+       automatic column is resolved in a different pass from one with neither, so the first
+       version of this block put the song in a 92px track and the difficulty in a 40px one.
+       Nine children into six tracks has no reading that can be left to inference. */
+    .row .pick {
+      grid-area: 1 / 1 / 3 / 2;
+    }
     .row .cover {
-      grid-row: 1 / 3;
+      grid-area: 1 / 2 / 3 / 3;
       width: 44px;
       height: 44px;
     }
-    .row .charter {
-      grid-column: 3 / 4;
-      grid-row: 2 / 3;
+    .row .song {
+      grid-area: 1 / 3 / 2 / 4;
     }
-    .row .diffs,
-    .row .health,
+    .row .charter {
+      grid-area: 2 / 3 / 3 / 4;
+    }
+    .row .diffs {
+      grid-area: 1 / 4 / 3 / 5;
+    }
+    .row .health {
+      grid-area: 1 / 5 / 3 / 6;
+    }
     .row .act {
-      grid-row: 1 / 3;
+      grid-area: 1 / 6 / 3 / 7;
+    }
+  }
+  /* The narrowest the view column ever gets, which is 509px: a 1121px window, the first width
+     at which the 374px rail appears and takes its share back from a column that had 882px at
+     1120px. Six tracks do not fit in it. Two lines became three: the difficulty moves under the
+     charter and the health mark under the button, so the row keeps saying all of it and says it
+     down instead of across.
+
+     Measured, not guessed. With the six-track layout at this width the song column was 129px,
+     and after a version chip and two badges took their fixed share the title was left a 0px
+     box. `scripts/measure-explore-row.mjs` at SIZE=1121x800 is where that number comes from. */
+  @container results (max-width: 559px) {
+    .row {
+      grid-template-columns: 16px 40px minmax(0, 1fr) 92px;
+      grid-template-rows: auto auto auto;
+    }
+    .row .pick {
+      grid-area: 1 / 1 / 4 / 2;
+    }
+    .row .cover {
+      grid-area: 1 / 2 / 4 / 3;
+      width: 40px;
+      height: 40px;
+    }
+    .row .song {
+      grid-area: 1 / 3 / 2 / 4;
+    }
+    .row .charter {
+      grid-area: 2 / 3 / 3 / 4;
+    }
+    .row .diffs {
+      grid-area: 3 / 3 / 4 / 4;
+    }
+    .row .act {
+      grid-area: 1 / 4 / 2 / 5;
+    }
+    /* On the difficulty's line rather than the button's: the two are what the row says about
+       the chart itself, and the button is what the user does about it. */
+    .row .health {
+      grid-area: 3 / 4 / 4 / 5;
     }
   }
   .more-row {

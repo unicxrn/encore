@@ -60,6 +60,9 @@ window.encore = new Proxy(
   {
     get(_target, key) {
       if (typeof key !== 'string') return undefined
+      // A value rather than a call: Explore's rows read this one synchronously, to decide
+      // whether scan-chart's badVideo is a fault here or a note about somewhere else.
+      if (key === 'platform') return process.platform
       if (key.startsWith('on')) return () => () => {}
       return (...args) => Promise.resolve(answers[key] ? answers[key](...args) : undefined)
     }
