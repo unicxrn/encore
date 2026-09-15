@@ -27,6 +27,45 @@ const INSTRUMENT_ORDER: readonly { key: string; label: string }[] = [
   { key: 'guitarcoopghl', label: 'Co-op (GHL)' }
 ]
 
+/**
+ * The part each instrument key plays, which is the thing its colour names.
+ *
+ * Ten keys, six parts. Guitar co-op is guitar; the four GHL entries are guitar, bass, rhythm
+ * and guitar co-op on a six-fret controller. A controller is not a part, so it is not a hue:
+ * see the instruments block in tokens.css for why colour is spent on the axis a player scans
+ * for and not on the one that is already spelled out in the label beside it.
+ *
+ * Vocals is here without being in INSTRUMENT_ORDER, which is correct and not an oversight: it
+ * is metadata rather than a playable track (PreviewPane says so), so it never appears as a
+ * matrix row, but the catalog stores a vocals difficulty and anything that colours one needs
+ * the same answer this gives everything else.
+ */
+const INSTRUMENT_PART: Record<string, string> = {
+  guitar: 'guitar',
+  guitarcoop: 'guitar',
+  guitarghl: 'guitar',
+  guitarcoopghl: 'guitar',
+  bass: 'bass',
+  bassghl: 'bass',
+  rhythm: 'rhythm',
+  rhythmghl: 'rhythm',
+  drums: 'drums',
+  keys: 'keys',
+  vocals: 'vocals'
+}
+
+/**
+ * The custom property holding an instrument's colour, or null for a key with no part.
+ *
+ * A name rather than a value, so the colour itself stays in tokens.css and this file holds only
+ * the mapping. Null rather than a fallback colour: a caller that meets an instrument key this
+ * app has never heard of should draw it uncoloured, not draw it as guitar.
+ */
+export function instrumentColorVar(instrument: string): string | null {
+  const part = INSTRUMENT_PART[instrument]
+  return part === undefined ? null : `--inst-${part}`
+}
+
 // API difficulty names → matrix column keys (user requirement: easy→E, medium→M, hard→H, expert→X).
 const DIFF_MAP: Record<string, DiffKey> = {
   easy: 'E',

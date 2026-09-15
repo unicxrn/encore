@@ -117,13 +117,35 @@
      be told apart from each other, and from a selection, at --fs-caption. Each measures at
      least 4.6:1 on every ground step, which is --inst-bass on --ground-5.
 
-     Five colours against the ten instruments the matrix can list. Rhythm and the four GHL
-     variants have none, and will need either their own steps or a rule that derives them. */
+     ── the rule, for the ten instruments the matrix can list ──
+     A hue names the PART. Nothing else gets a hue.
+
+     Clone Hero has six parts (guitar, rhythm, bass, drums, keys, vocals) and ten entries in
+     INSTRUMENT_ORDER, because four of those entries are the same part on a different
+     controller: guitar co-op is guitar, and the GHL four are guitar, bass, rhythm and guitar
+     co-op on a six-fret guitar. So they take their part's colour, and `instrumentColor` in
+     matrix.ts is the one place that mapping lives.
+
+     What that spends and what it buys. It spends the ability to tell guitar from guitar (GHL)
+     by colour alone, and it buys back the thing colour is actually for here, which is telling
+     guitar from bass from drums at 12px. The variant is not lost: every one of those rows is
+     labelled "(GHL)" or "co-op" in words, right beside the colour, so the distinction colour
+     would have carried is already carried by the only channel that can carry it unambiguously.
+     Five invented hexes would have said the opposite: that which controller a track is for
+     matters as much as which instrument it is.
+
+     That leaves exactly one new value rather than five, because rhythm is a part and had none.
+     Its hue is derived rather than picked: sorted by hue the five existing steps sit at 0, 42,
+     173, 218 and 277 degrees, the widest gap between neighbours is the 130 between drums and
+     vocals, and 107 is its midpoint. Saturation and lightness are the family's (62%, 58%), so
+     the new step is the same kind of colour as the others and not a brighter one. It measures
+     8.1:1 on --ground-5 and 10.7:1 on --bg, well clear of the 4.6 floor the set holds. */
   --inst-guitar: #ff5a5a;
   --inst-bass: #4b8dff;
   --inst-drums: #ffc53d;
   --inst-keys: #c76bff;
   --inst-vocals: #2dd4bf;
+  --inst-rhythm: #6ed651;
 
   /* ── semantic ──────────────────────────────────────────────────────────────
      Outside the accent family on purpose. Selection in this app is violet, so a warning drawn
@@ -145,9 +167,13 @@
      contact edge, because a single blur at that size reads as a glow around the box rather than
      as the box being off the surface.
 
-     Nothing reads these yet. The six components that float still carry their own box-shadow
-     literals; moving them onto these steps changes what the app looks like, which is a later
-     step of the redesign and not this one. */
+     Every floating surface in the app now reads one of these, by what it is: the downloads
+     panel is --elev-3, the five dialogs (the tour, what's new, the update prompt, the shortcut
+     sheet and the Issues repair confirmation) are --elev-4, and the rail's card and art are
+     --elev-2. --elev-1 is the row step, spent so far on the rail's health card's neighbour
+     rows; the app's list rows are separated by hairlines rather than by shadow and are
+     deliberately left that way, because a shadow under every row of a thousand-row list is a
+     texture rather than a depth cue. */
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --elev-2: 0 4px 14px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   --elev-3: 0 18px 44px rgba(0, 0, 0, 0.62), 0 4px 12px rgba(0, 0, 0, 0.45);

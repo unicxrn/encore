@@ -159,7 +159,8 @@
     background: var(--surface-1);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    /* A dialog, on the elevation scale's top step with the app's four other dialogs. */
+    box-shadow: var(--elev-4);
     padding: 20px;
   }
   .card:focus-visible {

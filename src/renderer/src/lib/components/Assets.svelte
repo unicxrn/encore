@@ -744,8 +744,24 @@
   /* Selection reads as an accent wash that fades out across the row, with the
      accent tick on the leading edge. Same vocabulary as the sidebar's active
      item, without filling the row with accent. */
+  /* The end stop was `rgba(139, 92, 246, 0)`, a literal of the accent's old hue, written when
+     --accent-dim WAS that hue at 14% alpha and the run was one colour fading out. --accent-dim
+     is an opaque #1d1440 now, so the two ends no longer share a hue and the literal is a stale
+     copy of a value that moved. It has not been repainting the row: CSS interpolates gradients
+     with premultiplied alpha, so a stop at alpha 0 contributes no colour at all and the run is
+     still --accent-dim fading to nothing. Measured: a 400px strip of each spelling sampled off
+     an offscreen Chromium bitmap reads 29,20,63 / 26,18,58 / 24,17,52 / 19,14,41 / 14,11,30 /
+     10,9,20 at x 0, 50, 100, 200, 300, 399, identically for both, ending on the page's own
+     10,9,20. Monotonically darker, and the same pixels either way. What the literal IS is a
+     hardcoded colour that answers to nothing in tokens.css and would start mattering the moment
+     anyone wrote `rgba(..., 0.01)` into it. `transparent` says the same thing and cannot drift.
+
+     --elev-1 with it: the selected row is the one row in this app that is picked up off its
+     list, which is exactly what the elevation scale's row step is for. Applied to `.sel` only,
+     never to `.row`: a shadow under every row of a list this long is a texture, not a depth. */
   .row.sel {
-    background: linear-gradient(90deg, var(--accent-dim), rgba(139, 92, 246, 0));
+    background: linear-gradient(90deg, var(--accent-dim), transparent);
+    box-shadow: var(--elev-1);
   }
   .row.sel::before {
     content: '';

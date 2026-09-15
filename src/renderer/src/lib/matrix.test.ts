@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countInstruments, diffMatrix } from './matrix'
+import { countInstruments, diffMatrix, instrumentColorVar } from './matrix'
 import type { MatrixRow } from './matrix'
 
 describe('diffMatrix', () => {
@@ -222,5 +222,59 @@ describe('countInstruments', () => {
       { instrument: 'guitar', difficulty: 'expert', count: 5 }
     ])
     expect(counts).toBe(1)
+  })
+})
+
+/**
+ * Colour is per PART, not per controller.
+ *
+ * The rule tokens.css states: six parts get six hues, and the four entries that are the same
+ * part on a six-fret controller take their part's hue rather than one of their own. These pin
+ * that mapping, because the alternative reading (ten keys, ten colours) is the one somebody
+ * will reach for the first time a GHL row looks like a guitar row.
+ */
+describe('instrumentColorVar', () => {
+  it('gives every instrument the matrix can list a colour', () => {
+    const listed = diffMatrix(
+      [
+        'guitar',
+        'bass',
+        'drums',
+        'keys',
+        'rhythm',
+        'guitarcoop',
+        'guitarghl',
+        'bassghl',
+        'rhythmghl',
+        'guitarcoopghl'
+      ].map((instrument) => ({ instrument, difficulty: 'expert', count: 1 }))
+    )
+    expect(listed).toHaveLength(10)
+    for (const row of listed) expect(instrumentColorVar(row.instrument)).not.toBeNull()
+  })
+
+  it('colours a GHL or co-op track as the part it plays', () => {
+    expect(instrumentColorVar('guitarcoop')).toBe('--inst-guitar')
+    expect(instrumentColorVar('guitarghl')).toBe('--inst-guitar')
+    expect(instrumentColorVar('guitarcoopghl')).toBe('--inst-guitar')
+    expect(instrumentColorVar('bassghl')).toBe('--inst-bass')
+    expect(instrumentColorVar('rhythmghl')).toBe('--inst-rhythm')
+  })
+
+  it('gives the six parts six different colours', () => {
+    const vars = ['guitar', 'rhythm', 'bass', 'drums', 'keys', 'vocals'].map(instrumentColorVar)
+    expect(new Set(vars).size).toBe(6)
+  })
+
+  // Vocals is not a matrix row (it is metadata, never playable) but the catalog stores a
+  // difficulty for it, so anything colouring that needs the same answer.
+  it('answers for vocals, which is not in the matrix order', () => {
+    expect(instrumentColorVar('vocals')).toBe('--inst-vocals')
+  })
+
+  // A fallback here would paint an unknown track as guitar, which is worse than painting it
+  // as nothing: the colour would be a claim about which instrument it is.
+  it('refuses to guess for a key it has never heard of', () => {
+    expect(instrumentColorVar('theremin')).toBeNull()
   })
 })

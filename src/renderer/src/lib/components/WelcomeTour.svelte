@@ -265,7 +265,8 @@
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
     padding: 14px 20px 18px;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    /* A dialog, on the elevation scale's top step with the app's four other dialogs. */
+    box-shadow: var(--elev-4);
   }
   /* Focused on open and after every step (see `go`); a container, not a control, so no ring. */
   .card:focus-visible {

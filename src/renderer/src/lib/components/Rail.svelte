@@ -4,7 +4,7 @@
   import { artUrl } from '../../../../shared/art'
   import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
   import { localHealth, remoteHealth, healthSummary } from '../chart-health'
-  import { diffMatrix, type DiffKey } from '../matrix'
+  import { diffMatrix, instrumentColorVar, type DiffKey } from '../matrix'
   import { encore } from '../stores/bridge'
   import {
     nowPlaying,
@@ -79,6 +79,7 @@
   })
 
   let instrument = $state('guitar')
+  const instrumentVar = $derived(instrumentColorVar(instrument))
   let difficulty = $state('expert')
 
   // Keep the two selections answerable by the chart in front of us. Written the way the chart
@@ -264,7 +265,16 @@
 
     <section class="picks" aria-label="Preview track">
       <label class="pick">
-        <span class="pick-label mono">INSTRUMENT</span>
+        <span class="pick-label mono">
+          <!-- The part's colour, from the one mapping that owns it (instrumentColorVar). A
+               swatch rather than a coloured label: the word has to stay readable at
+               --fs-caption, and an instrument hue is chosen to be told apart from four other
+               hues, not to carry 12px text. Decorative; the word beside it is the label. -->
+          {#if instrumentVar}
+            <span class="swatch" style="background: var({instrumentVar})" aria-hidden="true"></span>
+          {/if}
+          INSTRUMENT
+        </span>
         <select bind:value={instrument} onchange={reopenIfPlaying}>
           {#each instrumentList as opt (opt.value)}
             <option value={opt.value}>{opt.label}</option>
@@ -468,6 +478,9 @@
     gap: 4px;
   }
   .pick-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
@@ -483,12 +496,18 @@
     padding: 5px 6px;
     cursor: pointer;
   }
+  .swatch {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
   .health {
     background: var(--ground-2);
     border: 1px solid var(--border-1);
     border-radius: var(--radius);
     padding: 10px 12px;
-    box-shadow: var(--elev-1);
+    box-shadow: var(--elev-2);
   }
   .health-head {
     display: flex;

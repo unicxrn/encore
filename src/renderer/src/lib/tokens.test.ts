@@ -212,6 +212,9 @@ const COLOUR_TOKENS = [
   '--inst-drums',
   '--inst-keys',
   '--inst-vocals',
+  // Rhythm is a part and had no hue. It is here rather than the four GHL keys because those are
+  // not parts: see instrumentColorVar in matrix.ts, which is where that mapping is pinned.
+  '--inst-rhythm',
   '--success',
   '--warning',
   '--danger'
@@ -278,5 +281,25 @@ describe('colour and elevation tokens', () => {
       }
     }
     expect([...missing]).toEqual([])
+  })
+
+  /**
+   * Depth comes from the scale, not from a number somebody liked.
+   *
+   * The six literals this replaced were `0 12px 32px rgba(0,0,0,.5)` once and
+   * `0 18px 50px rgba(0,0,0,.5)` five times, which is not two decisions; it is one decision
+   * copied five times and a second one made in isolation. The realistic regression is the next
+   * floating thing landing with a sixth copy pasted from the file next to it, so what is pinned
+   * is that no component spells a shadow out at all.
+   */
+  it('leaves no component spelling out a box-shadow of its own', () => {
+    const literals: string[] = []
+    for (const file of sourceFiles) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/box-shadow:\s*([^;]+);/g)) {
+        if (!/^var\(--elev-[1-4]\)$/.test(m[1].trim()))
+          literals.push(`${file.split('/').pop()} ${m[1].trim()}`)
+      }
+    }
+    expect(literals).toEqual([])
   })
 })
