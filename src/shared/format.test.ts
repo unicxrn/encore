@@ -5,6 +5,7 @@ import {
   formatBytes,
   instrumentDiff,
   msToTime,
+  partState,
   playedOn,
   stripRichText
 } from './format'
@@ -37,6 +38,39 @@ describe('diffDisplay', () => {
   it("shows song.ini's -1 sentinel as unrated, never as a number", () => {
     // Real data: "Asking Alexandria - Believe" has diff_bass = -1. Shown raw it reads "B-1".
     expect(diffDisplay(-1)).toBe('–')
+  })
+})
+
+describe('partState', () => {
+  it('reports a rating as rated, carrying the tier', () => {
+    expect(partState(['guitar'], 'guitar', 4)).toEqual({ kind: 'rated', tier: 4 })
+  })
+  it('reports a rating of zero as rated, not as an absent part', () => {
+    // The one confusion this type exists to stop. Zero is a number song.ini wrote down; the
+    // sentinel for "no such part" is -1, and treating the two alike hides a charted track.
+    expect(partState(['guitar'], 'guitar', 0)).toEqual({ kind: 'rated', tier: 0 })
+  })
+  it("reports song.ini's -1 sentinel on a charted part as unrated", () => {
+    expect(partState(['guitar'], 'guitar', -1)).toEqual({ kind: 'unrated' })
+    expect(partState(['guitar'], 'guitar', null)).toEqual({ kind: 'unrated' })
+  })
+  it('reports a part the notes do not contain as absent', () => {
+    expect(partState(['guitar'], 'bass', -1)).toEqual({ kind: 'absent' })
+  })
+  it('lets the note data outrank a rating for a part the chart does not contain', () => {
+    // Measured on api.enchor.us 2026-09-15: six charts in a hundred rate a part their notes
+    // lack. scan-chart raises `extraValue` for exactly this and calls it a conversion
+    // artifact, so the notes are the answer and the rating is the stale copy.
+    expect(partState(['guitar'], 'bass', 4)).toEqual({ kind: 'absent' })
+  })
+  it('falls back to the rating when the note data was never read', () => {
+    expect(partState([], 'bass', 4)).toEqual({ kind: 'rated', tier: 4 })
+    expect(partState([], 'bass', null)).toEqual({ kind: 'unrated' })
+  })
+  it('carries a tier past the top of the scale rather than clamping it', () => {
+    // Real data, same sample: diff_guitar of 20 and several of 7 and 8. Where the scale stops
+    // is a rendering decision, so it belongs to whatever draws this and not to the fact.
+    expect(partState(['guitar'], 'guitar', 20)).toEqual({ kind: 'rated', tier: 20 })
   })
 })
 
