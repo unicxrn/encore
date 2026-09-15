@@ -1,30 +1,89 @@
-/* M4 mockup design tokens: violet-cast near-black, purple accent family, hairlines. */
+/* Design tokens.
+   The colour scale here is the redesign's. The type scale, the leading, the timings and the
+   stacking below it are the ones that were already in this file and are unchanged.
+
+   Two things about its shape. The ground is a six step scale rather than the two surfaces it
+   replaces, because depth is the thing the old palette could not express: with one background
+   and two panels, every panel sat on the same plane, and restyling does not move a plane that
+   does not exist.
+
+   And the names the components read today (--bg, --surface-1, --surface-2, --hairline,
+   --accent-text, --focus-ring) are kept as `var()` aliases INTO the new scale rather than as
+   values of their own. An alias cannot drift from what it aliases; two literals can, and will,
+   the first time someone edits one of them. Later steps of the redesign move call sites onto
+   the scale and delete the aliases; until then there is one system, read through two sets of
+   names, rather than two systems. */
 :root {
-  --bg: #0b0a10;
-  --surface-1: #14121b;
-  --surface-2: #1a1725;
-  --hairline: rgba(255, 255, 255, 0.07);
-  --text-1: #f2f2f4;
-  --text-2: #9b9ba6;
-  /* Contrast on the darkest and lightest app surfaces (measured, WCAG 2.1):
-       text-1  17.6:1 on --bg, 15.7:1 on --surface-2
-       text-2   7.2:1 on --bg,  6.4:1 on --surface-2
-       text-3   5.8:1 on --bg,  5.2:1 on --surface-2
-     text-3 was #5c5c66, which measures 3.0:1 on --bg and 2.7:1 on --surface-2,
-     under AA even for large text, and it carries the small mono labels (downloads panel,
-     sidebar versions, card headers) where legibility matters most. */
-  --text-3: #8a8a99;
+  /* ── ground ────────────────────────────────────────────────────────────────
+     Six steps, darkest first. The neutrals are not grey: every step runs blue ahead of red
+     ahead of green, so the surfaces sit in the same family as the accent and read as chosen
+     rather than as whatever grey came with the framework.
+
+     The window is step 1 and not step 0. Step 0 is the recessed plane, for anything that sits
+     BELOW the window's own ground: a search field, an inset list, a well. That spends one step
+     downward and leaves four upward, which is what rows, cards, popovers and dialogs need. */
+  --ground-0: #070610; /* recessed: wells and inset fields. */
+  --ground-1: #0a0914; /* the window itself. */
+  --ground-2: #0f0d1b; /* a row or a list band lifted off the window. */
+  --ground-3: #161326; /* a card or a panel. */
+  --ground-4: #1e1930; /* a control on a card, and a popover. */
+  --ground-5: #2a2340; /* the top step: a hovered control, a selected row. */
+
+  /* Two borders, because a hairline has two jobs. --border-1 divides things that are on the
+     same plane and should be barely there. --border-2 outlines something that has been picked
+     out, and has to carry across the window.
+
+     Both are opaque, where the --hairline they replace was 7% white. Against every ground step
+     from 0 to 4 they are still a lightening, so nothing inverts at an existing call site, but a
+     hairline drawn ON --ground-5 needs --border-2: it is the only one lighter than that step. */
+  --border-1: #221c36;
+  --border-2: #322a4c;
+
+  /* The surface names the components read, pointed at the steps closest to what they held. */
+  --bg: var(--ground-1);
+  --surface-1: var(--ground-3);
+  --surface-2: var(--ground-4);
+  --hairline: var(--border-1);
+
+  /* ── text ──────────────────────────────────────────────────────────────────
+     Three levels, violet cast to match the ground. Contrast on the three surfaces the app
+     actually sets text on (WCAG 2.1, computed from the values in this file):
+
+                   --bg   --surface-1  --surface-2
+       --text-1   17.7:1     16.3:1       15.2:1
+       --text-2    8.1:1      7.4:1        6.9:1
+       --text-3    3.7:1      3.4:1        3.2:1
+
+     --text-3 is the line to read twice. AA for text under 18px is 4.5:1, and --text-3 is under
+     it on every surface in the app while carrying the small mono labels: the downloads panel,
+     the sidebar versions, the card headers, the difficulty matrix. It held #8a8a99 before this,
+     which measured 5.8:1 and 5.0:1 on the equivalent surfaces, and that value was itself put
+     there to replace a #5c5c66 that failed in exactly this way.
+
+     The value below is the approved one and is what ships. The measurement is written down so
+     that it is a decision on the record rather than something the next reader has to discover,
+     and so that reversing it is a change to one number. */
+  --text-1: #f4f1fb;
+  --text-2: #a9a1c2;
+  --text-3: #6e6789;
+
+  /* ── accent ────────────────────────────────────────────────────────────────
+     Four steps of one violet: --accent fills, --accent-hi is the lighter one that hover states
+     and small text take, --accent-tint is the lightest, and --accent-dim is the wash that marks
+     a selected row.
+
+     Why small text does not use --accent itself: it measures 4.7:1 on --bg, 4.3:1 on
+     --surface-1 and 4.0:1 on --surface-2, which is under AA below 18px on two of the three.
+     --accent-hi measures 7.3:1, 6.7:1 and 6.2:1 on the same three. Fills, borders and
+     display-size type keep --accent, which is what makes the lighter step still read as the
+     same violet rather than as a second colour. */
   --accent: #8b5cf6;
-  --accent-hi: #a855f7;
-  /* The accent as a colour for SMALL text. --accent measures 4.38:1 on --surface-1, where
-     the sidebar's status card draws its two links, and 4.16:1 on --surface-2, under AA for
-     anything below 18px. --accent-hi is 4.69:1 and 4.45:1 on the same two, a pass on one
-     surface and a fail on the other. #a78bfa is the same hue two steps lighter (WCAG 2.1,
-     computed against this palette):
-       7.2:1 on --bg, 6.8:1 on --surface-1, 6.5:1 on --surface-2
-     For text at caption and secondary sizes only; fills, borders and display-size type keep
-     --accent and --accent-hi, which is what makes it still read as the same violet. */
-  --accent-text: #a78bfa;
+  --accent-hi: #a78bfa;
+  --accent-tint: #cdbefe;
+  /* Opaque, where this was rgba(139, 92, 246, 0.14). A translucent wash is a different colour
+     on every surface it lands on, which is the one thing a selection marker must not be: the
+     same selected row read as one colour in a list on --bg and another in a card. */
+  --accent-dim: #1d1440;
   /* The primary-button fill, and the Home hero's ground. White text rides on it, so the
      LIGHT end is the number that matters: measured across a rendered Download button the
      white label fell to 4.21:1 at the right edge (4.5 is AA for text this size), and a pure
@@ -32,26 +91,83 @@
      on it and 5.70:1 on the #7c3aed start, so the label clears AA along the whole run. The
      hero paints a 62%→18% black overlay on top of this, so the change is invisible there. */
   --accent-grad: linear-gradient(135deg, #7c3aed, #9333ea);
-  --accent-dim: rgba(139, 92, 246, 0.14);
+  /* The accent as a colour for small text. Its own step now, rather than a fourth value: the
+     scale's second step is exactly what this was, so it is that step under the name the
+     components already ask for. */
+  --accent-text: var(--accent-hi);
   /* The keyboard focus ring. One colour, used by the one `:focus-visible` rule
      below, so every control in the app is outlined the same way.
 
-     A light tint of the accent rather than the accent itself: `--accent`
-     (#8b5cf6) measures 4.66:1 against --bg and 4.16:1 against --surface-2
-     (recomputed; an earlier version of this note said 4.23 and 2.7, which
-     match nothing in this palette). That clears the 3:1 a non-text indicator
-     needs, but a ring dimmer than the text it surrounds is the one you look past.
-     #c4b5fd measures (WCAG 2.1, computed against this palette):
-       10.7:1 on --bg, 10.1:1 on --surface-1, 9.5:1 on --surface-2
-     The 2px offset below is what keeps those the numbers that matter: the ring
-     is always drawn on the surface BEHIND the control, never on the control's
-     own fill, which is why a focused accent button or the near-white primary
+     The lightest accent step rather than the accent itself: a ring dimmer than the text it
+     surrounds is the one you look past. --accent-tint measures 11.7:1 on --bg, 10.7:1 on
+     --surface-1 and 10.0:1 on --surface-2. The 2px offset below is what keeps those the
+     numbers that matter: the ring is always drawn on the surface BEHIND the control, never on
+     the control's own fill, which is why a focused accent button or the near-white primary
      button in the Home hero still gets a ring you can see. */
-  --focus-ring: #c4b5fd;
+  --focus-ring: var(--accent-tint);
+
+  /* ── instruments ───────────────────────────────────────────────────────────
+     Data rather than decoration: these colour the instrument filters and the per-instrument
+     difficulty indicators, so one instrument is one colour everywhere it appears. Named by the
+     instrument key the catalog and the Encore API already use (INSTRUMENT_ORDER in
+     `renderer/src/lib/matrix.ts`), so a component composes the custom property name from the
+     key it is already holding instead of keeping a second lookup table beside it.
+
+     Spread around the wheel and deliberately outside the violet family: their whole job is to
+     be told apart from each other, and from a selection, at --fs-caption. Each measures at
+     least 4.6:1 on every ground step, which is --inst-bass on --ground-5.
+
+     Five colours against the ten instruments the matrix can list. Rhythm and the four GHL
+     variants have none, and will need either their own steps or a rule that derives them. */
+  --inst-guitar: #ff5a5a;
+  --inst-bass: #4b8dff;
+  --inst-drums: #ffc53d;
+  --inst-keys: #c76bff;
+  --inst-vocals: #2dd4bf;
+
+  /* ── semantic ──────────────────────────────────────────────────────────────
+     Outside the accent family on purpose. Selection in this app is violet, so a warning drawn
+     in violet reads as a selection, and the moments these three exist for (a repair that
+     failed, an issue found, a fix that worked) are the moments where that must not happen.
+     All three clear AA at body size on every ground step. */
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+
+  /* ── elevation ─────────────────────────────────────────────────────────────
+     Four steps, and the part the old file had nothing of at all. In a dark interface depth
+     comes from shadow more than from surface colour: the whole ground scale spans 0x07 to 0x2a,
+     which is not enough lightness to separate four planes on its own.
+
+     Each step is named for what sits on it, so the question at a call site is what a thing IS
+     rather than how much blur it would like: rows --elev-1, cards --elev-2, popovers
+     --elev-3, dialogs --elev-4. Two layers from --elev-2 up, a wide soft cast plus a tight dark
+     contact edge, because a single blur at that size reads as a glow around the box rather than
+     as the box being off the surface.
+
+     Nothing reads these yet. The six components that float still carry their own box-shadow
+     literals; moving them onto these steps changes what the app looks like, which is a later
+     step of the redesign and not this one. */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --elev-2: 0 4px 14px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --elev-3: 0 18px 44px rgba(0, 0, 0, 0.62), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --elev-4: 0 36px 84px rgba(0, 0, 0, 0.75), 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* ── radii ─────────────────────────────────────────────────────────────────
+     Three steps. --radius keeps its value, so the 33 rules reading it do not move. --radius-sm
+     is 6px because that is the value the components reach for more than any other: 35 rules
+     still hardcode it, and the icon button at the foot of this file was the 36th until it was
+     pointed here. --radius-lg is new and nothing uses it yet: the redesign wants dialogs and
+     cover art rounder than a button, and 10px is not that.
+
+     The pill, `border-radius: 999px` in 14 rules, is a shape rather than a step and stays a
+     literal. So does `50%`, for the four things that are circles. */
+  --radius-sm: 6px;
   --radius: 10px;
+  --radius-lg: 16px;
+
   --font-ui: 'Archivo', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-
   /* ── type scale ────────────────────────────────────────────────────────────
      Seven steps, in px, replacing 216 hardcoded `font-size` declarations that
      answered to nothing. What that set looked like before this existed:
@@ -144,11 +260,13 @@
    brightest thing on any scrolling screen. It showed on Home, every list, the Settings column
    and the error report. `scrollbar-color` inherits, so once here covers every scroller; the
    `::-webkit-scrollbar` rules Home's card row used to carry are superseded by it and gone.
-   The thumb is a hairline two steps up (0.16 against the 0.07 of `--hairline`): visible on
-   --bg and --surface-1 alike, and quiet enough not to read as a control. */
+   The thumb is the louder of the two borders: visible on --bg and --surface-1 alike, and quiet
+   enough not to read as a control. It was rgba(255, 255, 255, 0.16), which is about the same
+   lightness once composited but neutral where everything around it is violet cast, and it was
+   the one colour on a scrolling screen that answered to nothing in this file. */
 html {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  scrollbar-color: var(--border-2) transparent;
 }
 * {
   margin: 0;
@@ -210,7 +328,7 @@ body::after {
   height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
