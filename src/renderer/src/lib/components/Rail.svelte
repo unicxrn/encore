@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { albumArtUrl } from '../api/enchor'
   import { artUrl } from '../../../../shared/art'
   import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
@@ -11,6 +11,7 @@
     playerError,
     playerState,
     progress,
+    closePreview,
     openPreview,
     registerViewport,
     seekTo,
@@ -111,6 +112,13 @@
    *
    * `viewportOwner` is how the rail finds out it has been superseded: the chart page's pane
    * registers over this one without the mounted flag ever going false.
+   *
+   * One known limit, reasoned rather than measured. Below the shell's breakpoint the rail is
+   * `display: none`, and a window resized under it WHILE the rail is previewing leaves a live
+   * preview the player bar has ceded its transport to and the rail cannot show. The user is not
+   * stuck there (Space still reaches `togglePlay`, and opening any chart's preview pane closes
+   * it), and the state is unreachable except through that resize, since the rail's Play button
+   * does not exist while the rail is hidden.
    */
   let viewportEl = $state<HTMLDivElement | null>(null)
   let unregister: (() => void) | null = null
@@ -173,6 +181,25 @@
     }
   }
 
+  /**
+   * A new subject closes the rail's own preview.
+   *
+   * Without this the rail would name one chart and play another: the rail outlives every
+   * navigation, so a preview it started keeps running while the user opens something else, and
+   * the art, the title and the health beside it would all have moved on. Closing matches what
+   * the rest of the app already does, where playback is bound to the pane that started it and
+   * navigating away ends it.
+   *
+   * Only the rail's own preview: `owns` is false while the chart page's pane holds the
+   * viewport, and reaching into that one from here would stop the highway the user is watching.
+   */
+  $effect(() => {
+    void target
+    untrack(() => {
+      if (owns) closePreview()
+    })
+  })
+
   // Changing either selection reloads: the controller has no reconfigure, only an open.
   function reopenIfPlaying(): void {
     if (!owns || $nowPlaying === null) return
@@ -196,7 +223,7 @@
     if (openError !== null) return `ERROR: ${openError}`
     if (live && $playerError !== null) return `ERROR: ${$playerError}`
     if (opening) return 'OPENING…'
-    if (!owns && $viewportOwner !== null) return 'PLAYING ON THE CHART PAGE'
+    if (!owns && $viewportOwner !== null) return 'PREVIEW IS ON THE CHART PAGE'
     if (live) return $playerState.toUpperCase()
     return 'READY'
   })

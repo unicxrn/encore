@@ -12,12 +12,36 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- A third column, to the right of whatever you are looking at, holding the chart you last opened:
+  its cover, name, artist and charter, a note highway you can play it in, the instrument and
+  difficulty that highway uses, and what the chart is missing around its notes. It keeps that
+  chart while you go to Settings or Stats rather than emptying out, which is the same thing the
+  player bar under it already does. It is hidden below a window width of 1120px, where the
+  columns either side of the view leave it too little room to be worth the space.
+- The sidebar carries the things it had nowhere to say before: which game the library belongs to,
+  two quick actions, which chart source Explore searches, and whether a newer Encore exists. Two
+  of those offer more than Encore can do yet, and say so on the control rather than looking live:
+  there is no YARG library support, and Chorus Encore is the only source it searches.
+
 ### Changed
 
+- The window is a three by three frame rather than a stack of bars: a sidebar running the full
+  height beside a top bar, the view, the new chart column and the player bar. Nothing a view does
+  has changed; they are the same seven views in a different frame, and `Ctrl+1` to `Ctrl+7` still
+  reach the same seven in the same order.
+- The nav is grouped under two headings rather than three. Nothing moved past anything else, so
+  every keyboard shortcut still reaches the view it reached before.
+- Everything that floats above the app now takes its shadow from the elevation scale by what it
+  is, rather than from one of two numbers copied between six files.
+- Rhythm has an instrument colour, which it had none of. A guitar co-op or six-fret track takes
+  the colour of the part it plays rather than one of its own, because which controller a track is
+  for is already written in the label beside it and colour is better spent on which instrument it
+  is.
 - The design tokens are the redesign's scale rather than the two surfaces, three text levels and
-  one accent that came before: six ground steps, two borders, four steps of elevation, five
-  instrument colours, three semantic colours and three radii. This is groundwork and nothing has
-  been rebuilt on top of it yet, so the app is the same app. The names the components already
+  one accent that came before: six ground steps, two borders, four steps of elevation, six
+  instrument colours, three semantic colours and three radii. The names the components already
   read are now aliases of steps in the new scale, which is why most of it looks unchanged.
 - What did move, on every screen: the dimmest text colour is dimmer, hover states on links and
   the player's progress are a lighter violet than the pink-violet they were, the wash behind a
@@ -27,6 +51,9 @@ release.
 
 ### Fixed
 
+- The selected row in the Asset Studio no longer fades out through a hardcoded copy of an accent
+  colour that has since moved. It looked the same and would have stopped looking the same the
+  first time anyone touched it.
 - The version buttons in a chart's detail panel have the border they were written to have, and a
   version note reporting an error is red rather than grey. Both have asked since 0.1.0 for a
   colour the stylesheet never defined, so one drew no border at all and the other fell back to
