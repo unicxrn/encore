@@ -1026,3 +1026,136 @@ describe('App update prompt, when the push was missed', () => {
     expect(screen.queryByRole('dialog', { name: 'Update available' })).toBeNull()
   })
 })
+
+/**
+ * Explore's destination, wired end to end: the row, the rail and the one route out of it.
+ *
+ * The parts are pinned in their own files (Browse hands its chart to a callback, the rail offers
+ * All details, `railOnScreen` reads a display). What only App can answer is what a user sees: the
+ * list still on screen behind a filled rail, and the chart page reached from the rail rather than
+ * from the row.
+ *
+ * jsdom applies no stylesheet, so the media query that hides the rail below 1120px never runs
+ * here. The narrow case is reached the way `Rail.svelte.test.ts` reaches it, by setting the
+ * column's display directly, because that is exactly what the query does and what the code reads.
+ */
+describe('App: Explore fills the rail rather than leaving the list', () => {
+  const EVERLONG = {
+    chartId: 1,
+    songId: 42,
+    md5: 'a'.repeat(32),
+    albumArtMd5: null,
+    hasVideoBackground: false,
+    name: 'Everlong',
+    artist: 'Foo Fighters',
+    album: '',
+    genre: '',
+    year: '1997',
+    charter: 'CharterA',
+    song_length: 250_000,
+    diff_guitar: 4,
+    diff_bass: null,
+    diff_drums: null,
+    diff_keys: null,
+    diff_vocals: null
+  }
+
+  /** The row's own control, named after the chart and nothing else. */
+  const ROW = /^Everlong by Foo Fighters, charted by CharterA$/
+
+  afterEach(async () => {
+    globalQuery.set('')
+    browseSearch.setQuery('')
+    // The store debounces 300ms; waited out here rather than landing mid-test in the next one.
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  /**
+   * Explore, showing one row.
+   *
+   * The term is this block's own and appears in no other test, because `browseSearch` is module
+   * state shared across the whole run and answers a question it has already been asked from what
+   * it holds. Set on `globalQuery` rather than on the store, since Explore re-applies the global
+   * query from an effect on every mount and would otherwise overwrite it.
+   */
+  async function showExplore(): Promise<void> {
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: [EVERLONG] })
+    stubEncore({ existsByMeta: vi.fn().mockResolvedValue([false]) })
+    settingsLoaded.set(true)
+    globalQuery.set('everlong in the rail')
+    render(App)
+    await fireEvent.click(navItem('Explore'))
+    await screen.findByRole('button', { name: ROW }, { timeout: 3000 })
+  }
+
+  /** The rail's column, whatever it is currently showing. */
+  function rail(): HTMLElement {
+    const found = document.querySelector('.rail')
+    if (found === null) throw new Error('no rail in the document')
+    return found as HTMLElement
+  }
+
+  it('shows the chart in the rail and leaves Explore where it was', async () => {
+    await showExplore()
+    // The rail's empty state, which is what a session that has picked nothing shows.
+    expect(rail().textContent).toContain('Open a chart and it stays here')
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+    // The list is still the view, with its row still in it. Detail would have replaced both.
+    expect(navItem('Explore').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('button', { name: ROW })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+
+  it('opens the chart page from the rail, which is the one route to it', async () => {
+    await showExplore()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    // The chart page, which carries the four things the rail does not: the full difficulty
+    // matrix, the version check, the ABOUT table and the chips that search on a charter.
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ROW })).toBeNull()
+  })
+
+  it('comes back to the list, still holding its rows, when the page is left', async () => {
+    await showExplore()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+    await screen.findByRole('button', { name: 'Back' })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(await screen.findByRole('button', { name: ROW })).toBeTruthy()
+  })
+
+  // Below the shell's breakpoint the rail is not drawn, and a row click that only filled a
+  // hidden column would be a click with nothing to show for it. There the chart page is the
+  // only place the answer can go.
+  it('opens the chart page instead when the rail is not drawn', async () => {
+    await showExplore()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeTruthy()
+  })
+
+  // The rail is pointed at the chart either way, so a window widened after the fact finds the
+  // column already holding what was picked while it was hidden.
+  it('still points the rail at the chart it opened the page for', async () => {
+    await showExplore()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await screen.findByRole('button', { name: 'Back' })
+    rail().style.display = ''
+
+    expect(rail().textContent).toContain('Everlong')
+  })
+})

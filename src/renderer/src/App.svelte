@@ -35,13 +35,18 @@
   import { globalQuery } from './lib/stores/global-search'
   import { togglePlay } from './lib/stores/preview-controller'
   import { matchShortcut, renderKeys, type ShortcutView } from './lib/shortcuts'
+  import { railOnScreen } from './lib/rail-visible'
 
   let view = $state<ViewId>('home')
   // Chart opened from Home or Explore. While set, Detail replaces the current
   // view; Back clears it and returns to the view underneath.
   let detailChart = $state<ChartTarget | null>(null)
   /**
-   * The rail's subject: the last chart this launch opened, and null before the first one.
+   * The rail's subject: the last chart this launch picked out, and null before the first one.
+   *
+   * Written three ways now. An Explore row picks a chart without navigating anywhere, an
+   * Installed row's Preview button does the same, and opening a chart page still points the rail
+   * at what the page is showing.
    *
    * Deliberately NOT cleared when Detail closes, and deliberately not cleared by navigating to
    * Settings or Stats. The rail is "what you are previewing", which is the same subject the
@@ -98,6 +103,30 @@
   const goTo = (id: ViewId): void => {
     detailChart = null
     view = id
+  }
+
+  /**
+   * Point the rail at a chart, without taking the list away.
+   *
+   * What Explore's rows do, and what Installed's per-row Preview button does. Browsing is a
+   * scanning task: the pips, the health dot, the statistics and the highway in the rail are the
+   * whole of "is this the version I want", and a page swap per chart is the wrong weight for a
+   * question answered that often. The chart page is still there, reached from the rail once a
+   * chart is in it, for the four things only it has.
+   *
+   * The fallback is the width case. Below the shell's breakpoint the rail is `display: none`, so
+   * filling it would be a click with nothing to show for it; there the chart page is the only
+   * place the answer can go, and the rail is pointed at it anyway so widening the window later
+   * finds the column already holding the right chart. `railOnScreen` asks the element rather
+   * than the window, so the breakpoint stays written down once, in the media query below.
+   *
+   * Installed cannot reach the fallback: its Preview button is hidden by the same query that
+   * hides the rail. It shares this handler regardless, because a second copy of the rule is a
+   * second place for it to go wrong.
+   */
+  const selectChart = (target: ChartTarget): void => {
+    railChart = target
+    if (!railOnScreen()) detailChart = target
   }
 
   /**
@@ -454,16 +483,21 @@
               />
             {/if}
           {:else if view === 'browse'}
-            <Browse onOpenChart={(target) => (detailChart = target)} />
+            <!-- Explore has one way out of a row and it does not navigate: the rail is where a
+                 result lands. Nothing here opens the chart page, which is why Browse is handed
+                 no way to; the route to it is the rail's own, beside the chart it is showing. -->
+            <Browse onSelectChart={selectChart} />
           {:else if view === 'library'}
             <!-- Two ways out of a row, and only one of them navigates. Preview writes the rail's
                  subject directly, which is the same slot Detail's effect above writes and the
                  same one the rail reads, so a previewed chart survives leaving Installed exactly
-                 as an opened one does. -->
-            <Library
-              onOpenChart={(target) => (detailChart = target)}
-              onSelectChart={(target) => (railChart = target)}
-            />
+                 as an opened one does.
+
+                 Explore differs deliberately: an Installed row is a chart the user already has,
+                 so opening it is a visit to a file they own and the page is the right weight for
+                 that. An Explore row is a candidate among 95,000, and the question is which one
+                 to take. -->
+            <Library onOpenChart={(target) => (detailChart = target)} onSelectChart={selectChart} />
           {:else if view === 'assets'}
             <Assets />
           {:else if view === 'stats'}
@@ -491,7 +525,12 @@
           <button class="btn-ghost" onclick={reset}>Try again</button>
         </aside>
       {/snippet}
-      <Rail target={railChart} />
+      <!-- The one route from the rail to the chart page, and it is the rail's rather than
+           Explore's on purpose: a control on every row would be thirty invitations to leave the
+           list, which is the thing this arrangement exists to stop. Here there is one, beside
+           the chart it would open, and it goes with the column below the breakpoint, where the
+           row click opens the page directly and nothing needs routing. -->
+      <Rail target={railChart} onOpenDetail={(target) => (detailChart = target)} />
     </svelte:boundary>
     <!-- One positioned box for the strip and the bar together. The downloads panel (rendered
          inside PlayerBar) sets `bottom: calc(100% + 10px)` against its containing block, and

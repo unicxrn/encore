@@ -114,7 +114,7 @@ function sentinelInView(visible = true): void {
 }
 
 function renderBrowse(
-  onOpenChart: (target: unknown) => void = () => {},
+  onSelectChart: (target: unknown) => void = () => {},
   {
     inLibrary = false,
     // Explore is reachable with nothing configured (the welcome's "Explore
@@ -141,7 +141,7 @@ function renderBrowse(
     platform: 'linux',
     downloadAdd
   })
-  return render(Browse, { onOpenChart })
+  return render(Browse, { onSelectChart })
 }
 
 afterEach(async () => {
@@ -182,10 +182,10 @@ afterEach(async () => {
 })
 
 describe('Browse expanded version groups', () => {
-  it('keeps a group expanded across the unmount an opened chart causes', async () => {
-    // App renders Detail *instead of* Browse, so visiting a chart destroys this
-    // component. Before the expansion state moved into the shared store, every
-    // expanded group collapsed on the way back.
+  it('keeps a group expanded across the unmount leaving the view causes', async () => {
+    // App renders every other view *instead of* Browse, so navigating away, or taking the
+    // rail's route to a chart page, destroys this component. Before the expansion state moved
+    // into the shared store, every expanded group collapsed on the way back.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
 
     const first = renderBrowse()
@@ -207,15 +207,15 @@ describe('Browse expanded version groups', () => {
 })
 
 // The charter is what tells the two rows of TWO_VERSIONS apart (same song, same
-// artist, same length), so these match the control that opens a chart by charter
-// rather than by title.
+// artist, same length), so these match the control that hands a chart to the rail
+// by charter rather than by title.
 //
 // Anchored on the title the same way the two below are anchored on their verb. Three controls
-// in a row now carry the chart's full description: the one that opens it, the checkbox that
-// selects it and the button that downloads it. Only the first is named by the chart alone, so
-// `^Everlong` is what separates it from "Select Everlong…" and "Download Everlong…".
-const OPENS_PRIMARY = /^Everlong .*CharterA/
-const OPENS_ALTERNATE = /^Everlong .*CharterB/
+// in a row now carry the chart's full description: the title, the checkbox that selects it and
+// the button that downloads it. Only the first is named by the chart alone, so `^Everlong` is
+// what separates it from "Select Everlong…" and "Download Everlong…".
+const TITLE_PRIMARY = /^Everlong .*CharterA/
+const TITLE_ALTERNATE = /^Everlong .*CharterB/
 // The checkboxes carry the same charter, prefixed, and are matched separately so
 // a query for one control can never pick up the other.
 const SELECTS_PRIMARY = /^Select .*CharterA/
@@ -226,45 +226,45 @@ describe('Browse rows', () => {
     await fireEvent.click(await screen.findByLabelText('2 versions'))
   }
 
-  it('opens a chart when its row is clicked', async () => {
+  it('fills the rail when a row is clicked, without leaving the list', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
-    await fireEvent.click(await screen.findByRole('button', { name: OPENS_PRIMARY }))
+    await fireEvent.click(await screen.findByRole('button', { name: TITLE_PRIMARY }))
 
     // Once, not twice: a row that both handles its own click and lets an inner
-    // control's click bubble up to it would navigate twice per click.
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 1 } })
+    // control's click bubble up to it would hand the same chart over twice per click.
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 1 } })
   })
 
-  it('opens an alternate version when its row is clicked', async () => {
+  it('fills the rail with an alternate version when its row is clicked', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await showAlternates()
 
-    await fireEvent.click(screen.getByRole('button', { name: OPENS_ALTERNATE }))
+    await fireEvent.click(screen.getByRole('button', { name: TITLE_ALTERNATE }))
 
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
   })
 
-  it('does not open a chart when the version toggle is used', async () => {
+  it('does not touch the rail when the version toggle is used', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
     await showAlternates()
 
-    // The toggle sits inside the row's clickable area, so expanding a group must
-    // not also navigate away from the list it was expanded in.
-    expect(onOpenChart).not.toHaveBeenCalled()
+    // The toggle sits inside the row's clickable area, so expanding a group must not also
+    // replace what the rail beside the list is showing.
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByLabelText('2 versions').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('opens charts from a real button, which is what carries Enter and Space', async () => {
+  it('picks charts from a real button, which is what carries Enter and Space', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
     await showAlternates()
@@ -275,14 +275,14 @@ describe('Browse rows', () => {
     // thing the platform derives it from: an actual <button>. A <span
     // role="button"> passes getByRole and loses Space unless someone remembers
     // to handle it, which is the trap this pins shut.
-    for (const name of [OPENS_PRIMARY, OPENS_ALTERNATE]) {
-      const open = screen.getByRole('button', { name })
-      expect(open.tagName).toBe('BUTTON')
-      expect((open as HTMLButtonElement).disabled).toBe(false)
+    for (const name of [TITLE_PRIMARY, TITLE_ALTERNATE]) {
+      const title = screen.getByRole('button', { name })
+      expect(title.tagName).toBe('BUTTON')
+      expect((title as HTMLButtonElement).disabled).toBe(false)
     }
   })
 
-  it('names the control that opens a chart after the chart it opens', async () => {
+  it('names the control that picks a chart after the chart it picks', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
     await showAlternates()
@@ -303,7 +303,7 @@ describe('Browse rows', () => {
     expect(await screen.findByText('01')).toBeTruthy()
   })
 
-  it('keeps the version toggle outside the control that opens the chart', async () => {
+  it('keeps the version toggle outside the control that picks the chart', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
 
@@ -311,8 +311,8 @@ describe('Browse rows', () => {
     // browser does with the inner control undefined. The version toggle is the
     // one such control the row has today; the checkbox and per-row download
     // button that follow depend on the same rule holding.
-    const open = await screen.findByRole('button', { name: OPENS_PRIMARY })
-    expect(open.contains(screen.getByLabelText('2 versions'))).toBe(false)
+    const title = await screen.findByRole('button', { name: TITLE_PRIMARY })
+    expect(title.contains(screen.getByLabelText('2 versions'))).toBe(false)
   })
 })
 
@@ -355,9 +355,9 @@ describe('Browse grid view', () => {
     expect(screen.getByText('01')).toBeTruthy()
   })
 
-  it('keeps the chosen mode across the unmount an opened chart causes', async () => {
-    // App renders Detail *instead of* Browse, so visiting a chart destroys this
-    // component. A per-instance mode would drop the user back into the list.
+  it('keeps the chosen mode across the unmount leaving the view causes', async () => {
+    // App renders every other view *instead of* Browse, so leaving destroys this component.
+    // A per-instance mode would drop the user back into the list.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     const first = renderBrowse()
     await screen.findByText('01')
@@ -401,8 +401,8 @@ describe('Browse grid view', () => {
     // alternates would leave someone downloading one of three charts believing
     // it was the only one.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await screen.findByText('01')
     await showGrid()
 
@@ -412,24 +412,24 @@ describe('Browse grid view', () => {
     await fireEvent.click(chip)
 
     expect(screen.queryAllByText('CharterB').length).toBeGreaterThan(0)
-    // The chip sits inside the card's clickable area, and the card opens a
-    // chart: revealing versions must not navigate away from them.
-    expect(onOpenChart).not.toHaveBeenCalled()
+    // The chip sits inside the card's clickable area, and the card picks a
+    // chart: revealing versions must not replace what the rail is showing.
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByLabelText('2 versions').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('opens the alternate a revealed card stands for', async () => {
+  it('picks the alternate a revealed card stands for', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await screen.findByText('01')
     await showGrid()
     await fireEvent.click(screen.getByLabelText('2 versions'))
 
-    await fireEvent.click(screen.getByRole('button', { name: OPENS_ALTERNATE }))
+    await fireEvent.click(screen.getByRole('button', { name: TITLE_ALTERNATE }))
 
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
   })
 
   it('selects a chart from a card, as a row does', async () => {
@@ -492,17 +492,17 @@ describe('Browse multi-select', () => {
     expect(screen.queryByText('1 selected')).toBeNull()
   })
 
-  it('does not open a chart when its checkbox is ticked', async () => {
+  it('does not pick a chart when its checkbox is ticked', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
     // The checkbox sits inside the row's clickable area. The row stands aside
     // for clicks from `button, input, a, select`, and this is what proves an
     // `<input type="checkbox">` is covered by that rule rather than assuming it.
     await fireEvent.click(await screen.findByRole('checkbox', { name: SELECTS_PRIMARY }))
 
-    expect(onOpenChart).not.toHaveBeenCalled()
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByText('1 selected')).toBeTruthy()
   })
 
@@ -825,7 +825,7 @@ describe('Browse advanced search', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Advanced search' }))
   }
 
-  /** What opening a chart Detail does to this view: destroys it, then builds it again. */
+  /** What leaving this view does to it: destroys it, then builds it again on the way back. */
   function remount(): void {
     mounted?.unmount()
     mounted = renderBrowse()
@@ -968,7 +968,7 @@ describe('Browse advanced search', () => {
       expect(await screen.findByText(/Searching cleared 1 advanced filter\./)).toBeTruthy()
     })
 
-    it('keeps the panel holding every field, across the unmount a chart opens', async () => {
+    it('keeps the panel holding every field, across the unmount leaving the view causes', async () => {
       // The whole rule rests on this. Clearing what was APPLIED while leaving the DRAFT alone is
       // what makes an accidental keystroke in the title bar recoverable instead of expensive.
       await openPanel()
@@ -1063,7 +1063,7 @@ describe('Browse advanced search', () => {
     expect(get(browseSearch.advancedDraft).text.album.value).toBe('')
   })
 
-  it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {
+  it('keeps a form that was filled in but never searched across an unmount', async () => {
     // App renders Detail instead of Browse, so visiting a chart destroys this component and the
     // panel with it. Ten fields typed and lost is worse than a search nobody ran.
     await openPanel()
@@ -1168,7 +1168,7 @@ describe('Explore names written in Clone Hero markup', () => {
     expect(card?.querySelector('.c-charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
   })
 
-  it('gives the open button an accessible name that matches what is drawn', async () => {
+  it('gives the title button an accessible name that matches what is drawn', async () => {
     // The point of stripping this one: a screen reader announcing a colour tag while the eye
     // reads a charter is the two disagreeing about the same chart.
     await renderMarked()
@@ -1195,7 +1195,7 @@ describe('Explore names written in Clone Hero markup', () => {
       },
       downloadAdd
     })
-    render(Browse, { onOpenChart: () => {} })
+    render(Browse, { onSelectChart: () => {} })
     await screen.findByText('Everlong')
 
     await waitFor(() => {

@@ -21,7 +21,17 @@
   import type { ChartTarget } from './Home.svelte'
   import type { PreviewSource } from '../preview/player'
 
-  let { target }: { target: ChartTarget | null } = $props()
+  /**
+   * `onOpenDetail` is the rail's way through to the chart page, and the only one Explore has.
+   *
+   * Required rather than optional: the rail answers "is this the chart I want" and the page
+   * answers everything else, and a callback with a no-op default is how the half of that pair
+   * which nothing can reach gets shipped.
+   */
+  let {
+    target,
+    onOpenDetail
+  }: { target: ChartTarget | null; onOpenDetail: (target: ChartTarget) => void } = $props()
 
   const chart = $derived(target?.kind === 'remote' ? target.chart : null)
   const record = $derived(target?.kind === 'local' ? target.record : null)
@@ -381,15 +391,28 @@
       </div>
     </div>
 
-    <!-- One row, because there is one action per kind of chart. Full width rather than sized to
-         its word: the column is 374px and a single button floating at the left of it reads as
-         the leftover of a row that lost its second control. -->
+    <!-- One row: the action this kind of chart has, and the way through to its full page. The
+         action takes the width left over rather than being sized to its word, because a button
+         floating at the left of a 374px column reads as the leftover of a row that lost its
+         second control. -->
     <div class="actions">
       {#if chart}
         <button class="act primary" onclick={() => void download()}>Download</button>
       {:else if record}
         <button class="act" onclick={() => void reveal()}>Show in folder</button>
       {/if}
+      <!-- Sized to its own word and quiet, which is the whole of its design. This column is
+           where a chart is judged; the page carries the things it cannot, the full difficulty
+           matrix, the version check, the ABOUT table and the chips that search on a charter or
+           an album. A route that looked like the action beside it would put the page back as
+           the place every chart goes, and Explore already left that arrangement. -->
+      <button
+        class="act to-detail"
+        title="Everything else about this chart: every difficulty, where it came from, and whether Chorus has a newer version"
+        onclick={() => {
+          if (target !== null) onOpenDetail(target)
+        }}>All details</button
+      >
     </div>
     <!-- Only the failure. A download that was accepted says so in the player bar directly under
          this column, where the percent, the failure and the retry already are; a second line here
@@ -608,6 +631,24 @@
   }
   .act.primary:hover {
     filter: brightness(1.12);
+  }
+  /**
+   * The way through to the chart page: as wide as its word, and no wider.
+   *
+   * `flex: 0 0 auto` rather than the `1` every other button in this row takes, so the action
+   * keeps the width and this keeps only what "All details" needs. Transparent rather than
+   * `--surface-1`, so the row reads as one action and one link out of it rather than two
+   * choices of equal weight. Measured with `scripts/measure-play-stats.mjs`, which prints every
+   * button in this row with its width and whether its word is clipped.
+   */
+  .to-detail {
+    flex: 0 0 auto;
+    background: none;
+    color: var(--text-3);
+  }
+  .to-detail:hover,
+  .to-detail:focus-visible {
+    color: var(--text-1);
   }
   /* Wraps rather than ellipsising: a reveal that failed says which path it refused and why, and
      a clipped reason is a reason nobody can act on. It is also the only block in the column that

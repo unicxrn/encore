@@ -20,8 +20,19 @@
   import DiffPips from './DiffPips.svelte'
   import type { ChartTarget } from './Home.svelte'
 
-  // Rows open the full Detail page (the old inline side panel is retired).
-  let { onOpenChart }: { onOpenChart: (target: ChartTarget) => void } = $props()
+  /**
+   * A row hands its chart to the preview rail beside the list, and the list stays where it is.
+   *
+   * Explore is where 95,000 charts are scanned, and the rail is what answers the question that
+   * scanning asks: the pips, the health dot, the statistics and the highway all say whether this
+   * is the version to take. A page swap per row is the wrong weight for a question asked that
+   * often, and it costs the filters, the sort and the scroll position every time.
+   *
+   * There is deliberately nothing here that opens the chart page. The route to it is one control
+   * in the rail, beside the chart it would open; the caller is what decides where a chart goes
+   * when the rail is too narrow to be drawn at all.
+   */
+  let { onSelectChart }: { onSelectChart: (target: ChartTarget) => void } = $props()
 
   // Shared module-scoped store: this view is remounted by every navigation and
   // by opening a chart Detail, and a per-instance store would re-query the API
@@ -292,8 +303,8 @@
     inputEl?.focus()
   }
 
-  function openChart(chart: ChartData): void {
-    onOpenChart({ kind: 'remote', chart })
+  function selectChart(chart: ChartData): void {
+    onSelectChart({ kind: 'remote', chart })
   }
 
   // Album art that 404'd or failed to decode, keyed by md5 the way Home's
@@ -320,11 +331,12 @@
   //
   // Widening it that far means clicks a control inside has already answered
   // arrive here too, so this is the single place that stands aside for them.
-  // Without it the title button would open a chart twice, and the version
-  // toggle would expand a group and then navigate away from it.
+  // Without it the title button would hand the same chart over twice, and the
+  // version toggle would expand a group and then replace the rail's subject
+  // with the group's primary.
   function onRowClick(chart: ChartData, e: MouseEvent): void {
     if (e.target instanceof Element && e.target.closest('button, input, a, select')) return
-    openChart(chart)
+    selectChart(chart)
   }
 
   // Every alternate version of a song repeats its title and artist, so a name
@@ -333,7 +345,7 @@
   //
   // Stripped, like the row it names: a screen reader reading out a colour tag while the eye
   // reads the name is worse than either one alone.
-  function openLabel(chart: ChartData): string {
+  function chartLabel(chart: ChartData): string {
     const name = stripRichText(chart.name)
     const artist = stripRichText(chart.artist)
     const charter = stripRichText(chart.charter)
@@ -748,7 +760,7 @@
       <input
         class="pick"
         type="checkbox"
-        aria-label="Select {openLabel(c)}"
+        aria-label="Select {chartLabel(c)}"
         checked={$selected.has(c.chartId)}
         onchange={() => search.toggleSelected(c.chartId)}
       />
@@ -797,8 +809,10 @@
       {:else if queued.has(c.chartId)}
         <span class="queued mono">QUEUED</span>
       {:else}
-        <button class="get" aria-label="Download {openLabel(c)}" onclick={() => void downloadOne(c)}
-          >Download</button
+        <button
+          class="get"
+          aria-label="Download {chartLabel(c)}"
+          onclick={() => void downloadOne(c)}>Download</button
         >
       {/if}
     {/snippet}
@@ -809,7 +823,7 @@
       {@const art = artFor(c)}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
            (As on .row: this widens the mouse target to the whole card, and the
-           keyboard path is the .open button inside it.) -->
+           keyboard path is the .name button inside it.) -->
       <div class="card" class:alt={isAlt} onclick={(e) => onRowClick(c, e)}>
         {@render pick(c)}
         {#if art}
@@ -824,7 +838,7 @@
           <div class="art placeholder"></div>
         {/if}
         <span class="c-title">
-          <button class="open" aria-label={openLabel(c)} onclick={() => openChart(c)}
+          <button class="name" aria-label={chartLabel(c)} onclick={() => selectChart(c)}
             >{stripRichText(c.name)}</button
           >
           {#if alternates > 0 && c.songId !== null}
@@ -883,7 +897,7 @@
           {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
           {@const rowArt = artFor(chart)}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
-             (This handler only widens the mouse target; the keyboard path is the .open
+             (This handler only widens the mouse target; the keyboard path is the .name
              button inside, and giving the container a widget role would put that button
              inside a widget again, which is what this task exists to undo.) -->
           <div class="row" onclick={(e) => onRowClick(chart, e)}>
@@ -902,8 +916,10 @@
             {/if}
             <span class="song">
               <span class="title">
-                <button class="open" aria-label={openLabel(chart)} onclick={() => openChart(chart)}
-                  >{stripRichText(chart.name)}</button
+                <button
+                  class="name"
+                  aria-label={chartLabel(chart)}
+                  onclick={() => selectChart(chart)}>{stripRichText(chart.name)}</button
                 >
                 {#if hasVersions && chart.songId !== null}
                   <button
@@ -944,8 +960,10 @@
                 {/if}
                 <span class="song song-indented">
                   <span class="title text-2"
-                    ><button class="open" aria-label={openLabel(alt)} onclick={() => openChart(alt)}
-                      >{stripRichText(alt.name)}</button
+                    ><button
+                      class="name"
+                      aria-label={chartLabel(alt)}
+                      onclick={() => selectChart(alt)}>{stripRichText(alt.name)}</button
                     >{@render badges(alt)}</span
                   >
                   <span class="artist">{metaOf(alt)}</span>
@@ -1508,11 +1526,13 @@
     overflow: hidden;
   }
   /* The title is the row's own button, and the row around it is a plain container,
-     because a button cannot hold the version toggle beside it. Reset to look like
-     the text it replaced, and keep the ellipsis rules that were on that text: they
-     are what makes a long title truncate instead of pushing the version chip out
-     of the flex row. */
-  .open {
+     because a button cannot hold the version toggle beside it. Pressing it puts the
+     chart in the preview rail, which is what the row's own click does; the name is
+     what it is called because the name is what it says. Reset to look like the text
+     it replaced, and keep the ellipsis rules that were on that text: they are what
+     makes a long title truncate instead of pushing the version chip out of the flex
+     row. */
+  .name {
     background: none;
     border: 0;
     padding: 0;

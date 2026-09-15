@@ -60,7 +60,7 @@ function healthState(label: string): string {
 
 describe('Rail: nothing selected', () => {
   it('draws one empty state and no chart fields', () => {
-    render(Rail, { props: { target: null } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: null } })
     expect(screen.getByText('Open a chart and it stays here.')).toBeTruthy()
     // No viewport, so the controller has nothing to register and no preview can be opened
     // from a rail that has no chart.
@@ -71,7 +71,7 @@ describe('Rail: nothing selected', () => {
 
 describe('Rail: a chart from the library', () => {
   it('names the song, the artist and the charter', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     expect(screen.getByText('YYZ')).toBeTruthy()
     expect(screen.getByText('Rush')).toBeTruthy()
     expect(screen.getByText('Charted by someone')).toBeTruthy()
@@ -80,13 +80,13 @@ describe('Rail: a chart from the library', () => {
   // Deliberately not a heading: the content pane already headlines the same song, and two
   // <h2>s reading "YYZ" is one song with two headings as far as a screen reader is concerned.
   it('does not add a second heading for the song the content pane is already showing', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     expect(screen.queryByRole('heading', { name: 'YYZ' })).toBeNull()
   })
 
   it('reports each asset the scan read, as read', () => {
     const target = { kind: 'local' as const, record: record({ hasAlbumArt: true }) }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     expect(healthState('Album art')).toBe('OK')
     expect(healthState('Lyrics')).toBe('MISSING')
   })
@@ -101,7 +101,7 @@ describe('Rail: a chart from the library', () => {
         ]
       })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     const options = [...document.querySelectorAll('.picks select')][0].querySelectorAll('option')
     expect([...options].map((o) => o.textContent?.trim())).toEqual(['Guitar', 'Drums'])
   })
@@ -109,7 +109,12 @@ describe('Rail: a chart from the library', () => {
   // A chart scanned before the catalog stored note counts has an empty matrix. An empty select
   // would be worse than the guess: the chart may well hold a guitar track nothing recorded.
   it('falls back to guitar rather than to an empty instrument list', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record({ noteCounts: [] }) } } })
+    render(Rail, {
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'local', record: record({ noteCounts: [] }) }
+      }
+    })
     const options = [...document.querySelectorAll('.picks select')][0].querySelectorAll('option')
     expect([...options].map((o) => o.textContent?.trim())).toEqual(['Guitar'])
   })
@@ -120,7 +125,10 @@ describe('Rail: a chart from Chorus', () => {
   // API reports the cover and the video and says nothing at all about the other two.
   it('says unknown for the two assets the API does not report', () => {
     render(Rail, {
-      props: { target: { kind: 'remote', chart: chart({ hasVideoBackground: true }) } }
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'remote', chart: chart({ hasVideoBackground: true }) }
+      }
     })
     expect(healthState('Video')).toBe('OK')
     expect(healthState('Album art')).toBe('MISSING')
@@ -134,14 +142,24 @@ describe('Rail: the head when a chart ships no cover', () => {
   // chart with no art. What it must NOT do is claim anything: the health list below says
   // whether there is a cover, and this letter is decorative.
   it('draws the initial of the song rather than an empty box', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record({ albumArtMd5: null }) } } })
+    render(Rail, {
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'local', record: record({ albumArtMd5: null }) }
+      }
+    })
     const box = document.querySelector('.art.placeholder')
     expect(box?.textContent?.trim()).toBe('Y')
     expect(box?.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('skips the leading punctuation a title can start with', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record({ name: '...Rebirth' }) } } })
+    render(Rail, {
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'local', record: record({ name: '...Rebirth' }) }
+      }
+    })
     expect(document.querySelector('.art.placeholder')?.textContent?.trim()).toBe('R')
   })
 
@@ -149,7 +167,7 @@ describe('Rail: the head when a chart ships no cover', () => {
   // fallback has to be reached by that route too or the head shows a broken-image glyph.
   it('falls back to the letter when the cover fails to load', async () => {
     const target = { kind: 'local' as const, record: record({ albumArtMd5: 'f'.repeat(32) }) }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     const img = document.querySelector('img.art')
     if (img === null) throw new Error('no art image')
     await fireEvent.error(img)
@@ -180,7 +198,7 @@ describe('Rail: what the selected track is made of', () => {
       kind: 'local' as const,
       record: record({ noteCounts: COUNTS, maxNps: NPS, songLength: 273_000 })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     expect(stat('NOTES')).toBe('1,420')
     expect(stat('PEAK NPS')).toBe('12.3')
     expect(stat('LENGTH')).toBe('4:33')
@@ -191,7 +209,7 @@ describe('Rail: what the selected track is made of', () => {
       kind: 'local' as const,
       record: record({ noteCounts: COUNTS, maxNps: NPS, songLength: 273_000 })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
     await fireEvent.change(instrument, { target: { value: 'drums' } })
     expect(stat('NOTES')).toBe('2,317')
@@ -203,7 +221,7 @@ describe('Rail: what the selected track is made of', () => {
       kind: 'local' as const,
       record: record({ noteCounts: COUNTS, maxNps: NPS, songLength: 273_000 })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     const difficulty = document.querySelectorAll('.picks select')[1] as HTMLSelectElement
     await fireEvent.change(difficulty, { target: { value: 'hard' } })
     expect(stat('NOTES')).toBe('900')
@@ -214,7 +232,7 @@ describe('Rail: what the selected track is made of', () => {
 
   it('answers with a dash where the scan read nothing, never with a zero', () => {
     const target = { kind: 'local' as const, record: record({ noteCounts: [], maxNps: [] }) }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     expect(stat('NOTES')).toBe('—')
     expect(stat('PEAK NPS')).toBe('—')
     expect(stat('LENGTH')).toBe('—')
@@ -222,7 +240,7 @@ describe('Rail: what the selected track is made of', () => {
 
   it("reads a remote chart's length from the field the API names it with", () => {
     const target = { kind: 'remote' as const, chart: chart({ song_length: 187_000 }) }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     expect(stat('LENGTH')).toBe('3:07')
   })
 
@@ -233,7 +251,7 @@ describe('Rail: what the selected track is made of', () => {
       kind: 'local' as const,
       record: record({ noteCounts: COUNTS, has2xKick: true })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     expect(screen.queryByText('2X KICK')).toBeNull()
     const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
     await fireEvent.change(instrument, { target: { value: 'drums' } })
@@ -245,7 +263,7 @@ describe('Rail: what the selected track is made of', () => {
       kind: 'local' as const,
       record: record({ noteCounts: COUNTS, has2xKick: false })
     }
-    render(Rail, { props: { target } })
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
     const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
     await fireEvent.change(instrument, { target: { value: 'drums' } })
     expect(screen.queryByText('2X KICK')).toBeNull()
@@ -256,7 +274,7 @@ describe('Rail: the actions a chart can actually answer', () => {
   it('offers a library chart the one action that takes a path, and no download', async () => {
     const chartReveal = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('encore', { chartReveal, chartReadFiles: vi.fn().mockResolvedValue([]) })
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
     await fireEvent.click(screen.getByRole('button', { name: 'Show in folder' }))
     expect(chartReveal).toHaveBeenCalledWith('/library/Rush - YYZ')
@@ -265,7 +283,7 @@ describe('Rail: the actions a chart can actually answer', () => {
   it('offers a Chorus chart the download, and neither of the two that need a path', async () => {
     const downloadAdd = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('encore', { downloadAdd })
-    render(Rail, { props: { target: { kind: 'remote', chart: chart() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'remote', chart: chart() } } })
     expect(screen.queryByRole('button', { name: 'Show in folder' })).toBeNull()
     await fireEvent.click(screen.getByRole('button', { name: 'Download' }))
     expect(downloadAdd).toHaveBeenCalledWith({
@@ -279,13 +297,15 @@ describe('Rail: the actions a chart can actually answer', () => {
   })
 
   // The design drew a favourite and an add-to-setlist button. Neither exists behind the app:
-  // the contract has three chart actions and none of them is either of those.
+  // the contract has three chart actions and none of them is either of those. The row holds
+  // the one this chart can answer and the way through to its page, in that order, and nothing
+  // else; the order is what keeps the action the row's first button.
   it('draws no control for a feature the app does not have', () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     const labels = [...document.querySelectorAll('.actions button')].map((b) =>
       (b.textContent ?? '').trim()
     )
-    expect(labels).toEqual(['Show in folder'])
+    expect(labels).toEqual(['Show in folder', 'All details'])
   })
 
   // `chartReveal` rejects for a path outside the configured library folders, which is a real
@@ -293,7 +313,7 @@ describe('Rail: the actions a chart can actually answer', () => {
   it('says why a reveal was refused', async () => {
     const chartReveal = vi.fn().mockRejectedValue(new Error('Path is outside your library'))
     vi.stubGlobal('encore', { chartReveal })
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     await fireEvent.click(screen.getByRole('button', { name: 'Show in folder' }))
     expect(await screen.findByRole('alert')).toHaveProperty(
       'textContent',
@@ -321,7 +341,7 @@ describe('Rail: who holds the preview viewport', () => {
   })
 
   it('claims the viewport on the first Play and not before', async () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     expect(get(viewportMounted)).toBe(false)
     await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
     await waitFor(() => {
@@ -337,7 +357,7 @@ describe('Rail: who holds the preview viewport', () => {
    * nothing on screen able to stop it.
    */
   it('gives the viewport back when the window narrows past the rail', async () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
     await waitFor(() => {
       if (!get(viewportMounted)) throw new Error('viewport not claimed')
@@ -357,7 +377,7 @@ describe('Rail: who holds the preview viewport', () => {
   // The other half of the same rule: a resize that leaves the rail on screen changes nothing,
   // so dragging a wide window a little wider must not stop the preview playing in it.
   it('keeps the viewport through a resize that leaves the rail drawn', async () => {
-    render(Rail, { props: { target: { kind: 'local', record: record() } } })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
     await waitFor(() => {
       if (!get(viewportMounted)) throw new Error('viewport not claimed')
@@ -366,5 +386,60 @@ describe('Rail: who holds the preview viewport', () => {
     window.dispatchEvent(new Event('resize'))
 
     expect(get(viewportMounted)).toBe(true)
+  })
+})
+
+/**
+ * The one way through from the rail to the chart page.
+ *
+ * Explore's rows no longer navigate: a click fills this column, so without this control the
+ * four things only the chart page carries (the full difficulty matrix, the version check, the
+ * ABOUT table and the chips that search on a charter or an album) would be unreachable from
+ * Explore altogether. One control, in the rail rather than on every row, because a route per row
+ * is thirty invitations to leave the list.
+ *
+ * jsdom applies no stylesheet, so nothing here can see that it is the quiet half of the action
+ * row. `scripts/measure-play-stats.mjs` prints both buttons' widths.
+ */
+describe('Rail: the way through to the chart page', () => {
+  it('hands over the chart the rail is showing', async () => {
+    const onOpenDetail = vi.fn()
+    const target = { kind: 'local', record: record() } as const
+    render(Rail, { props: { onOpenDetail, target } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    expect(onOpenDetail).toHaveBeenCalledWith(target)
+  })
+
+  // The route exists for Explore, where a row hands over a remote chart and nothing else opens
+  // the page at all, so the remote case is the one that must not be missing.
+  it('offers it for a chart from Chorus too', async () => {
+    const onOpenDetail = vi.fn()
+    const target = { kind: 'remote', chart: chart() } as const
+    render(Rail, { props: { onOpenDetail, target } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    expect(onOpenDetail).toHaveBeenCalledWith(target)
+  })
+
+  // A real button, which is what carries Enter and Space and what puts it in the tab order.
+  // The rail is a landmark full of static text otherwise, so this is the only thing in it a
+  // keyboard reaches on the way to the chart page.
+  it('is a button, reachable by keyboard', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+
+    const through = screen.getByRole('button', { name: 'All details' })
+    expect(through.tagName).toBe('BUTTON')
+    expect(through.hasAttribute('disabled')).toBe(false)
+  })
+
+  // Nothing to open before the first chart of the session, and a route to a page about no chart
+  // would be a button that cannot work.
+  it('is absent while the rail is empty', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: null } })
+
+    expect(screen.queryByRole('button', { name: 'All details' })).toBeNull()
   })
 })
