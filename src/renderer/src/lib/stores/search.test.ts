@@ -1474,6 +1474,28 @@ describe('the intensity band', () => {
     globalQuery.set('')
   })
 
+  it('is counted by the notice when a typed term drops it', async () => {
+    // The band is an advanced filter like any other, so the rule in `setQuery` takes it: a term
+    // and the advanced fields cannot both narrow one query. What matters here is that the count
+    // the notice reports includes it, rather than the band falling quietly out of the header.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedDropped)).toBe(2)
+    expect(get(search.advanced).numbers.minIntensity).toBe('')
+    // The panel still holds it, so Restore is a real offer.
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('4')
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+  })
+
   it('spends nothing on setting the band it is already on', async () => {
     const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
     const search = createSearch({ fetchFn, debounceMs: 5 })
