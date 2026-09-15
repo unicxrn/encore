@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SHORTCUTS, SHORTCUT_VIEWS, renderKeys } from '../shortcuts'
+import { appUpdate } from '../stores/app-update'
 import Sidebar from './Sidebar.svelte'
 
 /**
@@ -134,5 +135,126 @@ describe('Sidebar order and the view shortcuts', () => {
     const spec = SHORTCUTS.find((s) => s.id === 'go:stats')
     expect(spec?.what).toBe('Go to Stats')
     expect(renderKeys(spec?.keys ?? '', 'Linux x86_64')).toEqual(['Ctrl', '5'])
+  })
+})
+
+/**
+ * The three new blocks above the nav, and the one thing they must not do.
+ *
+ * Two of the three offer something Encore cannot yet deliver: a YARG library and two chart
+ * sources it does not search. The failure mode worth testing for is a control that looks live
+ * and is not, so what is pinned is that each of those is disabled and carries a reason, and
+ * that the reason is also said once in text rather than only in tooltips nobody hovers.
+ */
+describe('Sidebar: the switchers above the nav', () => {
+  it('selects Clone Hero and offers YARG as unavailable rather than unselected', () => {
+    renderSidebar()
+    const clonehero = screen.getByRole('radio', { name: /Clone Hero/ })
+    const yarg = screen.getByRole('radio', { name: /YARG/ })
+    expect(clonehero.getAttribute('aria-checked')).toBe('true')
+    expect(yarg.getAttribute('aria-checked')).toBe('false')
+    expect((yarg as HTMLButtonElement).disabled).toBe(true)
+    expect((clonehero as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('leaves Chorus Encore the only live source, and says so', () => {
+    renderSidebar()
+    const group = screen.getByRole('radiogroup', { name: 'Chart source' })
+    const segs = [...group.querySelectorAll('button')]
+    expect(segs.map((b) => b.textContent?.trim())).toEqual(['Chorus Encore', 'RhythmVerse', 'Both'])
+    expect(segs[0].getAttribute('aria-checked')).toBe('true')
+    expect(segs[0].disabled).toBe(false)
+    for (const dead of segs.slice(1)) {
+      expect(dead.disabled).toBe(true)
+      expect(dead.getAttribute('title')).toContain('Not connected yet')
+    }
+    // Once in text, not three times in tooltips: a tooltip is no answer for someone who never
+    // hovers, and two dead segments need one reason between them.
+    expect(screen.getByText(/Not connected yet\. Encore searches Chorus Encore\./)).toBeTruthy()
+  })
+
+  it('offers the two quick actions as controls that are not ready, not as live buttons', () => {
+    renderSidebar()
+    for (const name of ['Import playlist', 'Surprise me']) {
+      const button = screen.getByRole('button', { name })
+      expect((button as HTMLButtonElement).disabled).toBe(true)
+      expect(button.getAttribute('title')).toContain('not built yet')
+    }
+  })
+
+  it('groups the nav under Library and Tools', () => {
+    renderSidebar()
+    expect([...document.querySelectorAll('.section-header')].map((el) => el.textContent)).toEqual([
+      'LIBRARY',
+      'TOOLS'
+    ])
+  })
+})
+
+/**
+ * The footer's update line.
+ *
+ * `appUpdate` is cast from the bridge rather than parsed, so a payload whose state is not one of
+ * the seven the union names is reachable. The line has to say something either way: it measured
+ * as the empty string in the offscreen frame run before the fallback existed, which is a footer
+ * with a blank row in it and no way to tell that from a row that had not answered yet.
+ */
+describe('Sidebar: the update state in the footer', () => {
+  afterEach(() => appUpdate.set(null))
+
+  it('says nothing has answered yet before the first state arrives', () => {
+    renderSidebar()
+    expect(screen.getByText('UPDATE …')).toBeTruthy()
+  })
+
+  it('names the version a release offers', () => {
+    appUpdate.set({
+      currentVersion: '0.3.1',
+      target: 'appimage',
+      canApply: true,
+      note: 'note',
+      state: { kind: 'available', version: '0.4.0' }
+    })
+    renderSidebar()
+    expect(screen.getByText('UPDATE 0.4.0 AVAILABLE')).toBeTruthy()
+  })
+
+  it('reports a percent while one is downloading, and the state without one before that', () => {
+    const base = {
+      currentVersion: '0.3.1',
+      target: 'appimage' as const,
+      canApply: true,
+      note: 'note'
+    }
+    appUpdate.set({ ...base, state: { kind: 'downloading', version: '0.4.0', percent: null } })
+    const { unmount } = render(Sidebar, {
+      props: {
+        view: 'tools' as const,
+        downloadsOpen: false,
+        onNavigate: noop,
+        onToggleDownloads: noop,
+        onShowShortcuts: noop
+      }
+    })
+    expect(screen.getByText('DOWNLOADING UPDATE')).toBeTruthy()
+    unmount()
+
+    appUpdate.set({ ...base, state: { kind: 'downloading', version: '0.4.0', percent: 42 } })
+    renderSidebar()
+    expect(screen.getByText('DOWNLOADING 42%')).toBeTruthy()
+  })
+
+  it('says so rather than going blank on a state it does not recognise', () => {
+    appUpdate.set({
+      currentVersion: '0.3.1',
+      target: 'appimage',
+      canApply: true,
+      note: 'note',
+      // Exactly what the measurement script's fake bridge was answering: a bare string where
+      // the union has an object.
+      state: 'idle'
+    } as never)
+    renderSidebar()
+    expect(screen.getByText('UPDATE STATE UNKNOWN')).toBeTruthy()
   })
 })

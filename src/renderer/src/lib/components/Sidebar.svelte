@@ -119,11 +119,19 @@
 
   let ytdlpLine = $state('YT-DLP …')
 
-  /** One short line about Encore's own next release, for the footer. */
+  /**
+   * One short line about Encore's own next release, for the footer.
+   *
+   * `appUpdate` is cast from the bridge rather than parsed (see the store), so a payload whose
+   * `state` is not one of the seven the union names is reachable, not impossible. It says so
+   * instead of rendering an empty line, which is how this was found: the offscreen measurement
+   * script's fake bridge answers `{ state: 'idle' }`, a string where the union has an object,
+   * and the footer's first line measured as the empty string.
+   */
   const updateLine = $derived.by(() => {
-    const status = $appUpdate
-    if (status === null) return 'UPDATE …'
-    switch (status.state.kind) {
+    const state = $appUpdate?.state
+    if (state === undefined) return 'UPDATE …'
+    switch (state.kind) {
       case 'idle':
         return 'UPDATES NOT CHECKED'
       case 'checking':
@@ -131,15 +139,15 @@
       case 'current':
         return 'UP TO DATE'
       case 'available':
-        return `UPDATE ${status.state.version} AVAILABLE`
+        return `UPDATE ${state.version} AVAILABLE`
       case 'downloading':
-        return status.state.percent === null
-          ? 'DOWNLOADING UPDATE'
-          : `DOWNLOADING ${status.state.percent}%`
+        return state.percent === null ? 'DOWNLOADING UPDATE' : `DOWNLOADING ${state.percent}%`
       case 'ready':
-        return `UPDATE ${status.state.version} READY`
+        return `UPDATE ${state.version} READY`
       case 'error':
         return 'UPDATE CHECK FAILED'
+      default:
+        return 'UPDATE STATE UNKNOWN'
     }
   })
 
@@ -417,8 +425,13 @@
     border-radius: var(--radius-sm);
     overflow: hidden;
   }
+  /* Sized by their labels, not by equal thirds. Measured: three equal segments across the 214px
+     the sidebar's padding leaves give each 71px, and "Chorus Encore" and "RhythmVerse" are both
+     wider than that, so both source names arrived on screen ellipsised. A source the user cannot
+     read is worse than an uneven control. `flex: 0 1 auto` lets each take what it needs and lets
+     the longest give way first if a font ever makes them too wide together. */
   .seg {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     border: 0;
     border-left: 1px solid var(--border-1);
@@ -426,7 +439,7 @@
     color: var(--text-3);
     font-family: var(--font-ui);
     font-size: var(--fs-caption);
-    padding: 5px 2px;
+    padding: 5px 7px;
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;

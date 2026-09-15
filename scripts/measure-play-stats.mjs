@@ -133,7 +133,15 @@ const answers = {
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
   updatesLast: () => [],
-  appUpdateStatus: () => ({ state: 'idle' }),
+  // The real shape main pushes: state is an object with a kind, not a bare string. It was a
+  // bare string here until the sidebar started drawing this, and the footer measured empty.
+  appUpdateStatus: () => ({
+    currentVersion: '0.3.1',
+    target: 'appimage',
+    canApply: true,
+    note: 'This AppImage can update itself.',
+    state: { kind: 'current' }
+  }),
   playStatus: () => ({
     available: logOn,
     reason: 'ok',
@@ -441,6 +449,58 @@ const FRAME = `(() => {
 })()`
 
 /**
+ * The sidebar's new blocks, which are all narrower than they want to be.
+ *
+ * Column 1 is 238px and the padding leaves 214, into which go two game tiles side by side and
+ * a three-segment source switcher whose longest label is "Chorus Encore". A segment that has
+ * run out of room ellipsises, and an ellipsised source name is a source the user cannot read;
+ * a tile that has run out of room overflows its own box. Neither is visible to jsdom.
+ */
+const SIDEBAR = `(() => {
+  const round = (n) => Math.round(n)
+  const bar = document.querySelector('.sidebar')
+  if (!bar) return { present: false }
+  const box = (el) => el.getBoundingClientRect()
+  // scrollWidth against clientWidth is the usual test and it is wrong on these: a button's
+  // client box excludes its padding, so every one of them reported clipped, including a 39px
+  // "Both" with 25px of text in it. A Range over the element's own contents measures the text
+  // and nothing else, which is the number that decides whether an ellipsis appears.
+  const textWidth = (el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    return range.getBoundingClientRect().width
+  }
+  const clipped = (el) => textWidth(el) > el.clientWidth + 1
+  const segs = [...bar.querySelectorAll('.seg')]
+  const tiles = [...bar.querySelectorAll('.game')]
+  return {
+    present: true,
+    width: round(box(bar).width),
+    segments: segs.map((el) => ({
+      text: el.textContent.trim(),
+      width: round(box(el).width),
+      clipped: clipped(el)
+    })),
+    tiles: tiles.map((el) => ({
+      text: el.textContent.replace(/\\s+/g, ' ').trim(),
+      width: round(box(el).width),
+      height: round(box(el).height),
+      clipped: clipped(el)
+    })),
+    quickButtons: [...bar.querySelectorAll('.quick-btn')].map((el) => ({
+      text: el.textContent.trim(),
+      clipped: clipped(el)
+    })),
+    // The footer's two mono lines carry a version and an update state, both of which can run
+    // long. They ellipsise rather than wrapping the card taller.
+    statusLines: [...bar.querySelectorAll('.status-line')].map((el) => el.textContent.trim()),
+    navRows: [...bar.querySelectorAll('.section button')].map((el) => el.textContent.trim()),
+    scrollsSideways: bar.scrollWidth > bar.clientWidth + 1,
+    scrollsDown: bar.scrollHeight > bar.clientHeight + 1
+  }
+})()`
+
+/**
  * The rail with a chart in it.
  *
  * The column is fixed at 374px and its content is not, so the questions are whether anything
@@ -550,6 +610,7 @@ app.whenReady().then(async () => {
   await waitFor(win, `document.querySelector('.home')`)
   await sleep(300)
   console.log('frame      ', JSON.stringify(await evalIn(win, FRAME), null, 1))
+  console.log('sidebar    ', JSON.stringify(await evalIn(win, SIDEBAR), null, 1))
   console.log('home       ', JSON.stringify(await evalIn(win, HOME), null, 1))
 
   const statsTab = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Stats')`
