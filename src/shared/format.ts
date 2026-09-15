@@ -45,10 +45,7 @@ export function diffDisplay(diff: number | null | undefined): string {
  * second into the first is the misreading this type exists to prevent: it would tell a
  * drummer that a chart with drums has none.
  */
-export type PartState =
-  | { kind: 'absent' }
-  | { kind: 'unrated' }
-  | { kind: 'rated'; tier: number }
+export type PartState = { kind: 'absent' } | { kind: 'unrated' } | { kind: 'rated'; tier: number }
 
 /**
  * Decide which of the three a chart is in for one instrument.

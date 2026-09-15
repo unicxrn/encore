@@ -136,6 +136,9 @@ function renderBrowse(
       Promise.resolve(
         keys.map((k) => (typeof inLibrary === 'function' ? inLibrary(k) : inLibrary))
       ),
+    // The row's health dot reads `explainIssue`, whose answer for `badVideo` depends on the
+    // machine. Pinned rather than left undefined so these tests are not about this one.
+    platform: 'linux',
     downloadAdd
   })
   return render(Browse, { onOpenChart })
@@ -199,8 +202,13 @@ describe('Browse expanded version groups', () => {
 // The charter is what tells the two rows of TWO_VERSIONS apart (same song, same
 // artist, same length), so these match the control that opens a chart by charter
 // rather than by title.
-const OPENS_PRIMARY = /CharterA/
-const OPENS_ALTERNATE = /CharterB/
+//
+// Anchored on the title the same way the two below are anchored on their verb. Three controls
+// in a row now carry the chart's full description: the one that opens it, the checkbox that
+// selects it and the button that downloads it. Only the first is named by the chart alone, so
+// `^Everlong` is what separates it from "Select Everlong…" and "Download Everlong…".
+const OPENS_PRIMARY = /^Everlong .*CharterA/
+const OPENS_ALTERNATE = /^Everlong .*CharterB/
 // The checkboxes carry the same charter, prefixed, and are matched separately so
 // a query for one control can never pick up the other.
 const SELECTS_PRIMARY = /^Select .*CharterA/
@@ -1137,8 +1145,11 @@ describe('Explore names written in Clone Hero markup', () => {
   it('draws title, artist, album and charter as text in the list', async () => {
     await renderMarked('list')
     const row = document.querySelector('.row')
+    // The year joined this line with the redesigned row. It is the same rule as the two before
+    // it: what the chart says, stripped of Clone Hero's colour markup, with the separator of an
+    // empty field dropped rather than left behind.
     expect(row?.querySelector('.artist')?.textContent?.trim()).toBe(
-      'Foo Fighters · The Colour and the Shape'
+      'Foo Fighters · The Colour and the Shape · 1997'
     )
     expect(row?.querySelector('.charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
   })
@@ -1188,5 +1199,127 @@ describe('Explore names written in Clone Hero markup', () => {
       artist: '<b>Foo Fighters</b>',
       charter: EIGHT_TAG_CHARTER
     })
+  })
+})
+
+/**
+ * What the redesigned row says about a chart, and what it refuses to say.
+ *
+ * All of it comes out of the search response: Chorus runs scan-chart over every chart it
+ * ingests and hands back the issue arrays, the note data and thirteen difficulty ratings with
+ * each result, so none of this costs a request. jsdom applies no CSS, so these assert what is
+ * in the row and what it is called, never how it looks; `scripts/measure-explore-row.mjs`
+ * carries the look.
+ */
+describe('Explore result rows', () => {
+  const RICH: ChartData[] = [
+    {
+      ...chart(31, null, 'CharterRich'),
+      name: 'Rich Row',
+      hasVideoBackground: true,
+      modchart: true,
+      diff_guitar: 4,
+      diff_bass: 0,
+      diff_drums: -1,
+      folderIssues: [{ folderIssue: 'noAudio', description: 'This chart has no audio file.' }],
+      notesData: {
+        instruments: ['guitar', 'bass'],
+        has2xKick: true,
+        hasLyrics: true,
+        hasOpenNotes: true,
+        hasTapNotes: true,
+        hasSoloSections: true
+      }
+    }
+  ]
+
+  const PLAIN: ChartData[] = [
+    {
+      ...chart(32, null, 'CharterPlain'),
+      name: 'Plain Row',
+      diff_guitar: 2,
+      notesData: { instruments: ['guitar'], hasLyrics: true, hasOpenNotes: true }
+    }
+  ]
+
+  // Same trick the markup block above uses: `browseSearch` is module-scoped and answers from
+  // memory, so a block's rows only reach the screen behind a term nothing else here asks for.
+  async function renderRows(data: ChartData[], term: string, inLibrary = false): Promise<void> {
+    searchCharts.mockResolvedValue({ found: data.length, out_of: data.length, page: 1, data })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse(() => {}, { inLibrary })
+    await screen.findByText(data[0].name)
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws the three badges it kept and none of the ones it dropped', async () => {
+    await renderRows(RICH, 'rich-row')
+    expect(screen.getByText('VIDEO')).toBeTruthy()
+    expect(screen.getByText('2X KICK')).toBeTruthy()
+    expect(screen.getByText('MODCHART')).toBeTruthy()
+    // hasLyrics, hasOpenNotes, hasTapNotes and hasSoloSections are all true on this fixture and
+    // all deliberately undrawn: each is set on roughly half of Chorus, so a badge for it marks
+    // half the list and separates nothing. They are the reason the set is three and not seven.
+    for (const dropped of ['LYRICS', 'OPEN', 'TAP', 'SOLO']) {
+      expect(screen.queryByText(dropped)).toBeNull()
+    }
+  })
+
+  it('draws one difficulty group per part, in each of the three states', async () => {
+    await renderRows(RICH, 'rich-row')
+    // diff_guitar 4 with guitar in the note data.
+    expect(screen.getByLabelText('Guitar: difficulty 4 of 6')).toBeTruthy()
+    // diff_bass 0 with bass in the note data: charted, and rated at the bottom of the scale.
+    // The row must not turn this into "no bass", which is the whole reason for the component.
+    expect(screen.getByLabelText('Bass: difficulty 0 of 6')).toBeTruthy()
+    // diff_drums -1 and no drums in the note data.
+    expect(screen.getByLabelText('Drums: not charted')).toBeTruthy()
+  })
+
+  it('marks a chart Chorus found a real problem in, before anything is downloaded', async () => {
+    await renderRows(RICH, 'rich-row')
+    const dot = document.querySelector('.row .dot')
+    expect(dot?.classList.contains('broken')).toBe(true)
+    expect(dot?.getAttribute('title')).toContain('No audio')
+  })
+
+  it('draws no health mark at all on a chart with nothing wrong', async () => {
+    // 60 charts in 100 are in this state. A mark on all of them would be a mark that means
+    // nothing, and the rows that do carry one would stop standing out.
+    await renderRows(PLAIN, 'plain-row')
+    expect(document.querySelector('.row .dot')).toBeNull()
+  })
+
+  it('queues one chart from its own row, through the same call the selection uses', async () => {
+    await renderRows(PLAIN, 'plain-row')
+    await fireEvent.click(screen.getByRole('button', { name: /^Download .*CharterPlain/ }))
+    expect(downloadAdd.mock.calls.map((c) => (c[0] as { md5: string }).md5)).toEqual([PLAIN[0].md5])
+    // The button is spent: the queue is where this chart lives now, and a second press would
+    // be answered by the manager's md5 dedupe with nothing to show for it.
+    expect(await screen.findByText('QUEUED')).toBeTruthy()
+  })
+
+  it('offers no download for a chart already in the library, and says so instead', async () => {
+    await renderRows(PLAIN, 'plain-row', true)
+    expect(await screen.findByText('IN LIBRARY')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Download / })).toBeNull()
+  })
+
+  it('answers the missing library folder once, rather than queueing a doomed download', async () => {
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: PLAIN })
+    browseSearch.setMode('list')
+    browseSearch.setQuery('plain-row')
+    renderBrowse(() => {}, { libraryFolders: [] })
+    await screen.findByText('Plain Row')
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Download .*CharterPlain/ }))
+
+    expect(downloadAdd).not.toHaveBeenCalled()
+    expect(screen.getByText(/No library folder yet/)).toBeTruthy()
   })
 })

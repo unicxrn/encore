@@ -62,6 +62,19 @@ export interface MaxNps {
   time: number
 }
 
+/**
+ * One row of scan-chart's note-level linting, as the search response carries it.
+ *
+ * `instrument` and `difficulty` are the track it was found on and can be absent, which is how
+ * scan-chart reports an issue about the chart as a whole rather than about one track.
+ */
+export interface ChartIssue {
+  instrument?: string | null
+  difficulty?: string | null
+  noteIssue: string
+  description: string
+}
+
 export interface NotesData {
   instruments?: string[]
   noteCounts?: NoteCount[]
@@ -73,6 +86,19 @@ export interface NotesData {
   hasTapNotes?: boolean
   hasOpenNotes?: boolean
   has2xKick?: boolean
+  hasFlexLanes?: boolean
+  chartIssues?: ChartIssue[]
+}
+
+/** scan-chart's folder and metadata findings, keyed the way each array names its own code. */
+export interface FolderIssue {
+  folderIssue: string
+  description: string
+}
+
+export interface MetadataIssue {
+  metadataIssue: string
+  description: string
 }
 
 export interface ChartData {
@@ -95,6 +121,22 @@ export interface ChartData {
   diff_vocals: number | null
   modifiedTime?: string
   notesData?: NotesData | null
+  /**
+   * Optional because every existing caller builds a ChartData by hand, and optional here is
+   * what stops a field the row merely decorates with from becoming a required one in forty
+   * test fixtures. The API sends all of them on every search result.
+   *
+   * What it does NOT send, verified by dumping all 66 fields of a result on 2026-09-15: a
+   * download count, a file size and a rating. Chart Manager shows those because it also
+   * queries RhythmVerse. Encore does not, so a column for any of them would be permanently
+   * empty or filled with a number nobody measured.
+   */
+  folderIssues?: FolderIssue[]
+  metadataIssues?: MetadataIssue[]
+  /** True when the chart drives scripted effects rather than only notes. Rare: 0 of that 100. */
+  modchart?: boolean
+  /** The pack a chart came in. Null far more often than not: null on all 100 of that sample. */
+  packName?: string | null
 }
 
 export interface SearchResult {

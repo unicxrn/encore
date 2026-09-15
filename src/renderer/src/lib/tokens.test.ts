@@ -263,14 +263,16 @@ describe('colour and elevation tokens', () => {
    * var(--border-1)` was invalid at computed-value time and the border was simply never painted.
    * Both looked like working CSS in the file and in review.
    *
-   * One component property is not from this file and is named here rather than waved through by a
-   * looser pattern: PlayerBar sets `--p` per element with Svelte's `style:--p`, as the scrub
-   * position the progress fill scales by. It is data on one element, not a token, which is why it
-   * is the exception and not a step in tokens.css. Anything else a component reads has to come
-   * from here.
+   * Two component properties are not from this file and are named here rather than waved through
+   * by a looser pattern. PlayerBar sets `--p` per element with Svelte's `style:--p`, as the scrub
+   * position the progress fill scales by. DiffPips sets `--pip` the same way, to whichever
+   * instrument colour `instrumentColorVar` names for the part it is drawing: the colours are
+   * steps in this file, and `--pip` is the one-element handle that points at one of them. Both
+   * are data on one element rather than tokens, which is why they are exceptions and not steps in
+   * tokens.css. Anything else a component reads has to come from here.
    */
   it('defines every custom property the components read', () => {
-    const perElement = new Set(['--p'])
+    const perElement = new Set(['--p', '--pip'])
     const declared = new Set([...tokens.matchAll(/(--[a-z0-9-]+):/g)].map((m) => m[1]))
     const missing = new Set<string>()
     for (const file of sourceFiles) {

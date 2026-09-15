@@ -88,7 +88,7 @@
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
-    line-height: 1;
+    line-height: var(--lh-tight);
     color: var(--pip);
   }
   .part.absent .letter {

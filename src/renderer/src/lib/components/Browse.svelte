@@ -6,9 +6,11 @@
   import { globalQuery } from '../stores/global-search'
   import { settings } from '../stores/settings'
   import { INSTRUMENTS, DIFFICULTIES, albumArtUrl, type ChartData } from '../api/enchor'
-  import { msToTime, diffDisplay, stripRichText } from '../../../../shared/format'
+  import { msToTime, stripRichText } from '../../../../shared/format'
+  import { issueSummary, issueTitle } from '../issue-summary'
   import { encore } from '../stores/bridge'
   import AdvancedSearch from './AdvancedSearch.svelte'
+  import DiffPips from './DiffPips.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   // Rows open the full Detail page (the old inline side panel is retired).
@@ -368,6 +370,123 @@
     search.clearSelected()
   }
 
+  /**
+   * The three parts a row draws pips for, and the only three.
+   *
+   * Chorus returns thirteen `diff_*` fields and the matrix can list ten instruments, but a row
+   * is read by scanning down a column and a column only exists if every row has it. Ten would
+   * be a wall; three fixed ones are three columns the eye can follow. Keys, vocals and the
+   * six-fret variants are in the chart Detail, where there is room to be complete.
+   *
+   * The same three Installed shows, in the same order, so a chart looks the same in both lists.
+   */
+  const ROW_PARTS: readonly { key: string; label: string }[] = [
+    { key: 'guitar', label: 'Guitar' },
+    { key: 'bass', label: 'Bass' },
+    { key: 'drums', label: 'Drums' }
+  ]
+
+  function tierOf(chart: ChartData, key: string): number | null {
+    if (key === 'bass') return chart.diff_bass
+    if (key === 'drums') return chart.diff_drums
+    return chart.diff_guitar
+  }
+
+  /** scan-chart's reading of which tracks the chart contains, empty when it never read it. */
+  function partsOf(chart: ChartData): readonly string[] {
+    return chart.notesData?.instruments ?? []
+  }
+
+  /**
+   * The badges, chosen for how rarely they are true.
+   *
+   * A badge earns its place by splitting the list, and a flag that is set on more than half of
+   * Chorus splits nothing. Measured over 100 charts from api.enchor.us on 2026-09-15:
+   * hasLyrics 62, hasOpenNotes 61, hasTapNotes 57, hasSoloSections 44. Four badges on most
+   * rows would be four things to read past on the way to the title. They are out.
+   *
+   * These three are in because they are uncommon and because each one changes a decision.
+   * VIDEO is most of what a download weighs and Encore can strip it. 2X KICK is a chart a
+   * drummer either has the pedals for or does not. MODCHART is rare enough (0 of that 100)
+   * that when it is there it is the most surprising thing about the chart.
+   *
+   * `packName` is not a badge: it was null on all 100. A badge nothing ever sets is markup
+   * that only ever costs.
+   */
+  function badgesFor(chart: ChartData): { key: string; text: string; title: string }[] {
+    const badges: { key: string; text: string; title: string }[] = []
+    if (chart.hasVideoBackground) {
+      badges.push({
+        key: 'video',
+        text: 'VIDEO',
+        title: 'Ships a background video, which is most of the download. Settings can skip it.'
+      })
+    }
+    if (chart.notesData?.has2xKick) {
+      badges.push({ key: 'kick', text: '2X KICK', title: 'The drum chart uses a double pedal.' })
+    }
+    if (chart.modchart) {
+      badges.push({
+        key: 'mod',
+        text: 'MODCHART',
+        title: 'Drives scripted effects, not just notes.'
+      })
+    }
+    return badges
+  }
+
+  // `explainIssue` needs to know which machine this is, because badVideo is a fault on Linux
+  // and a portability note everywhere else. Read once: it cannot change while the app runs.
+  const platform = encore().platform
+
+  function healthOf(chart: ChartData): { summary: ReturnType<typeof issueSummary>; title: string } {
+    const summary = issueSummary(chart, platform)
+    return { summary, title: issueTitle(summary) ?? '' }
+  }
+
+  /** Artist, album and year on one line, with the separators of the empty fields dropped. */
+  function metaOf(chart: ChartData): string {
+    return [chart.artist, chart.album, chart.year]
+      .map((part) => stripRichText(part ?? ''))
+      .filter(Boolean)
+      .join(' · ')
+  }
+
+  /**
+   * Queueing one chart from its own row, next to the selection that queues many.
+   *
+   * Same call, same guard and same md5 dedupe as `downloadSelected`: the manager ignores an
+   * md5 it already holds, so a second press costs nothing, and a library folder that is not
+   * set is answered once here rather than as one failure per chart in the queue.
+   *
+   * The set is what the button reads, so a row that has been queued says so for the rest of
+   * the visit. It is not persistence: the download panel is where a queue actually lives, and
+   * a chart that finishes downloading turns up as IN LIBRARY on the next visit anyway.
+   */
+  const queued = new SvelteSet<number>()
+  let rowError = $state<string | null>(null)
+
+  async function downloadOne(chart: ChartData): Promise<void> {
+    rowError = null
+    if ($settings.libraryFolders.length === 0) {
+      rowError =
+        'No library folder yet, so there is nowhere to put this chart. Add one in Settings.'
+      return
+    }
+    queued.add(chart.chartId)
+    try {
+      await encore().downloadAdd({
+        md5: chart.md5,
+        hasVideoBackground: chart.hasVideoBackground,
+        meta: { name: chart.name, artist: chart.artist, charter: chart.charter }
+      })
+    } catch {
+      // Taken back out, so the button offers the action again rather than claiming it is done.
+      queued.delete(chart.chartId)
+      rowError = `Encore could not queue "${stripRichText(chart.name)}". Try again.`
+    }
+  }
+
   // Gated on `searched` rather than on the rows alone: the store debounces for 300ms before it
   // requests anything, and during that window an unasked question looks exactly like one that
   // came back empty. `error` has its own card above the table and speaks for itself.
@@ -505,6 +624,17 @@
         {/if}
       </div>
     {/if}
+    <!-- One line for the whole list rather than one inside each row: a download that could not
+         be queued has a sentence's worth of reason, and a row has no space for a sentence. It
+         sits above the results because that is where the rest of the list's news is.
+
+         role="status" rather than "alert": it follows a button the user just pressed. -->
+    {#if rowError}
+      <p class="row-error" role="status">
+        <span>{rowError}</span>
+        <button class="dropped-action" onclick={() => (rowError = null)}>Dismiss</button>
+      </p>
+    {/if}
     {#if $error}
       <!-- role="alert": a failed search replaces the list with this card and nothing else moves,
            so a screen reader that is not told is left with a list that quietly stopped. -->
@@ -523,6 +653,55 @@
         checked={$selected.has(c.chartId)}
         onchange={() => search.toggleSelected(c.chartId)}
       />
+    {/snippet}
+    <!-- The four things a result says about a chart, each defined once. The row, the row an
+         expanded group adds under it and the grid card all render these, and a second copy of
+         any of them is how one layout comes to claim something the other does not. -->
+    {#snippet badges(c: ChartData)}
+      {#each badgesFor(c) as badge (badge.key)}
+        <span class="badge mono" title={badge.title}>{badge.text}</span>
+      {/each}
+    {/snippet}
+    {#snippet pips(c: ChartData)}
+      {#each ROW_PARTS as part (part.key)}
+        <DiffPips
+          instrument={part.key}
+          label={part.label}
+          instruments={partsOf(c)}
+          tier={tierOf(c, part.key)}
+        />
+      {/each}
+    {/snippet}
+    <!-- Nothing at all for a clean chart, which is 60 charts in 100. A mark on every row is a
+         mark that means nothing; this one only appears where there is something to say, so the
+         eye lands on the rows that have it. Chorus runs scan-chart over everything it ingests
+         and sends the findings with the search result, so this costs no request. -->
+    {#snippet health(c: ChartData)}
+      {@const found = healthOf(c)}
+      {#if found.summary.worst !== null}
+        <span
+          class="dot"
+          class:broken={found.summary.worst === 'blocking'}
+          role="img"
+          aria-label={found.title}
+          title={found.title}
+        ></span>
+      {/if}
+    {/snippet}
+    <!-- Owned is a statement and downloading is an action, so one is text and one is a button.
+         The metadata match behind "IN LIBRARY" means this song by this charter is installed,
+         which is why the button is gone rather than merely dimmed: there is nothing useful to
+         press. -->
+    {#snippet action(c: ChartData)}
+      {#if inLibraryIds.has(c.chartId)}
+        <span class="lib-badge">IN LIBRARY</span>
+      {:else if queued.has(c.chartId)}
+        <span class="queued mono">QUEUED</span>
+      {:else}
+        <button class="get" aria-label="Download {openLabel(c)}" onclick={() => void downloadOne(c)}
+          >Download</button
+        >
+      {/if}
     {/snippet}
     <!-- Primary and alternate cards differ only in the version chip and the
          badge, so they share one snippet: two near-identical blocks is how the
@@ -560,13 +739,17 @@
           {#if isAlt}
             <span class="alt-badge">OTHER VERSION</span>
           {/if}
+          {@render health(c)}
         </span>
         <span class="c-artist">{stripRichText(c.artist)}</span>
-        <span class="c-charter">
-          {stripRichText(c.charter)}
-          {#if inLibraryIds.has(c.chartId)}
-            <span class="lib-badge">IN LIBRARY</span>
-          {/if}
+        <span class="c-charter">{stripRichText(c.charter)}</span>
+        <!-- The pips and the badges are the same two the row draws, so a chart says the same
+             thing in both layouts and switching between them is a change of shape, not of
+             subject. They wrap, because a card is 148px wide and a row is not. -->
+        <span class="c-diffs">{@render pips(c)}</span>
+        <span class="c-foot">
+          {@render badges(c)}
+          {@render action(c)}
         </span>
       </div>
     {/snippet}
@@ -596,6 +779,7 @@
           {@const chart = group.primary}
           {@const hasVersions = group.others.length > 0}
           {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
+          {@const rowArt = artFor(chart)}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
              (This handler only widens the mouse target; the keyboard path is the .open
              button inside, and giving the container a widget role would put that button
@@ -603,6 +787,17 @@
           <div class="row" onclick={(e) => onRowClick(chart, e)}>
             {@render pick(chart)}
             <span class="num">{String(i + 1).padStart(2, '0')}</span>
+            {#if rowArt}
+              <img
+                class="cover"
+                src={rowArt}
+                alt=""
+                loading="lazy"
+                onerror={() => chart.albumArtMd5 && artFailed.add(chart.albumArtMd5)}
+              />
+            {:else}
+              <div class="cover placeholder"></div>
+            {/if}
             <span class="song">
               <span class="title">
                 <button class="open" aria-label={openLabel(chart)} onclick={() => openChart(chart)}
@@ -616,62 +811,47 @@
                     aria-label="{group.others.length + 1} versions">+{group.others.length}</button
                   >
                 {/if}
+                {@render badges(chart)}
               </span>
-              <span class="artist"
-                >{stripRichText(chart.artist)}{chart.album
-                  ? ` · ${stripRichText(chart.album)}`
-                  : ''}</span
-              >
+              <span class="artist">{metaOf(chart)}</span>
             </span>
-            <span class="charter">
-              {stripRichText(chart.charter)}
-              {#if inLibraryIds.has(chart.chartId)}
-                <span class="lib-badge">IN LIBRARY</span>
-              {/if}
-            </span>
-            <span class="diffs">
-              {#if chart.diff_guitar != null}<span class="diff"
-                  >G{diffDisplay(chart.diff_guitar)}</span
-                >{/if}
-              {#if chart.diff_bass != null}<span class="diff">B{diffDisplay(chart.diff_bass)}</span
-                >{/if}
-              {#if chart.diff_drums != null}<span class="diff"
-                  >D{diffDisplay(chart.diff_drums)}</span
-                >{/if}
-            </span>
+            <span class="charter">{stripRichText(chart.charter)}</span>
+            <span class="diffs">{@render pips(chart)}</span>
+            <span class="health">{@render health(chart)}</span>
+            <span class="act">{@render action(chart)}</span>
             <span class="len">{msToTime(chart.song_length)}</span>
           </div>
           {#if isExpanded}
             {#each group.others as alt (alt.chartId)}
+              {@const altArt = artFor(alt)}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
                  (Same as the primary row above.) -->
               <div class="row sub-row" onclick={(e) => onRowClick(alt, e)}>
                 {@render pick(alt)}
                 <span class="num"></span>
+                {#if altArt}
+                  <img
+                    class="cover"
+                    src={altArt}
+                    alt=""
+                    loading="lazy"
+                    onerror={() => alt.albumArtMd5 && artFailed.add(alt.albumArtMd5)}
+                  />
+                {:else}
+                  <div class="cover placeholder"></div>
+                {/if}
                 <span class="song song-indented">
                   <span class="title text-2"
                     ><button class="open" aria-label={openLabel(alt)} onclick={() => openChart(alt)}
                       >{stripRichText(alt.name)}</button
-                    ></span
+                    >{@render badges(alt)}</span
                   >
-                  <span class="artist">{stripRichText(alt.charter)}</span>
+                  <span class="artist">{metaOf(alt)}</span>
                 </span>
-                <span class="charter">
-                  {stripRichText(alt.charter)}
-                  {#if inLibraryIds.has(alt.chartId)}
-                    <span class="lib-badge">IN LIBRARY</span>
-                  {/if}
-                </span>
-                <span class="diffs">
-                  {#if alt.diff_guitar != null}<span class="diff"
-                      >G{diffDisplay(alt.diff_guitar)}</span
-                    >{/if}
-                  {#if alt.diff_bass != null}<span class="diff">B{diffDisplay(alt.diff_bass)}</span
-                    >{/if}
-                  {#if alt.diff_drums != null}<span class="diff"
-                      >D{diffDisplay(alt.diff_drums)}</span
-                    >{/if}
-                </span>
+                <span class="charter">{stripRichText(alt.charter)}</span>
+                <span class="diffs">{@render pips(alt)}</span>
+                <span class="health">{@render health(alt)}</span>
+                <span class="act">{@render action(alt)}</span>
                 <span class="len">{msToTime(alt.song_length)}</span>
               </div>
             {/each}
@@ -745,11 +925,23 @@
     display: flex;
     height: 100%;
   }
+  /* The width the results row lays itself out against. On `.main` and not on `.table`, which
+     is the element that scrolls: `container-type` brings layout containment with it, and the
+     scroller carries the restore, the scroll listener and the observer root that auto-append
+     depends on. `.main` is a flex item with `min-width: 0`, so its inline size already comes
+     from the frame around it and containing it changes nothing.
+
+     A container query rather than a media query because window width does not tell you how
+     wide this column is. The rail is 374px and shows only above 1120px, so the view is 882px
+     at a 1120px window and 509px at a 1121px one. A media query would have to encode that
+     backwards step; the container just measures. */
   .main {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    container-type: inline-size;
+    container-name: results;
   }
   .searchbar {
     display: flex;
@@ -905,12 +1097,19 @@
     overflow-y: auto;
     border-top: 1px solid var(--hairline);
   }
+  /* The wide row, which is one line of nine tracks: checkbox, index, cover, song, charter,
+     difficulty, health, action, length. Two of those tracks fold away below; see the container
+     query under `.len`.
+
+     `minmax(0, …)` on the two text tracks rather than a bare `1fr` and a bare `150px`: a grid
+     track's automatic minimum is the widest thing in it, so a chart with a long title pushes
+     the row wider than the box instead of ellipsising inside it, and the whole list then
+     scrolls sideways. This is the rule that keeps Explore from doing that. */
   .row {
     display: grid;
-    /* Leading 16px track is the select checkbox, sized to match `.pick`; charter
-       column is 160px, not 130, because the IN LIBRARY badge sits next to the
-       charter name and grew with the small-text floor. */
-    grid-template-columns: 16px 26px 1fr 160px 120px 64px;
+    grid-template-columns:
+      16px 26px 40px minmax(0, 1fr) minmax(0, 150px)
+      132px 10px 92px 46px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -924,6 +1123,17 @@
   }
   .row:hover {
     background: var(--surface-1);
+  }
+  /* Fixed rather than aspect-ratio: a square that takes its height from its width is a square
+     that changes the row's height when the column does, and rows of two heights are the thing
+     the eye trips over when scanning a list. */
+  .cover {
+    width: 40px;
+    height: 40px;
+    border-radius: 5px;
+    object-fit: cover;
+    display: block;
+    background: var(--surface-2);
   }
   .sub-row {
     background: rgba(255, 255, 255, 0.015);
@@ -1086,6 +1296,23 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Wrapping, unlike the row's, because a card is 148px and three parts do not fit across it.
+     `margin-top: auto` on the foot pins the action to the bottom of every card, so a column of
+     cards has its buttons on one line whatever length of title each one carries. */
+  .c-diffs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-top: 4px;
+  }
+  .c-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: auto;
+    padding-top: 6px;
+  }
   /* Same quiet mono family as .lib-badge and .ver-chip: it labels the card, it
      is not something to click. */
   .alt-badge {
@@ -1190,10 +1417,12 @@
     border-color: rgba(255, 255, 255, 0.2);
     color: var(--text-2);
   }
-  /* Deliberately quiet (text-3 + hairline, no accent): informational, not a call to action. */
+  /* Deliberately quiet (text-3 + hairline, no accent): informational, not a call to action.
+     It sits where the Download button would be, because "you have this" is the answer to the
+     question that button asks and the two belong in the same place. */
   .lib-badge {
     display: inline-block;
-    margin-left: 5px;
+    white-space: nowrap;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
@@ -1204,23 +1433,123 @@
     vertical-align: middle;
     line-height: var(--lh-snug);
   }
+  /* 6px between the three parts, which is half the 12px that separates a part's letter from
+     the next part's pips. The gap inside a group has to read as smaller than the gap between
+     groups or the eighteen bars read as one run. */
   .diffs {
     display: flex;
-    gap: 4px;
+    gap: 6px;
+    min-width: 0;
   }
-  .diff {
+  .health {
+    display: flex;
+    justify-content: center;
+  }
+  /* Hollow for a charting note, filled for breakage. A ring and a disc differ in shape and not
+     only in colour, which is what keeps the two apart for a red-green colour blind reader; the
+     colours are the second signal, not the only one. */
+  .dot {
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-3);
+    cursor: help;
+  }
+  .dot.broken {
+    border-color: var(--danger);
+    background: var(--danger);
+  }
+  .act {
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  /* A ghost button, not the accent one the selection bar uses. There is one of these on every
+     row that is not owned, and ninety accent buttons down a list is a list with no primary
+     action at all. */
+  .get {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 3px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .get:hover,
+  .get:focus {
+    color: var(--text-1);
+    border-color: var(--accent);
+  }
+  .queued {
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  /* The flags that survived the cut, drawn like the version chip beside them: they label the
+     chart, they are not something to press. */
+  .badge {
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: var(--text-3);
+    line-height: var(--lh-snug);
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: help;
+  }
+  .mono {
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
-    color: var(--text-2);
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
-    padding: 2px 5px;
+    letter-spacing: var(--ls-caps);
   }
   .len {
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     color: var(--text-3);
     text-align: right;
+  }
+  /* What the row gives up when the column it lives in is narrow, and why these two.
+     The index is a position in a list the user is already looking at, and the length is the
+     one field here that is also on the chart Detail one click away. Everything else is either
+     the chart's identity or a reason to download it.
+
+     760px is where the nine tracks stop leaving the title a readable share. Below it the same
+     row is two lines: the cover spans both, the charter drops under the song, and the three
+     columns at the end stay put, so the difficulty and the action are still a column the eye
+     can run down. Measured, not guessed: `scripts/measure-explore-row.mjs` reports the numbers
+     at every width the shell supports. The narrowest is 509px, which is this column at a
+     1121px window, the first width at which the rail appears. */
+  @container results (max-width: 759px) {
+    .row {
+      grid-template-columns: 16px 40px minmax(0, 1fr) 132px 10px 92px;
+      grid-template-rows: auto auto;
+      row-gap: 2px;
+    }
+    .row .num,
+    .row .len {
+      display: none;
+    }
+    .row .cover {
+      grid-row: 1 / 3;
+      width: 44px;
+      height: 44px;
+    }
+    .row .charter {
+      grid-column: 3 / 4;
+      grid-row: 2 / 3;
+    }
+    .row .diffs,
+    .row .health,
+    .row .act {
+      grid-row: 1 / 3;
+    }
   }
   .more-row {
     display: flex;
@@ -1306,6 +1635,19 @@
      The row is what keeps them attached to the note at any width, since this note is the only
      account the user gets of why the results changed. */
   .dropped {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 16px 8px;
+    max-width: 68ch;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+  }
+  /* Same shape as `.dropped` above, which is the other line in this view that reports
+     something the user's last action caused. */
+  .row-error {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
