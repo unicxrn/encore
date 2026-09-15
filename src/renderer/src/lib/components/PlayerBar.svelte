@@ -167,7 +167,11 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    height: 64px;
+    /* Row 3 of the app shell is 70px and this bar is what fills it. The number lives here
+       rather than being inherited from the row, because the row is content-sized against this
+       box: see App's `.foot`, where that is what lets the error strip appear without moving
+       the bar. */
+    height: 70px;
     flex-shrink: 0;
     padding: 0 16px;
     background: var(--surface-1);

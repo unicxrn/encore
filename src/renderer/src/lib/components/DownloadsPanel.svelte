@@ -60,7 +60,7 @@
 
      Anchored with `bottom: calc(100% + 10px)` to App's `.foot` (the positioned box holding
      the player bar AND the runtime error strip above it), NOT to the window and NOT to the
-     bar. `bottom: 74px` against the app shell (64px of bar plus the gap) was only true while
+     bar. A fixed `bottom` against the app shell (the bar's height plus the gap) was only true while
      nothing sat above the bar; anchoring to the bar itself was no better, because the strip
      stacks above the bar, not below it. Measured at 1280×800 with the strip showing, both of
      those put the panel at y 657-727 over a strip at 699-736, covering its Copy and Dismiss

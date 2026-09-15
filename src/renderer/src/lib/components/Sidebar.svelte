@@ -5,6 +5,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { encore } from '../stores/bridge'
+  import { appUpdate } from '../stores/app-update'
   import { APP_VERSION } from '../../../../shared/constants'
 
   let {
@@ -28,21 +29,25 @@
     action?: () => void
   }
 
+  /**
+   * Two groups where there were three, and the ORDER inside them is byte for byte what it was.
+   *
+   * That is the whole of the care this needed. `Mod+1…7` is this list read top to bottom
+   * (SHORTCUT_VIEWS in shortcuts.ts, pinned against this component by its own test), so moving a
+   * row between groups is free and moving one past another is not. Home and Explore left the
+   * MENU header for the top of LIBRARY, and Stats left the bottom of LIBRARY for the top of
+   * TOOLS; neither crossed anything, so every digit reaches the view it reached before.
+   */
   const SECTIONS: { header: string; items: NavItem[] }[] = [
     {
-      header: 'MENU',
+      header: 'LIBRARY',
       items: [
         { view: 'home', label: 'Home', d: 'M4 11.5 12 4.5l8 7M6.5 9.75V19.5h11V9.75' },
         {
           view: 'browse',
           label: 'Explore',
           d: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm9 16-3.5-3.5'
-        }
-      ]
-    },
-    {
-      header: 'LIBRARY',
-      items: [
+        },
         { view: 'library', label: 'Installed', d: 'M4 5h16M4 12h16M4 19h10' },
         {
           label: 'Downloads',
@@ -56,21 +61,17 @@
           // The view id is unchanged; this is a label-only rename.
           label: 'Asset Studio',
           d: 'M12 3v10.5M9.5 12.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM12 6c2 0 3-1 5-1v4c-2 0-3 1-5 1'
-        },
-        {
-          view: 'stats',
-          // Last in this group rather than next to Installed, which reads better and costs
-          // more: `Mod+1…7` follows this order, so a row inserted higher up would move every
-          // digit below it. Here it takes the next free digit and only Issues and Settings
-          // shift, which is the smallest change that still puts it where it belongs.
-          label: 'Stats',
-          d: 'M4 19.5h16M7 19V11m5 8V5.5m5 13.5v-6'
         }
       ]
     },
     {
       header: 'TOOLS',
       items: [
+        {
+          view: 'stats',
+          label: 'Stats',
+          d: 'M4 19.5h16M7 19V11m5 8V5.5m5 13.5v-6'
+        },
         {
           view: 'tools',
           label: 'Issues',
@@ -85,7 +86,62 @@
     }
   ]
 
+  /**
+   * The game the library belongs to.
+   *
+   * Encore reads Clone Hero's folders, Clone Hero's score files and Clone Hero's checksum, and
+   * every one of those is specific to it. YARG is here as a tile and not as a menu item because
+   * a switcher with one tile is not a switcher, and because the tile can say plainly that it is
+   * not wired yet; a greyed row in a dropdown says nothing at all. Selecting it is refused
+   * rather than silently ignored.
+   */
+  const GAMES = [
+    { id: 'clonehero', label: 'Clone Hero', note: 'Your library' },
+    { id: 'yarg', label: 'YARG', note: 'Not yet' }
+  ] as const
+  const game = 'clonehero'
+
+  /**
+   * Where Explore searches. Only the first of these is implemented.
+   *
+   * The two that are not are drawn as disabled controls carrying the reason, rather than as
+   * live-looking segments that quietly do nothing: this app already downloads from Chorus
+   * Encore and only from Chorus Encore, and a segment that looked switchable would be claiming
+   * a source the downloads queue cannot fetch from.
+   */
+  const SOURCES = [
+    { id: 'chorus', label: 'Chorus Encore', live: true },
+    { id: 'rhythmverse', label: 'RhythmVerse', live: false },
+    { id: 'both', label: 'Both', live: false }
+  ] as const
+  const source = 'chorus'
+  const NOT_WIRED = 'Not connected yet. Encore searches Chorus Encore.'
+
   let ytdlpLine = $state('YT-DLP …')
+
+  /** One short line about Encore's own next release, for the footer. */
+  const updateLine = $derived.by(() => {
+    const status = $appUpdate
+    if (status === null) return 'UPDATE …'
+    switch (status.state.kind) {
+      case 'idle':
+        return 'UPDATES NOT CHECKED'
+      case 'checking':
+        return 'CHECKING FOR UPDATES'
+      case 'current':
+        return 'UP TO DATE'
+      case 'available':
+        return `UPDATE ${status.state.version} AVAILABLE`
+      case 'downloading':
+        return status.state.percent === null
+          ? 'DOWNLOADING UPDATE'
+          : `DOWNLOADING ${status.state.percent}%`
+      case 'ready':
+        return `UPDATE ${status.state.version} READY`
+      case 'error':
+        return 'UPDATE CHECK FAILED'
+    }
+  })
 
   onMount(() => {
     encore()
@@ -117,6 +173,74 @@
     </svg>
     <span>ENC<span class="o">O</span>RE</span>
   </div>
+
+  <!-- A radiogroup and not a tablist: these pick which library Encore is looking at, which is a
+       setting, not a view. Only one of the two can be chosen, and the other says why. -->
+  <div class="games" role="radiogroup" aria-label="Game">
+    {#each GAMES as entry (entry.id)}
+      <button
+        class="game"
+        class:on={game === entry.id}
+        role="radio"
+        aria-checked={game === entry.id}
+        disabled={entry.id !== game}
+        title={entry.id === game ? undefined : 'Encore reads Clone Hero libraries'}
+      >
+        <span class="game-label">{entry.label}</span>
+        <span class="game-note mono">{entry.note}</span>
+      </button>
+    {/each}
+  </div>
+
+  <div class="quick">
+    <!-- Both are disabled rather than absent: the frame is what this step is for, and a control
+         that is coming reads better as a control that is not ready than as a gap that will
+         change shape later. `title` carries the reason; `disabled` keeps it out of the tab
+         order and out of every click. -->
+    <button class="quick-btn" disabled title="Playlist import is not built yet">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        aria-hidden="true"
+      >
+        <path d="M4 6h11M4 11h11M4 16h7M17.5 10v9m0 0 3-3m-3 3-3-3" />
+      </svg>
+      Import playlist
+    </button>
+    <button class="quick-btn" disabled title="Surprise me is not built yet">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        aria-hidden="true"
+      >
+        <path d="M5 5h4l10 14h-4M5 19h4l2-3m5-8 3-3m0 0-3-3m3 3h-4l-1 1.5M19 19l-3-3m3 3-3 3" />
+      </svg>
+      Surprise me
+    </button>
+  </div>
+
+  <div class="source" role="radiogroup" aria-label="Chart source">
+    {#each SOURCES as entry (entry.id)}
+      <button
+        class="seg"
+        class:on={source === entry.id}
+        role="radio"
+        aria-checked={source === entry.id}
+        disabled={!entry.live}
+        title={entry.live ? undefined : NOT_WIRED}
+      >
+        {entry.label}
+      </button>
+    {/each}
+  </div>
+  <!-- Said once in text rather than three times in tooltips: a tooltip is not an answer for
+       someone who never hovers, and the two dead segments need one between them. -->
+  <p class="source-note">{NOT_WIRED}</p>
+
   {#each SECTIONS as section (section.header)}
     <!-- The visible header names the group, so it is pointed at rather than
          duplicated into an aria-label. Without this the three headers are
@@ -164,7 +288,10 @@
   {/each}
   <div class="bottom">
     <div class="status-card">
-      <div class="status-line">ENCORE {APP_VERSION}</div>
+      <!-- The update state, read from the same store Settings reads, so the footer cannot say
+           something the Updates row disagrees with. Polite: it rewrites itself when the startup
+           check answers, which is seconds after mount and nowhere near the user's attention. -->
+      <div class="status-line" role="status">{updateLine}</div>
       <!-- The line rewrites itself when the sidecar probe answers, seconds after
            mount. Polite so it waits for a gap rather than cutting in. -->
       <div class="status-line" role="status">{ytdlpLine}</div>
@@ -178,30 +305,148 @@
         Keyboard shortcuts
       </button>
     </div>
-    <div class="version">v{APP_VERSION}</div>
+    <div class="version">ENCORE v{APP_VERSION}</div>
   </div>
 </nav>
 
 <style>
+  /* No width here any more: the app shell's grid owns column 1, and a component that also
+     declared one would be a second answer to the same question. */
   .sidebar {
-    width: 240px;
-    flex-shrink: 0;
     border-right: 1px solid var(--hairline);
     display: flex;
     flex-direction: column;
-    padding: 14px 12px 10px;
+    padding: 0 12px 10px;
     overflow-y: auto;
   }
+  /* The sidebar now runs to the window's top edge, so this block is beside the title bar
+     rather than under it, and has to drag the window like the title bar does. It holds no
+     control, so nothing inside needs `no-drag`. Its height matches row 1 of the shell, which
+     is what keeps the wordmark's baseline level with the search field's. */
   .brand {
     display: flex;
     align-items: center;
     gap: 8px;
+    height: 50px;
+    flex-shrink: 0;
     font-weight: 700;
     font-size: var(--fs-emphasis);
     /* Exception: 0.14em, wider than --ls-caps. Six letters set as a wordmark, not a
        label. The extra tracking is what makes it read as a mark rather than a heading. */
     letter-spacing: 0.14em;
-    padding: 2px 10px 14px;
+    padding: 0 10px;
+    -webkit-app-region: drag;
+  }
+  /* ── game switcher ──────────────────────────────────────────────────────── */
+  .games {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin: 10px 0 12px;
+  }
+  .game {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    background: var(--ground-2);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    text-align: left;
+    padding: 7px 9px;
+    cursor: pointer;
+  }
+  .game.on {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--text-1);
+  }
+  /* The unselected tile is the one that is not available, so it is drawn as unavailable
+     rather than merely unselected: no pointer, and the note under it says "Not yet". */
+  .game:disabled {
+    cursor: default;
+    opacity: 0.65;
+  }
+  .game-label {
+    font-size: var(--fs-secondary);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+  }
+  .game-note {
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+  }
+  /* ── quick actions ──────────────────────────────────────────────────────── */
+  .quick {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .quick-btn {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    text-align: left;
+    padding: 6px 9px;
+    cursor: pointer;
+  }
+  .quick-btn:disabled {
+    cursor: default;
+    color: var(--text-3);
+  }
+  .quick-btn svg {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+  }
+  /* ── source switcher ────────────────────────────────────────────────────── */
+  .source {
+    display: flex;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .seg {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    border-left: 1px solid var(--border-1);
+    background: transparent;
+    color: var(--text-3);
+    font-family: var(--font-ui);
+    font-size: var(--fs-caption);
+    padding: 5px 2px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .seg:first-child {
+    border-left: 0;
+  }
+  .seg.on {
+    background: var(--ground-4);
+    color: var(--text-1);
+  }
+  .seg:disabled {
+    cursor: default;
+  }
+  .source-note {
+    font-size: var(--fs-caption);
+    line-height: var(--lh-snug);
+    color: var(--text-3);
+    padding: 6px 2px 14px;
   }
   /* The viewBox is cropped to the frets and the bar (116×24 units), so at 32px wide the mark
      is 7px tall and a fret is about 5px by 4px: measured at 24×5 the bar under the frets all

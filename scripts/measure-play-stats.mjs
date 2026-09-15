@@ -35,6 +35,10 @@
  *    log and one with no badge at all? A lifetime count has more digits, and the badge lives
  *    inside the title line.
  *
+ * The five questions above those, about the app shell's frame rather than about any one page,
+ * are documented at `FRAME` below. They run first, on Home, because a frame that has collapsed
+ * makes every measurement after it meaningless.
+ *
  * LIFETIME=0 answers the lifetime channel as unavailable, which is the state most users are in
  * and the one where the page must fall back to a single source and drop its tags. EMPTYLOG=1 is
  * the other way round: a full score table and nothing Encore has watched.
@@ -342,6 +346,100 @@ const PAGE = `(() => {
   }
 })()`
 
+/**
+ * The app shell's five regions, as layout has them.
+ *
+ * The one check in this repository that can see the window frame at all. jsdom applies no CSS
+ * and computes no layout, so every component test in the suite answers zero for all of this and
+ * would pass against a window that paints as a black void.
+ *
+ * What it is looking for is one specific failure. `.app` is a three by three grid and a grid
+ * with fewer explicit rows than children auto-places the rest: the content pane lands in the
+ * player's row, the player is pushed into an implicit fourth row below the window, and the
+ * result is a black band with everything crushed at the bottom. Nothing warns, nothing throws,
+ * and no test in the node or renderer projects can tell. It has happened twice.
+ *
+ * Five questions, and the failure above shows up in at least three of them:
+ *
+ * 1. Does every region have a box with real width and height? A region auto-placed into an
+ *    implicit row collapses to zero height against `grid-auto-rows: 0`.
+ * 2. Does any pair of regions overlap? Two things in one cell is the symptom of a placement
+ *    that was never written down.
+ * 3. Is the content column taller than the player bar? The specific shape of the bug was the
+ *    view squeezed into the player's 70px row.
+ * 4. Does the page scroll sideways? Three fixed tracks plus a view that cannot shrink is how a
+ *    fixed-width column pushes the window wider than the window.
+ * 5. Do the regions tile the window: sidebar from the top edge to the bottom, top bar and
+ *    player spanning the two columns beside it, content and rail filling the middle row?
+ */
+const FRAME = `(() => {
+  const round = (n) => Math.round(n)
+  const app = document.querySelector('.app')
+  const pick = (sel) => {
+    const el = document.querySelector(sel)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: round(r.x), y: round(r.y), w: round(r.width), h: round(r.height) }
+  }
+  const regions = {
+    sidebar: pick('.app > nav.sidebar'),
+    topbar: pick('.app > header.topbar'),
+    content: pick('.app > main.view'),
+    rail: pick('.app > aside.rail'),
+    player: pick('.app > .foot')
+  }
+  // Below the shell's breakpoint the rail is deliberately not rendered, which is a fourth
+  // region and not a collapsed fifth. Reported as its own fact so a zero-sized rail under a
+  // wide window still reads as the failure it would be.
+  const railCollapsed = window.innerWidth <= 1120
+  const expected = railCollapsed
+    ? Object.entries(regions).filter(([name]) => name !== 'rail')
+    : Object.entries(regions)
+  const named = expected.filter(([, box]) => box !== null)
+  const missing = expected.filter(([, box]) => box === null).map(([name]) => name)
+  const zero = named.filter(([, b]) => b.w === 0 || b.h === 0).map(([name]) => name)
+  // Boxes that share pixels. Touching edges are not an overlap: two regions at x 238 and x 238
+  // + width are adjacent, so the comparison is strict on both axes.
+  const overlaps = []
+  for (let i = 0; i < named.length; i++) {
+    for (let j = i + 1; j < named.length; j++) {
+      const [an, a] = named[i]
+      const [bn, b] = named[j]
+      const dx = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+      const dy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+      if (dx > 0 && dy > 0) overlaps.push(an + '/' + bn + ' ' + dx + 'x' + dy)
+    }
+  }
+  const content = regions.content
+  const player = regions.player
+  const sidebar = regions.sidebar
+  return {
+    regions,
+    railCollapsed,
+    missing,
+    zeroSized: zero,
+    overlaps,
+    // The bug's own signature: the view no taller than the bar it was auto-placed beside.
+    contentTallerThanPlayer: content && player ? content.h > player.h : null,
+    contentHeight: content ? content.h : null,
+    playerHeight: player ? player.h : null,
+    // The sidebar spans all three rows, so it starts at the window's top edge, not under the
+    // top bar. A sidebar that lost its row span starts at 50.
+    sidebarTop: sidebar ? sidebar.y : null,
+    sidebarFullHeight: sidebar ? sidebar.h === round(window.innerHeight) : null,
+    // Nothing may be placed in an implicit row: grid-auto-rows 0 collapses one, so the sum
+    // of the three explicit row heights is the window height exactly.
+    rowsCoverWindow:
+      regions.topbar && content && player
+        ? regions.topbar.h + content.h + player.h === round(window.innerHeight)
+        : null,
+    appScrollsSideways: app ? app.scrollWidth > app.clientWidth + 1 : null,
+    bodyScrollsSideways: document.body.scrollWidth > document.body.clientWidth + 1,
+    windowWidth: round(window.innerWidth),
+    windowHeight: round(window.innerHeight)
+  }
+})()`
+
 /** Home, which used to carry the panel and now carries none of it. */
 const HOME = `(() => {
   const home = document.querySelector('.home')
@@ -414,6 +512,7 @@ app.whenReady().then(async () => {
 
   await waitFor(win, `document.querySelector('.home')`)
   await sleep(300)
+  console.log('frame      ', JSON.stringify(await evalIn(win, FRAME), null, 1))
   console.log('home       ', JSON.stringify(await evalIn(win, HOME), null, 1))
 
   const statsTab = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Stats')`

@@ -7,6 +7,7 @@
   import Home, { type ChartTarget } from './lib/components/Home.svelte'
   import Icon from './lib/components/Icon.svelte'
   import Library from './lib/components/Library.svelte'
+  import Rail from './lib/components/Rail.svelte'
   import RuntimeErrorBar from './lib/components/RuntimeErrorBar.svelte'
   import Settings from './lib/components/Settings.svelte'
   import Stats from './lib/components/Stats.svelte'
@@ -39,6 +40,17 @@
   // Chart opened from Home or Explore. While set, Detail replaces the current
   // view; Back clears it and returns to the view underneath.
   let detailChart = $state<ChartTarget | null>(null)
+  /**
+   * The rail's subject: the last chart this launch opened, and null before the first one.
+   *
+   * Deliberately NOT cleared when Detail closes, and deliberately not cleared by navigating to
+   * Settings or Stats. The rail is "what you are previewing", which is the same subject the
+   * player bar directly beneath it already holds across every view; a rail that emptied on the
+   * two views with nothing to select would be contradicting the bar under it on the same
+   * screen. What it costs is that the rail is empty until the first chart of the session, which
+   * is a state that ends and does not come back.
+   */
+  let railChart = $state<ChartTarget | null>(null)
   let downloadsOpen = $state(false)
   let shortcutsOpen = $state(false)
   let searchEl = $state<HTMLInputElement | null>(null)
@@ -173,6 +185,12 @@
     if (updateOffer === null) return
     openOfferedWhatsNew(updateOffer.version)
   }
+
+  // The rail follows what the user opens, and holds it afterwards. Written here rather than at
+  // each caller for the reason the downloads effect below gives: the callers are many.
+  $effect(() => {
+    if (detailChart !== null) railChart = detailChart
+  })
 
   /**
    * Navigating closes the downloads panel.
@@ -343,10 +361,17 @@
     />
   {/snippet}
   <div class="app">
+    <Sidebar
+      {view}
+      {downloadsOpen}
+      onNavigate={goTo}
+      onToggleDownloads={() => (downloadsOpen = !downloadsOpen)}
+      onShowShortcuts={() => (shortcutsOpen = true)}
+    />
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- titlebar is a drag region; dblclick-maximize matches native caption-bar behavior -->
-    <header class="titlebar" ondblclick={() => control('maximize')}>
+    <!-- topbar is a drag region; dblclick-maximize matches native caption-bar behavior -->
+    <header class="topbar" ondblclick={() => control('maximize')}>
       <div class="search" ondblclick={(e) => e.stopPropagation()}>
         <input
           bind:this={searchEl}
@@ -380,15 +405,7 @@
         >
       </div>
     </header>
-    <div class="body">
-      <Sidebar
-        {view}
-        {downloadsOpen}
-        onNavigate={goTo}
-        onToggleDownloads={() => (downloadsOpen = !downloadsOpen)}
-        onShowShortcuts={() => (shortcutsOpen = true)}
-      />
-      <!-- The {#key} here is the boundary's reset, NOT a re-render device: the {#if} chain below
+    <!-- The {#key} here is the boundary's reset, NOT a re-render device: the {#if} chain below
          already creates a fresh component (and a fresh root element) on every navigation, and an
          earlier {#key} around a wrapper div was removed for adding a second teardown to each one.
          What it buys back is that a boundary which has caught an error keeps showing its fallback
@@ -396,63 +413,79 @@
          Tools crash on screen. Keyed on the chart object rather than the view id so opening a
          different chart clears a failed Detail too. The fade still rides on the new root element
          via CSS; {#key} adds no element of its own. -->
-      {#key viewKey}
-        <main class="view">
-          <svelte:boundary>
-            {#snippet failed(error, reset)}
-              <ErrorFallback
-                {error}
-                where={viewName}
-                scope="view"
-                onRetry={reset}
-                onLeave={() => {
-                  detailChart = null
-                  view = 'home'
-                }}
-              />
-            {/snippet}
-            {#if detailChart}
-              <Detail
-                target={detailChart}
-                onBack={() => (detailChart = null)}
-                onNavigate={(id) => {
-                  detailChart = null
-                  view = id
-                }}
-              />
-            {:else if view === 'home'}
-              <!-- The welcome replaces Home only, never the whole app: the sidebar keeps working, so
+    {#key viewKey}
+      <main class="view">
+        <svelte:boundary>
+          {#snippet failed(error, reset)}
+            <ErrorFallback
+              {error}
+              where={viewName}
+              scope="view"
+              onRetry={reset}
+              onLeave={() => {
+                detailChart = null
+                view = 'home'
+              }}
+            />
+          {/snippet}
+          {#if detailChart}
+            <Detail
+              target={detailChart}
+              onBack={() => (detailChart = null)}
+              onNavigate={(id) => {
+                detailChart = null
+                view = id
+              }}
+            />
+          {:else if view === 'home'}
+            <!-- The welcome replaces Home only, never the whole app: the sidebar keeps working, so
              nobody is stuck behind it. It is also why the gate is not applied to the other
              branches: a first-run user who clicks Settings must get Settings. -->
-              {#if !$settingsLoaded}
-                <!-- Deliberately empty for the one frame the settings load takes. `settings` starts
+            {#if !$settingsLoaded}
+              <!-- Deliberately empty for the one frame the settings load takes. `settings` starts
                at its defaults, which have no library folders, so rendering either Home or
                Welcome here would be a guess, and the wrong one flashes on every cold start. -->
-              {:else if $needsWelcome}
-                <Welcome onNavigate={(id) => (view = id)} />
-              {:else}
-                <Home
-                  onNavigate={(id) => (view = id)}
-                  onOpenChart={(target) => (detailChart = target)}
-                />
-              {/if}
-            {:else if view === 'browse'}
-              <Browse onOpenChart={(target) => (detailChart = target)} />
-            {:else if view === 'library'}
-              <Library onOpenChart={(target) => (detailChart = target)} />
-            {:else if view === 'assets'}
-              <Assets />
-            {:else if view === 'stats'}
-              <Stats />
-            {:else if view === 'tools'}
-              <Tools />
-            {:else if view === 'settings'}
-              <Settings />
+            {:else if $needsWelcome}
+              <Welcome onNavigate={(id) => (view = id)} />
+            {:else}
+              <Home
+                onNavigate={(id) => (view = id)}
+                onOpenChart={(target) => (detailChart = target)}
+              />
             {/if}
-          </svelte:boundary>
-        </main>
-      {/key}
-    </div>
+          {:else if view === 'browse'}
+            <Browse onOpenChart={(target) => (detailChart = target)} />
+          {:else if view === 'library'}
+            <Library onOpenChart={(target) => (detailChart = target)} />
+          {:else if view === 'assets'}
+            <Assets />
+          {:else if view === 'stats'}
+            <Stats />
+          {:else if view === 'tools'}
+            <Tools />
+          {:else if view === 'settings'}
+            <Settings />
+          {/if}
+        </svelte:boundary>
+      </main>
+    {/key}
+    <!-- Its own boundary, and a third one rather than a wider one: the rail reads a chart
+         record and renders a preview, so it can throw for reasons the content pane never
+         would, and a rail that throws must cost the user the rail and not the app. -->
+    <svelte:boundary>
+      {#snippet failed(error: unknown, reset: () => void)}
+        <!-- Deliberately not `ErrorFallback`: that draws a whole pane, and this column is
+             374px wide. The message the rail can afford is one line, with the reason in the
+             tooltip for whoever is reporting it. -->
+        <aside class="rail rail-failed" aria-label="Chart detail">
+          <p title={error instanceof Error ? error.message : String(error)}>
+            The rail stopped working.
+          </p>
+          <button class="btn-ghost" onclick={reset}>Try again</button>
+        </aside>
+      {/snippet}
+      <Rail target={railChart} />
+    </svelte:boundary>
     <!-- One positioned box for the strip and the bar together. The downloads panel (rendered
          inside PlayerBar) sets `bottom: calc(100% + 10px)` against its containing block, and
          that block has to be this wrapper, not the bar: the strip stacks ABOVE the bar, so a
@@ -500,16 +533,58 @@
 </svelte:boundary>
 
 <style>
+  /* The window frame: three columns, three rows, and every child placed by hand.
+     
+     The placement is the whole of this rule and none of it is optional. A grid with fewer
+     explicit rows than it has children auto-places the overflow into implicit rows, and the
+     symptom is not a warning: the content pane lands in the player's row, the player is pushed
+     into an implicit fourth, and the window paints as a black band with everything crushed at
+     the bottom. That is not a hypothetical; it is what this frame did twice before the rules
+     below were written. `grid-auto-rows: 0` is the belt: anything that ever did auto-place
+     collapses to nothing and shows up in `scripts/measure-play-stats.mjs` as a zero-height
+     region rather than as a silently rearranged window.
+
+     The four launch overlays (the tour, what's new, the update prompt, the shortcut sheet) are
+     `position: fixed` in their own components, so they are out of flow and are not grid items
+     at all. They are the reason the belt exists rather than a reason to widen the template. */
   .app {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 238px 1fr 374px;
+    grid-template-rows: 50px 1fr 70px;
+    grid-auto-rows: 0;
     height: 100vh;
     position: relative;
   }
-  .titlebar {
+  /* Below this the rail is more chrome than the content column can pay for: at the 960px
+     minimum window width the three fixed tracks leave 348px for the view, which is narrower
+     than the rail beside it. The rail is the thing that goes, because it is the only one of
+     the five that repeats what another screen already shows. */
+  @media (max-width: 1120px) {
+    .app {
+      grid-template-columns: 238px 1fr;
+    }
+    .app > :global(.rail) {
+      display: none;
+    }
+    .topbar,
+    .foot {
+      grid-column: 2 / 3;
+    }
+  }
+  /* Column 1, all three rows: the sidebar runs from the window's top edge to its bottom one,
+     so the wordmark sits beside the top bar rather than under it. Placed from here rather than
+     from the component, so all five placements are readable in one block. */
+  .app > :global(.sidebar) {
+    grid-column: 1 / 2;
+    grid-row: 1 / 4;
+    min-height: 0;
+  }
+  .topbar {
+    grid-column: 2 / 4;
+    grid-row: 1 / 2;
     display: flex;
     align-items: center;
-    height: 40px;
+    height: 100%;
     padding: 0;
     border-bottom: 1px solid var(--hairline);
     -webkit-app-region: drag;
@@ -585,19 +660,51 @@
     background: var(--accent);
     color: var(--bg);
   }
-  .body {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-  }
+  /* Row 3 is 70px and this box is content-sized against it, pinned to the row's bottom edge.
+     That is what lets the runtime error strip appear without moving the player bar: the strip
+     grows this box UPWARD, over the bottom of the content column, instead of pushing the bar
+     off the window the way a stretched 70px item would. The downloads panel anchors to this
+     box (see DownloadsPanel's `.panel`), so it keeps clearing the strip by the same 10px. */
   .foot {
+    grid-column: 2 / 4;
+    grid-row: 3 / 4;
+    align-self: end;
     position: relative;
-    flex-shrink: 0;
+    width: 100%;
   }
   .view {
-    flex: 1;
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
     min-width: 0;
+    min-height: 0;
     overflow: auto;
+  }
+  /* The rail's own column. The component paints it; this rule only places it, for the same
+     reason every other child here carries a placement. */
+  .app > :global(.rail) {
+    grid-column: 3 / 4;
+    grid-row: 2 / 3;
+    min-height: 0;
+  }
+  .rail-failed {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 16px;
+    border-left: 1px solid var(--hairline);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+  }
+  .rail-failed .btn-ghost {
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 5px 12px;
+    cursor: pointer;
   }
   /* Each view component renders one root element, and switching views creates a
      new one, so the entry animation plays exactly once per navigation without

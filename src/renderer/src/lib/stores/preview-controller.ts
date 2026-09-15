@@ -51,6 +51,16 @@ export const playerVolume: Writable<number | null> = writable(null)
  * the bar's transport could have driven anything at all; everywhere else it is idle.
  */
 export const viewportMounted: Writable<boolean> = writable(false)
+/**
+ * The element previews are currently appended into, or null when none is registered.
+ *
+ * `viewportMounted` cannot answer the question this one exists for. The app has two places a
+ * highway can live now, the rail and the chart page's preview pane, and when the pane registers
+ * over the rail's viewport the flag above stays true through the whole hand-over: nothing in it
+ * distinguishes "still mine" from "someone else took it". A viewport that needs to know whether
+ * it is still the live one compares this against its own element.
+ */
+export const viewportOwner: Writable<HTMLElement | null> = writable(null)
 
 let handle: PreviewHandle | null = null
 let unsubs: (() => void)[] = []
@@ -77,6 +87,7 @@ export function registerViewport(el: HTMLElement): () => void {
   closePreview()
   container = el
   viewportMounted.set(true)
+  viewportOwner.set(el)
   return () => {
     // The guard covers the flag too: when the replacement pane registered first, its viewport
     // is the live one, and reporting it gone would hand the bar's transport back under it.
@@ -84,6 +95,7 @@ export function registerViewport(el: HTMLElement): () => void {
     closePreview()
     container = null
     viewportMounted.set(false)
+    viewportOwner.set(null)
   }
 }
 
