@@ -177,3 +177,106 @@ describe('components use the scale', () => {
     expect(offenders).toEqual([])
   })
 })
+
+/**
+ * The colour scale, and the one rule that keeps it a single system.
+ *
+ * jsdom applies no stylesheet, so nothing here can see a colour on screen. What it can see is the
+ * text of tokens.css, and the two regressions worth pinning are both textual: a step of the scale
+ * going missing, and one of the names the components still read drifting away from the step it is
+ * supposed to be. The second is the reason this redesign extends the old names rather than
+ * renaming them: an alias written as `var(--ground-3)` cannot hold a value of its own, and one
+ * written as `#161326` can, and will, the first time someone edits one end of the pair.
+ */
+const GROUND_STEPS = [
+  '--ground-0',
+  '--ground-1',
+  '--ground-2',
+  '--ground-3',
+  '--ground-4',
+  '--ground-5'
+]
+const COLOUR_TOKENS = [
+  ...GROUND_STEPS,
+  '--border-1',
+  '--border-2',
+  '--text-1',
+  '--text-2',
+  '--text-3',
+  '--accent',
+  '--accent-hi',
+  '--accent-tint',
+  '--accent-dim',
+  '--inst-guitar',
+  '--inst-bass',
+  '--inst-drums',
+  '--inst-keys',
+  '--inst-vocals',
+  '--success',
+  '--warning',
+  '--danger'
+]
+/** The names that predate the scale. Each one has to resolve THROUGH the scale, not beside it. */
+const ALIASES = [
+  '--bg',
+  '--surface-1',
+  '--surface-2',
+  '--hairline',
+  '--accent-text',
+  '--focus-ring'
+]
+const ELEVATION_STEPS = ['--elev-1', '--elev-2', '--elev-3', '--elev-4']
+const RADIUS_STEPS = ['--radius-sm', '--radius', '--radius-lg']
+
+describe('colour and elevation tokens', () => {
+  it('defines every step of every scale', () => {
+    for (const token of [...COLOUR_TOKENS, ...ELEVATION_STEPS, ...RADIUS_STEPS]) {
+      expect(tokens, `missing ${token}`).toMatch(new RegExp(`${token}:\\s*[^;]+;`))
+    }
+  })
+
+  it('declares each colour step as a literal, so the scale has exactly one source', () => {
+    for (const token of COLOUR_TOKENS) {
+      expect(tokens, `${token} is not a hex literal`).toMatch(
+        new RegExp(`${token}:\\s*#[0-9a-f]{6}\\s*;`)
+      )
+    }
+  })
+
+  it('keeps the legacy names as aliases into the scale rather than as second values', () => {
+    for (const token of ALIASES) {
+      const m = new RegExp(`\\n\\s*${token}:\\s*([^;]+);`).exec(tokens)
+      if (m === null) throw new Error(`no \`${token}\` in tokens.css`)
+      expect(m[1].trim(), `${token} holds a value of its own instead of aliasing a step`).toMatch(
+        /^var\(--[a-z0-9-]+\)$/
+      )
+    }
+  })
+
+  /**
+   * The regression this exists for was live when it was written: Detail.svelte read
+   * `var(--border-1)` and `var(--danger)`, and tokens.css defined neither. One of them had a
+   * fallback and quietly rendered the wrong colour; the other had none, so `border: 1px solid
+   * var(--border-1)` was invalid at computed-value time and the border was simply never painted.
+   * Both looked like working CSS in the file and in review.
+   *
+   * One component property is not from this file and is named here rather than waved through by a
+   * looser pattern: PlayerBar sets `--p` per element with Svelte's `style:--p`, as the scrub
+   * position the progress fill scales by. It is data on one element, not a token, which is why it
+   * is the exception and not a step in tokens.css. Anything else a component reads has to come
+   * from here.
+   */
+  it('defines every custom property the components read', () => {
+    const perElement = new Set(['--p'])
+    const declared = new Set([...tokens.matchAll(/(--[a-z0-9-]+):/g)].map((m) => m[1]))
+    const missing = new Set<string>()
+    for (const file of sourceFiles) {
+      const source = readFileSync(file, 'utf8')
+      for (const m of source.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+        if (!declared.has(m[1]) && !perElement.has(m[1]))
+          missing.add(`${file.split('/').pop()} ${m[1]}`)
+      }
+    }
+    expect([...missing]).toEqual([])
+  })
+})
