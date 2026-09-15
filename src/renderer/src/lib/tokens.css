@@ -49,23 +49,23 @@
      Three levels, violet cast to match the ground. Contrast on the three surfaces the app
      actually sets text on (WCAG 2.1, computed from the values in this file):
 
-                   --bg   --surface-1  --surface-2
-       --text-1   17.7:1     16.3:1       15.2:1
-       --text-2    8.1:1      7.4:1        6.9:1
-       --text-3    3.7:1      3.4:1        3.2:1
+                   --bg   --surface-1  --surface-2  --ground-5
+       --text-1   17.7:1     16.3:1       15.2:1      13.3:1
+       --text-2    8.1:1      7.4:1        6.9:1       6.1:1
+       --text-3    6.3:1      5.8:1        5.4:1       4.7:1
 
-     --text-3 is the line to read twice. AA for text under 18px is 4.5:1, and --text-3 is under
-     it on every surface in the app while carrying the small mono labels: the downloads panel,
-     the sidebar versions, the card headers, the difficulty matrix. It held #8a8a99 before this,
-     which measured 5.8:1 and 5.0:1 on the equivalent surfaces, and that value was itself put
-     there to replace a #5c5c66 that failed in exactly this way.
+     --text-3 is the line to read twice, because it is the one that keeps failing. AA for text
+     under 18px is 4.5:1, and --text-3 carries the small mono labels: the downloads panel, the
+     sidebar versions, the card headers, the difficulty matrix. The redesign's palette specified
+     #6e6789, which measures 3.7 / 3.4 / 3.2 / 2.8 and is under AA on every surface in the app.
+     That is the third time this token has been set too dark: it held #5c5c66, then #8a8a99 to
+     fix it, and #6e6789 would have undone that fix while looking like a palette decision.
 
-     The value below is the approved one and is what ships. The measurement is written down so
-     that it is a decision on the record rather than something the next reader has to discover,
-     and so that reversing it is a change to one number. */
+     #948dab keeps the violet cast the palette is for and clears 4.5:1 on all four grounds,
+     --ground-5 included, which #8a8a99 did not. Measured, not estimated. */
   --text-1: #f4f1fb;
   --text-2: #a9a1c2;
-  --text-3: #6e6789;
+  --text-3: #948dab;
 
   /* ── accent ────────────────────────────────────────────────────────────────
      Four steps of one violet: --accent fills, --accent-hi is the lighter one that hover states
