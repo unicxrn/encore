@@ -27,6 +27,23 @@ release.
 
 ### Changed
 
+- Explore's results say what Chorus actually knows about a chart. Every row now carries the real
+  album cover, the artist with the album and the year, a difficulty reading per instrument, and
+  a Download button of its own beside the "IN LIBRARY" mark. The three flags that survived the
+  cut are the uncommon ones that change a decision: a background video, a double kick pedal and
+  a modchart. The ones that were dropped were dropped for being too common to mean anything.
+- A chart's difficulty is six pips per instrument, coloured by the part, rather than a letter
+  and a number. Three states and not two: a part the chart does not have, a part that is there
+  with nobody's rating on it, and a rating. Ratings above the six Clone Hero's scale runs to
+  fill every pip and keep the real number in the label, because real charts carry 7s, 8s and one 20.
+- Explore marks a chart Chorus found problems in, before you download it. Nothing at all on a
+  chart with nothing wrong, which is most of them; a hollow dot for charting notes that do not
+  stop it playing, and a filled one for a chart that is broken. Hovering says what was found.
+  Chorus runs the same checks Encore's own Issues view runs, so this costs no extra request.
+- Explore's rows fold rather than crush as the window narrows: the track number and the length
+  go first, then the charter drops under the title and the difficulty under that. Measured at
+  every width the window supports, down to the 509px the results column has at a 1121px window,
+  which is the narrowest it ever gets and is not the smallest window.
 - The window is a three by three frame rather than a stack of bars: a sidebar running the full
   height beside a top bar, the view, the new chart column and the player bar. Nothing a view does
   has changed; they are the same seven views in a different frame, and `Ctrl+1` to `Ctrl+7` still
