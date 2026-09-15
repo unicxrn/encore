@@ -39,11 +39,23 @@
     type LibraryFilterState
   } from '../stores/library-filter'
   import { libraryGap } from '../empty-state'
+  import Icon from './Icon.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   // Rows open the full Detail page (local variant), same as Explore rows do for
   // remote charts; the old inline preview strip is retired.
-  let { onOpenChart }: { onOpenChart: (target: ChartTarget) => void } = $props()
+  //
+  // `onSelectChart` is the second, quieter half of that: it points the preview column at a chart
+  // and leaves the list exactly where it is. Required rather than optional even though the
+  // column is not always on screen, because a prop with a no-op default is how a button that
+  // does nothing gets shipped.
+  let {
+    onOpenChart,
+    onSelectChart
+  }: {
+    onOpenChart: (target: ChartTarget) => void
+    onSelectChart: (target: ChartTarget) => void
+  } = $props()
 
   let charts = $state<ChartRecord[]>([])
   let total = $state(0)
@@ -884,6 +896,19 @@
           <span class="year mono">{chart.year ?? ''}</span>
           <span class="len mono">{msToTime(chart.songLength)}</span>
         </button>
+        <!-- Puts the chart in the preview column without opening it. The column carries the
+             highway, the cover and the health list, so this is how a row gets previewed
+             without losing the list, the filters and the scroll position behind it. Hidden with
+             the column itself below the shell's breakpoint; the rule is in App.svelte, beside
+             the one that hides the column, so the width is written down once. -->
+        <button
+          class="to-rail"
+          aria-label={`Preview ${chartTitle(chart)}`}
+          title="Show this chart in the preview column, without leaving the list"
+          onclick={() => onSelectChart({ kind: 'local', record: chart })}
+        >
+          <Icon name="panel-right" size={14} />
+        </button>
         <button
           class="remove"
           aria-label={`Remove ${chartTitle(chart)}`}
@@ -1328,7 +1353,8 @@
     min-width: 0;
     border-bottom: 0;
   }
-  .row-wrap:hover .remove {
+  .row-wrap:hover .remove,
+  .row-wrap:hover .to-rail {
     color: var(--text-2);
     border-color: rgba(255, 255, 255, 0.2);
   }
@@ -1336,7 +1362,8 @@
      pointer is over it cannot be reached by keyboard or found by someone looking for it. Low
      contrast until the row is hovered or the button itself is focused, so a page of rows does
      not read as a page of Remove buttons. */
-  .remove {
+  .remove,
+  .to-rail {
     flex-shrink: 0;
     margin-right: 16px;
     background: none;
@@ -1352,12 +1379,31 @@
       border-color var(--t-fast) var(--ease);
   }
   .remove:hover,
-  .remove:focus-visible {
+  .remove:focus-visible,
+  .to-rail:hover,
+  .to-rail:focus-visible {
     color: var(--text-1);
     border-color: rgba(255, 255, 255, 0.2);
   }
   .remove:disabled {
     cursor: default;
+    color: var(--text-3);
+  }
+  /**
+   * A mark rather than a word, and the width is the whole reason.
+   *
+   * "Preview" spelled out measured 62px, and the row's title track is the 1fr that pays for
+   * every fixed thing beside it. `VIEW=installed scripts/measure-explore-row.mjs` at a 668px
+   * view, which is this column at the default 1280px window: no second action leaves the title
+   * at 112px with 10 of 30 rows ellipsised, the word put it at 48px with 24 of 30, and the
+   * glyph puts it at 83px with 10 of 30 again. The name is on the control, where a screen
+   * reader and a tooltip both find it.
+   */
+  .to-rail {
+    display: flex;
+    align-items: center;
+    margin-right: 3px;
+    padding: 3px 5px;
     color: var(--text-3);
   }
   .confirm {

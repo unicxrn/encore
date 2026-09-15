@@ -64,7 +64,7 @@ function renderLibrary(
     updatesCheck,
     updatesLast
   })
-  render(Library, { onOpenChart: () => {} })
+  render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
   return { updatesCheck, updatesLast }
 }
 
@@ -228,7 +228,7 @@ function renderCatalog(rows: ChartRecord[]): void {
       Promise.resolve(f.search ? [] : rows),
     catalogCount: (f: CatalogFilter): Promise<number> => Promise.resolve(f.search ? 0 : rows.length)
   })
-  render(Library, { onOpenChart: () => {} })
+  render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 }
 
 /**
@@ -330,7 +330,7 @@ describe('Library: cancelling a scan', () => {
       catalogCount: (): Promise<number> => Promise.resolve(0),
       catalogScanCancel: cancel
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     scanProgress.set(running(40))
 
     await fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
@@ -358,7 +358,7 @@ describe('Library: cancelling a scan', () => {
       catalogQuery: query,
       catalogCount: () => Promise.resolve(rows.length)
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     await waitFor(() => expect(query).toHaveBeenCalled())
 
     rows = [chart({ path: '/library/Rush - YYZ', name: 'YYZ' })]
@@ -489,7 +489,7 @@ describe('Library: the version badge', () => {
       catalogCount: (): Promise<number> => Promise.resolve(1),
       updatesLast: () => Promise.reject(new Error('ipc gone'))
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 
     const row = await rowTitled('YYZ')
     expect(badgeOf(row)).toBeNull()
@@ -537,7 +537,7 @@ describe('Library: the filter bar', () => {
         facets ? Promise.resolve(facets) : Promise.reject(new Error('ipc gone')),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { filters, lastFilter: () => filters[filters.length - 1] }
   }
 
@@ -694,7 +694,7 @@ describe('Library: the filter bar', () => {
       catalogFacets: () => Promise.resolve(FACETS),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     // Unfiltered, a ratio of the library to itself says nothing.
     expect(await screen.findByText(/^222 CHARTS$/)).toBeTruthy()
 
@@ -893,7 +893,7 @@ describe('Library: play counts', () => {
       playSummaries,
       ...(lifetimeCharts === null ? {} : { playLifetime })
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { playSummaries, playStatus, playLifetime }
   }
 
@@ -1107,7 +1107,7 @@ describe('Library: play counts', () => {
       updatesLast: () => Promise.resolve([]),
       playStatus: () => Promise.reject(new Error('no handler'))
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 
     const row = await rowTitled('One')
     expect(badgesOf(row)).toEqual([])
@@ -1441,7 +1441,7 @@ describe('Library names written in Clone Hero markup', () => {
       catalogFacets: (): Promise<typeof facets> => Promise.resolve(facets),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { filters }
   }
 })
@@ -1469,7 +1469,7 @@ describe('Library: removing a chart', () => {
       chartRemove,
       updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { chartRemove }
   }
 
@@ -1585,5 +1585,69 @@ describe('Library: removing a chart', () => {
     const row = await rowTitled('YYZ')
     expect(row.contains(remove)).toBe(false)
     expect(remove.closest('.row-wrap')).toBe(row.closest('.row-wrap'))
+  })
+})
+
+/**
+ * The second thing a row can do: put its chart in the preview column beside the list.
+ *
+ * Distinct from opening it. Detail replaces the view, which costs the filters, the sort and the
+ * scroll position; this leaves all three where they are. jsdom applies no stylesheet, so nothing
+ * here can see that the button is hidden below the shell's breakpoint along with the column it
+ * feeds. That rule is in App.svelte and is measured, not asserted.
+ */
+describe('Library: previewing a row without leaving the list', () => {
+  function renderSelectable(rows: ChartRecord[]): {
+    onOpenChart: ReturnType<typeof vi.fn>
+    onSelectChart: ReturnType<typeof vi.fn>
+  } {
+    vi.stubGlobal('encore', {
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(rows),
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([])
+    })
+    const onOpenChart = vi.fn()
+    const onSelectChart = vi.fn()
+    render(Library, { onOpenChart, onSelectChart })
+    return { onOpenChart, onSelectChart }
+  }
+
+  it('offers one per row, named after the chart it previews', async () => {
+    renderSelectable(LIBRARY)
+
+    expect(await screen.findByRole('button', { name: 'Preview YYZ' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Preview Limelight' })).toBeTruthy()
+  })
+
+  it('hands the chart over without opening it', async () => {
+    const { onOpenChart, onSelectChart } = renderSelectable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Preview YYZ' }))
+
+    expect(onSelectChart).toHaveBeenCalledWith({ kind: 'local', record: LIBRARY[0] })
+    // The whole point: the view underneath does not change.
+    expect(onOpenChart).not.toHaveBeenCalled()
+  })
+
+  // A button inside a button is invalid and the inner one is unreachable, which is why the row
+  // and its two actions are siblings under the wrapper rather than nested.
+  it('sits beside the row rather than inside it', async () => {
+    renderSelectable(LIBRARY)
+
+    const preview = await screen.findByRole('button', { name: 'Preview YYZ' })
+    const row = await rowTitled('YYZ')
+    expect(row.contains(preview)).toBe(false)
+    expect(preview.closest('.row-wrap')).toBe(row.closest('.row-wrap'))
+  })
+
+  // Opening a chart still does what it always did; this is the regression the new button could
+  // realistically cause, by swallowing the row's own click.
+  it('leaves the row itself opening the chart', async () => {
+    const { onOpenChart, onSelectChart } = renderSelectable(LIBRARY)
+
+    await fireEvent.click(await rowTitled('YYZ'))
+
+    expect(onOpenChart).toHaveBeenCalledWith({ kind: 'local', record: LIBRARY[0] })
+    expect(onSelectChart).not.toHaveBeenCalled()
   })
 })

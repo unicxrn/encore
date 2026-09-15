@@ -456,7 +456,14 @@
           {:else if view === 'browse'}
             <Browse onOpenChart={(target) => (detailChart = target)} />
           {:else if view === 'library'}
-            <Library onOpenChart={(target) => (detailChart = target)} />
+            <!-- Two ways out of a row, and only one of them navigates. Preview writes the rail's
+                 subject directly, which is the same slot Detail's effect above writes and the
+                 same one the rail reads, so a previewed chart survives leaving Installed exactly
+                 as an opened one does. -->
+            <Library
+              onOpenChart={(target) => (detailChart = target)}
+              onSelectChart={(target) => (railChart = target)}
+            />
           {:else if view === 'assets'}
             <Assets />
           {:else if view === 'stats'}
@@ -564,6 +571,12 @@
       grid-template-columns: 238px 1fr;
     }
     .app > :global(.rail) {
+      display: none;
+    }
+    /* Anything whose only job is to point the rail at a chart goes with the rail. Installed's
+       per-row Preview button is the one such control; it lives in Library.svelte and is hidden
+       from here so this width stays written down once, in the query above it. */
+    .app :global(.to-rail) {
       display: none;
     }
     .topbar,
