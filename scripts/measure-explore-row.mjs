@@ -31,6 +31,13 @@
  *     VIEW=grid       the same list as cards
  *     VIEW=installed  the Installed list, which draws the same difficulty component
  *
+ * After the rows, one more question, and it is the reason the widths above are the widths: where
+ * does a click on a row actually land. Explore's destination is the preview rail, and the rail is
+ * `display: none` below 1120px, so the same click has to reach the chart page there instead.
+ * `LANDING` reads which of the two happened, off the same window the rows were just measured in,
+ * and reports the rail's action row with it: the way through to the chart page lives in that row
+ * and has to fit beside the action already in it.
+ *
  * Installed is here because it shares `DiffPips` with Explore, and a component whose width is
  * fixed has to be checked against every track it is dropped into, not just the one it was
  * written for. It reads a stubbed catalogue, never the user's.
@@ -219,6 +226,44 @@ const SHAPE = `(() => {
   }
 })()`
 
+/**
+ * Where a click on the first row landed, and what the rail's action row looks like when it did.
+ *
+ * Two outcomes, and exactly one of them is right at any width: the rail filled and the list is
+ * still on screen, or the chart page replaced the list because there was no rail to fill. The
+ * display is read rather than the window width, because that is what the code reads, and it is
+ * what makes the breakpoint a single number in App.svelte rather than one repeated here.
+ */
+const LANDING = `(() => {
+  const round = (n) => Math.round(n)
+  const rail = document.querySelector('.rail')
+  const page = document.querySelector('.detail')
+  const table = document.querySelector('.table')
+  return {
+    railDisplay: rail ? getComputedStyle(rail).display : 'absent',
+    railWidth: rail ? round(rail.getBoundingClientRect().width) : null,
+    // What the rail is showing. The cover only exists once a chart is in it.
+    railFilled: !!document.querySelector('.rail .art'),
+    // The list, still there behind a filled rail. Gone means the page took the view.
+    listStillUp: !!table,
+    pageOpen: !!page,
+    actions: rail
+      ? [...rail.querySelectorAll('.actions button')].map((b) => ({
+          label: (b.textContent || '').trim(),
+          width: round(b.getBoundingClientRect().width),
+          height: round(b.getBoundingClientRect().height),
+          clipped: b.scrollWidth > b.clientWidth + 1
+        }))
+      : [],
+    // One line, not two: a row that wrapped would take height the column budgeted for the
+    // blocks that only appear sometimes.
+    actionsHeight: rail && rail.querySelector('.actions')
+      ? round(rail.querySelector('.actions').getBoundingClientRect().height)
+      : null,
+    railScrollsDown: rail ? rail.scrollHeight > rail.clientHeight + 1 : null
+  }
+})()`
+
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
     width,
@@ -270,6 +315,23 @@ app.whenReady().then(async () => {
         ? `    .${box.cls} 0/${box.of} ellipsised`
         : `    .${box.cls} ${box.clipped}/${box.of} ellipsised, tightest ${box.narrowest}px: "${box.says}"`
     )
+  }
+
+  // Installed's row click opens the chart page and its rail button is a separate control, both
+  // measured elsewhere; this leg is about Explore's row being the rail's way in.
+  if (view !== 'installed') {
+    await evalIn(win, `document.querySelector('.table .row, .table .card').click(), 1`)
+    await sleep(1200)
+    const landed = await evalIn(win, LANDING)
+    console.log(
+      `  row click     rail ${landed.railDisplay}${landed.railWidth === null ? '' : ` ${landed.railWidth}px`}, filled ${landed.railFilled}, list up ${landed.listStillUp}, chart page ${landed.pageOpen}`
+    )
+    // A hidden column measures zero, which is a fact about the query and not about the row.
+    if (landed.railDisplay !== 'none' && landed.actions.length) {
+      console.log(
+        `  rail actions  ${landed.actions.map((a) => `${a.label} ${a.width}x${a.height}${a.clipped ? ' CLIPPED' : ''}`).join(', ')} in a ${landed.actionsHeight}px row, column scrolls ${landed.railScrollsDown}`
+      )
+    }
   }
 
   app.exit(0)

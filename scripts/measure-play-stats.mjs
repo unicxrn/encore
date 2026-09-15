@@ -578,7 +578,9 @@ const RAIL = `(() => {
       ? placeholder.scrollWidth > placeholder.clientWidth + 1 ||
         placeholder.scrollHeight > placeholder.clientHeight + 1
       : null,
-    // One button, full width, and its word has to fit inside it whole.
+    // The action this chart has, and the way through to its page beside it. The action takes
+    // the width left over and the route is sized to its own word; both words have to fit
+    // inside their button whole, and the row has to stay one row.
     actions: [...rail.querySelectorAll('.actions button')].map((b) => ({
       label: text(b),
       width: round(box(b).width),
