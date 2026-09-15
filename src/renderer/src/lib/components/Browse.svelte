@@ -5,7 +5,14 @@
   import { browseSearch } from '../stores/search'
   import { globalQuery } from '../stores/global-search'
   import { settings } from '../stores/settings'
-  import { INSTRUMENTS, DIFFICULTIES, albumArtUrl, type ChartData } from '../api/enchor'
+  import {
+    INSTRUMENTS,
+    DIFFICULTIES,
+    SORT_OPTIONS,
+    albumArtUrl,
+    type ChartData
+  } from '../api/enchor'
+  import { INTENSITY_CEILINGS, INTENSITY_FLOORS } from '../api/advanced'
   import { msToTime, stripRichText } from '../../../../shared/format'
   import { issueSummary, issueTitle } from '../issue-summary'
   import { encore } from '../stores/bridge'
@@ -23,6 +30,9 @@
   const { results, groups, found, loading, error, searched, expanded, mode, selected } = search
   const { advancedCount, advancedOpen, hasMore, atAutoCap } = search
   const { advancedDropped, advancedDraftCount } = search
+  // The applied query, not the draft: the band on screen has to be the band the rows came back
+  // for. `advancedDraft` is what the panel is holding, which may never have been asked.
+  const { advanced, sort: sortKey } = search
   let inputEl = $state<HTMLInputElement | null>(null)
   // Seeded from the shared store so a remount restores the chips the user set.
   let instrument = $state<string | null>(get(search.filters).instrument)
@@ -249,6 +259,33 @@
     if (kind === 'instrument') instrument = next
     else difficulty = next
     search.setFilters(instrument, difficulty)
+  }
+
+  /** What to call the chosen instrument out loud, so the band can say what it is a band of. */
+  const instrumentLabel = $derived(
+    INSTRUMENTS.find((opt) => opt.value === instrument)?.label ?? 'the chosen instrument'
+  )
+
+  /**
+   * Why the band is off, and what it would mean if it were on.
+   *
+   * A disabled control with no reason beside it is a dead end. This is the reason, and it is the
+   * measurement: with no instrument the endpoint reads the band against every instrument at once
+   * and an uncharted one carries -1, so every chart clears any maximum. See ADVANCED_RANGES.
+   */
+  const bandName = $derived.by(
+    () => (end: string) =>
+      instrument === null
+        ? `${end} intensity. Choose an instrument first: a chart is rated one instrument at a time.`
+        : `${end} intensity for ${instrumentLabel}`
+  )
+
+  function onIntensityChange(end: 'min' | 'max', value: string): void {
+    const numbers = get(search.advanced).numbers
+    search.setIntensity(
+      end === 'min' ? value : numbers.minIntensity,
+      end === 'max' ? value : numbers.maxIntensity
+    )
   }
 
   export function focusSearch(): void {
@@ -557,6 +594,50 @@
           <option value={opt.value ?? ''}>{opt.label}</option>
         {/each}
       </select>
+      <!-- The third control, and a different question from the two above it. Difficulty is which
+           charted difficulties exist; intensity is how hard the chart is, the same number the
+           row's pips draw. Without it "expert, but not brutal" cannot be asked, which is the
+           question someone learning an instrument has.
+
+           Its two ends are the panel's own `minIntensity` and `maxIntensity`, written through
+           the store; see `setIntensity`. Off until an instrument is chosen, because the endpoint
+           reads the band against whichever instrument was named and against all of them at once
+           when none was; see ADVANCED_RANGES for what that measures out as.
+
+           The lowest list ends in 7+ and the highest at 6. That asymmetry is the honest one:
+           ratings run past where Clone Hero's scale is drawn, so the open end says the scale
+           carries on, while a maximum is a bound the user picked and Any is already the open
+           top. Nothing is clamped: 7+ sends 7, and a chart rated 20 still reads 20 in its pips. -->
+      <div class="band" role="group" aria-label="Filter by intensity">
+        <span class="band-label">Intensity</span>
+        <select
+          class="chip tier"
+          disabled={instrument === null}
+          aria-label={bandName('Lowest')}
+          title="7+ is every rating above 6. Charters rate past the top of the drawn scale."
+          value={$advanced.numbers.minIntensity}
+          onchange={(e) => onIntensityChange('min', e.currentTarget.value)}
+        >
+          {#each INTENSITY_FLOORS as bound (bound.value)}
+            <option value={bound.value}>{bound.label}</option>
+          {/each}
+        </select>
+        <span class="band-to">to</span>
+        <select
+          class="chip tier"
+          disabled={instrument === null}
+          aria-label={bandName('Highest')}
+          value={$advanced.numbers.maxIntensity}
+          onchange={(e) => onIntensityChange('max', e.currentTarget.value)}
+        >
+          {#each INTENSITY_CEILINGS as bound (bound.value)}
+            <option value={bound.value}>{bound.label}</option>
+          {/each}
+        </select>
+        {#if instrument === null}
+          <span class="band-why">pick an instrument</span>
+        {/if}
+      </div>
       <!-- The count is on the button, not only inside the panel, because the panel is shut most
            of the time and a list narrowed by filters nobody can see is a list that looks wrong.
            Clear sits beside it for the same reason: the way out has to be where the evidence is. -->
@@ -575,17 +656,35 @@
       {#if $advancedCount > 0}
         <button class="adv-clear" onclick={() => search.clearAdvanced()}>Clear filters</button>
       {/if}
-      <!-- Two buttons rather than one that toggles: the label of a toggle names
-           the state you are leaving or the one you are going to, and which of
-           those it means is a coin flip. Here each button names a layout and
-           says whether it is the one you are in. -->
-      <div class="modes" role="group" aria-label="Result layout">
-        <button class="mode" aria-pressed={$mode === 'list'} onclick={() => search.setMode('list')}
-          >List</button
+      <!-- Order and layout, at the far end and grouped: neither one narrows the results, they
+           arrange what came back. Everything to their left is a filter. -->
+      <div class="arrange">
+        <select
+          class="chip"
+          aria-label="Order results"
+          value={$sortKey}
+          onchange={(e) => search.setSort(e.currentTarget.value)}
         >
-        <button class="mode" aria-pressed={$mode === 'grid'} onclick={() => search.setMode('grid')}
-          >Grid</button
-        >
+          {#each SORT_OPTIONS as opt (opt.value)}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
+        </select>
+        <!-- Two buttons rather than one that toggles: the label of a toggle names
+             the state you are leaving or the one you are going to, and which of
+             those it means is a coin flip. Here each button names a layout and
+             says whether it is the one you are in. -->
+        <div class="modes" role="group" aria-label="Result layout">
+          <button
+            class="mode"
+            aria-pressed={$mode === 'list'}
+            onclick={() => search.setMode('list')}>List</button
+          >
+          <button
+            class="mode"
+            aria-pressed={$mode === 'grid'}
+            onclick={() => search.setMode('grid')}>Grid</button
+          >
+        </div>
       </div>
     </div>
     {#if $advancedOpen}
@@ -966,10 +1065,49 @@
   input:focus {
     border-color: rgba(255, 255, 255, 0.2);
   }
+  /* Wraps, because the header now carries four filters, an order and a layout pair, and the
+     column they sit in is 509px at its narrowest (a 1121px window, where the rail takes its
+     374px back). A row that could not wrap would either scroll sideways or squeeze the selects
+     until their longest option ellipsised, and jsdom can see neither. `row-gap` matches the
+     column gap so a wrapped second line is not a different rhythm from the first. */
   .filters {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     padding: 0 16px 10px;
+  }
+  /* The two ends of one filter, so they are one group with one visible label rather than two
+     loose selects that happen to be adjacent. The same idiom the panel's Intensity row uses,
+     which is the point: they edit the same two fields. */
+  .band {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .band-label {
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+  }
+  .band-to,
+  .band-why {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  /* A tier is one or two characters, so this select is sized for its contents rather than for
+     its longest label the way the instrument one is. */
+  .tier {
+    padding-right: 22px;
+  }
+  .chip:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .chip:disabled:hover {
+    color: var(--text-2);
+    border-color: var(--hairline);
   }
   .chip {
     appearance: none;
@@ -993,11 +1131,19 @@
     color: var(--text-1);
     border-color: rgba(255, 255, 255, 0.2);
   }
-  /* Sits at the far end of the filter row: it is a control about the results,
-     not another thing to narrow them by. */
+  /* Sits at the far end of the filter row: these are controls about the results,
+     not more things to narrow them by. `margin-left: auto` on the group rather than on the
+     layout pair alone, so the order travels with it instead of being stranded among the
+     filters. When the row wraps this lands flush right on the line it wraps to. */
+  .arrange {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
   .modes {
     display: flex;
-    margin-left: auto;
     gap: 4px;
   }
   .mode {

@@ -165,6 +165,13 @@ afterEach(async () => {
   // which would put two rows for the same song on screen and make `getByRole`
   // ambiguous. Collapse whatever is open, the way a fresh store would be.
   for (const songId of get(browseSearch.expanded)) browseSearch.toggleExpanded(songId)
+  // Instrument, difficulty and the order are the same module-scoped singleton the rest of this
+  // hook resets. An instrument one test chose is still chosen on the next test's first paint,
+  // and it is what decides whether the intensity band is live. Guarded rather than set
+  // unconditionally, so a file where nothing touches them spends no request per test.
+  const chosen = get(browseSearch.filters)
+  if (chosen.instrument !== null || chosen.difficulty !== null) browseSearch.setFilters(null, null)
+  if (get(browseSearch.sort) !== '') browseSearch.setSort('')
   // Unstubbed last, and only once the run `clearAdvanced` may have started has settled. Browse is
   // still mounted while this hook runs (the library's cleanup is registered before it, so it runs
   // after), and its in-library effect reaches for the bridge every time the rows change. Pulling
@@ -1321,5 +1328,214 @@ describe('Explore result rows', () => {
 
     expect(downloadAdd).not.toHaveBeenCalled()
     expect(screen.getByText(/No library folder yet/)).toBeTruthy()
+  })
+})
+
+/**
+ * The filter header: three controls that narrow, and one that orders.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says where any of this sits, how
+ * wide it is, or whether the row wraps before it clips. That is what `scripts/measure-explore-
+ * header.mjs` is for. These pin what each control offers, what it sends, and the one rule that
+ * ties two of them together.
+ */
+describe('Explore filter header', () => {
+  const show = async (): Promise<void> => {
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    renderBrowse()
+    await screen.findByLabelText('Filter by instrument')
+  }
+
+  const pick = async (label: string, value: string): Promise<void> => {
+    await fireEvent.change(screen.getByLabelText(label), { target: { value } })
+  }
+
+  const lastParams = (): {
+    instrument: string | null
+    difficulty: string | null
+    sort: { type: string; direction: string } | null
+    advanced: AdvancedQuery
+  } =>
+    searchCharts.mock.calls.at(-1)?.[0] as {
+      instrument: string | null
+      difficulty: string | null
+      sort: { type: string; direction: string } | null
+      advanced: AdvancedQuery
+    }
+
+  it('offers the ten instruments the endpoint takes, and not vocals', async () => {
+    // Vocals is the one the prototype drew and the endpoint refuses: sending it answers 400 and
+    // names the ten back (measured 2026-09-15). A vocal difficulty still shows on a row; it is
+    // not something a chart can be filtered to.
+    await show()
+    const options = [...screen.getByLabelText('Filter by instrument').querySelectorAll('option')]
+    expect(options.map((o) => o.value).filter(Boolean)).toEqual([
+      'guitar',
+      'bass',
+      'drums',
+      'keys',
+      'rhythm',
+      'guitarcoop',
+      'guitarghl',
+      'bassghl',
+      'rhythmghl',
+      'guitarcoopghl'
+    ])
+    expect(options.map((o) => o.value)).not.toContain('vocals')
+  })
+
+  it('asks difficulty and intensity as two different questions', async () => {
+    // Which charted difficulties exist, and how hard the chart is. Collapsing them into one
+    // control loses "expert, but not brutal", which is what someone learning wants.
+    await show()
+    const difficulties = [
+      ...screen.getByLabelText('Filter by difficulty').querySelectorAll('option')
+    ]
+    expect(difficulties.map((o) => o.value).filter(Boolean)).toEqual([
+      'expert',
+      'hard',
+      'medium',
+      'easy'
+    ])
+    expect(screen.getByRole('group', { name: 'Filter by intensity' })).toBeTruthy()
+  })
+
+  it('leaves the band off until an instrument is chosen, and says why', async () => {
+    // A chart is rated one instrument at a time, and with none named the endpoint reads the band
+    // against all of them at once; an uncharted instrument carries -1, so every chart clears any
+    // maximum. See ADVANCED_RANGES for the measurement.
+    await show()
+    const low = screen.getByLabelText(
+      'Lowest intensity. Choose an instrument first: a chart is rated one instrument at a time.'
+    )
+    expect((low as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByText('pick an instrument')).toBeTruthy()
+
+    await pick('Filter by instrument', 'guitar')
+
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    expect(
+      (screen.getByLabelText('Lowest intensity for Guitar') as HTMLSelectElement).disabled
+    ).toBe(false)
+    expect(screen.getByLabelText('Highest intensity for Guitar')).toBeTruthy()
+    expect(screen.queryByText('pick an instrument')).toBeNull()
+  })
+
+  it('offers a floor past the top of the drawn scale, and no ceiling above it', async () => {
+    // Ratings are not capped at 6: with guitar chosen, `minIntensity: 7` answers with 2,419
+    // charts reading 7, 8, 9 and 20. The open floor is how the list says the scale carries on.
+    // The ceiling list stops at 6 because Any is already the open top.
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    const low = await screen.findByLabelText('Lowest intensity for Guitar')
+    const high = screen.getByLabelText('Highest intensity for Guitar')
+
+    expect([...low.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'Any',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7+'
+    ])
+    expect([...high.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'Any',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6'
+    ])
+  })
+
+  it('sends the band as the two advanced fields, with the floor uncapped', async () => {
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    await pick('Lowest intensity for Guitar', '7')
+
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('7'))
+    expect(lastParams().instrument).toBe('guitar')
+    expect(lastParams().advanced.numbers.maxIntensity).toBe('')
+
+    await pick('Highest intensity for Guitar', '')
+    await pick('Lowest intensity for Guitar', '4')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('4'))
+  })
+
+  it('keeps both ends when only one of them is changed', async () => {
+    await show()
+    await pick('Filter by instrument', 'drums')
+    await screen.findByLabelText('Lowest intensity for Drums')
+    await pick('Lowest intensity for Drums', '4')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('4'))
+
+    await pick('Highest intensity for Drums', '5')
+    await waitFor(() => expect(lastParams().advanced.numbers.maxIntensity).toBe('5'))
+    expect(lastParams().advanced.numbers.minIntensity).toBe('4')
+  })
+
+  it('takes the band away with the instrument it was a band of', async () => {
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    await pick('Lowest intensity for Guitar', '5')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('5'))
+
+    await pick('Filter by instrument', '')
+
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe(''))
+    expect(lastParams().instrument).toBeNull()
+    expect(
+      screen.getByLabelText(
+        'Lowest intensity. Choose an instrument first: a chart is rated one instrument at a time.'
+      )
+    ).toBeTruthy()
+  })
+
+  it('is the same filter the panel holds, not a second copy of it', async () => {
+    // The brief for this header said the two must not end up as independent sources of one
+    // filter. The band writes the panel's own minIntensity and maxIntensity through the store,
+    // so the open panel reads back what the header set.
+    await show()
+    await pick('Filter by instrument', 'keys')
+    await screen.findByLabelText('Lowest intensity for Keys')
+    await pick('Lowest intensity for Keys', '3')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('3'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Advanced search, 1 filter applied' }))
+    expect((screen.getByLabelText('Lowest intensity') as HTMLInputElement).value).toBe('3')
+  })
+
+  it('offers no order the endpoint would refuse', async () => {
+    // The enum is exactly eight fields (measured: `downloads` answers 400 and names them back).
+    // There is no downloads, popularity or rating sort, and the prototype drew one.
+    await show()
+    const labels = [...screen.getByLabelText('Order results').querySelectorAll('option')].map(
+      (o) => o.textContent
+    )
+    expect(labels).toContain('Recently updated')
+    expect(labels).not.toContain('Downloads')
+    expect(labels[0]).toBe('Best match')
+  })
+
+  it('sends the field and direction the chosen order stands for', async () => {
+    await show()
+    await pick('Order results', 'modifiedTime:desc')
+    await waitFor(() =>
+      expect(lastParams().sort).toEqual({ type: 'modifiedTime', direction: 'desc' })
+    )
+  })
+
+  it('sends no order at all until one is chosen, which is the service deciding', async () => {
+    await show()
+    // Through a filter rather than off the first paint: the store is module-scoped and ignores a
+    // question it has already answered, so a bare mount may spend no request at all.
+    await pick('Filter by difficulty', 'expert')
+    await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
+    expect(lastParams().sort ?? null).toBeNull()
   })
 })
