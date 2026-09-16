@@ -65,7 +65,20 @@ async function renderWithRows(rows: ChartIssueRow[]): Promise<void> {
 const clickChip = (name: RegExp): Promise<unknown> =>
   fireEvent.click(screen.getByRole('button', { name }))
 
-const QUALITY_TOGGLE = /Charting quality notes/
+/**
+ * The health cards' own controls.
+ *
+ * Each card carries one button, labelled `Show: <card>` until it is showing and `Showing: <card>`
+ * after, so the accessible name says which of the three it belongs to rather than being the word
+ * "Show" three times over. These regexes match either state.
+ *
+ * `broken` is the one that is pressed on arrival, which is the same default the view has always
+ * had: a report is 24,151 rows on a real library and roughly a hundred to one of them are
+ * charting craft.
+ */
+const BROKEN_CARD = /: Broken$/
+const NOTES_CARD = /: Charting notes$/
+const PORTABILITY_CARD = /: Plays here, not everywhere$/
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -101,7 +114,7 @@ describe('Tools: duplicate findings on one chart', () => {
   // library". Both halves of that contradiction are asserted here.
   it('draws both copies of an identical finding instead of throwing', async () => {
     await renderWithRows(duplicatePair)
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
     expect(await screen.findAllByText('Note too close to the previous sustain')).toHaveLength(2)
     expect(screen.getByText('/library/Rush - YYZ')).toBeTruthy()
@@ -130,21 +143,22 @@ const mixedSeverities: ChartIssueRow[] = [
 ]
 
 describe('Tools: the filter dead end', () => {
-  // Reachable on the real library: with quality notes on, "Damaged or duplicate files" is a chip
-  // only because of quality-grade rows. Turning quality notes back off removes the chip while it
-  // is still filtering, so the list empties with no control left to undo it.
-  it('drops a category filter whose chip disappears with the quality notes', async () => {
+  // Reachable on the real library: with the charting-notes card showing, "Damaged or duplicate
+  // files" is a chip only because of quality-grade rows. Turning that card back off removes the
+  // chip while it is still filtering, so the list empties with no control left to undo it.
+  it('drops a category filter whose chip disappears with the charting notes', async () => {
     await renderWithRows(mixedSeverities)
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
     await clickChip(/Damaged or duplicate files/)
-    // The filter is doing something: only the damaged row is listed. Both chips read as pressed
-    // here, which is also what keeps the zero-pressed assertion below from passing vacuously.
+    // The filter is doing something: only the damaged row is listed. Three controls read as
+    // pressed here (both cards and the chip), which is also what keeps the count below from
+    // passing vacuously.
     expect(await screen.findByText('Album art is the wrong size')).toBeTruthy()
     expect(screen.queryByText('No audio')).toBeNull()
-    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(2)
+    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(3)
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
     // The list must not be left empty, and no filter may outlive its chip. The first of these is
     // the assertion that bites: dropping the prune leaves the damaged filter active with its chip
@@ -153,25 +167,67 @@ describe('Tools: the filter dead end', () => {
       expect(screen.getByText('No audio')).toBeTruthy()
     })
     expect(screen.queryByText('NO ISSUES MATCH THE SELECTED FILTERS')).toBeNull()
-    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(0)
+    // Only the broken card, which is where this started.
+    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(1)
   })
 })
 
-describe('Tools: the severity default', () => {
-  // Quality notes outnumber the actionable findings roughly a hundred to one; hiding them is what
-  // took the default view from 14,236 rows to 104.
-  it('lists blocking findings and hides quality ones until the toggle is pressed', async () => {
+describe('Tools: the health cards', () => {
+  // Quality notes outnumber the actionable findings roughly a hundred to one; keeping their card
+  // off by default is what took the default view from 14,236 rows to 104.
+  it('counts the library by card and lists only the cards that are showing', async () => {
     await renderWithRows(mixedSeverities)
 
+    // One chart under each card, and the two counts are read before any row is.
+    const broken = screen.getByRole('button', { name: BROKEN_CARD })
+    const notes = screen.getByRole('button', { name: NOTES_CARD })
+    expect(broken.getAttribute('aria-pressed')).toBe('true')
+    expect(notes.getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByText('No audio')).toBeTruthy()
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
     expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
+    // Additive, not exclusive: exporting the whole report means having all of it on screen, and a
+    // chart that is both broken and full of charting notes is read with both cards on.
     expect(await screen.findByText('Album art is the wrong size')).toBeTruthy()
     expect(screen.getByText('No audio')).toBeTruthy()
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
+  })
+
+  /**
+   * The counts are of the report, not of the list, so pressing one card must not move the number
+   * on the card beside it. A strip that reshuffled as it was read would not be a summary.
+   */
+  it('counts every row of the report whatever is on screen', async () => {
+    await renderWithRows(mixedSeverities)
+
+    const counts = (): string[] =>
+      [...document.querySelectorAll('.s-n')].map((el) => el.textContent ?? '')
+    expect(counts()).toEqual(['1', '1'])
+
+    await clickChip(NOTES_CARD)
+    expect(counts()).toEqual(['1', '1'])
+  })
+
+  it('says a library with nothing broken has nothing broken, rather than saying nothing', async () => {
+    await renderWithRows([mixedSeverities[1]])
+
+    expect(screen.getByText('Nothing in your library is broken.')).toBeTruthy()
+    // No control on an empty card: there is nothing to put on screen.
+    expect(screen.queryByRole('button', { name: BROKEN_CARD })).toBeNull()
+    expect(screen.getByRole('button', { name: NOTES_CARD })).toBeTruthy()
+  })
+
+  it('says which card emptied the list rather than claiming nothing is wrong', async () => {
+    await renderWithRows(mixedSeverities)
+
+    await clickChip(BROKEN_CARD)
+
+    expect(await screen.findByText(/Every card above is turned off/)).toBeTruthy()
+    // The old wording, which would be a lie with a blocking finding in the report.
+    expect(screen.queryByText(/Nothing is broken/)).toBeNull()
   })
 })
 
@@ -298,17 +354,17 @@ describe('Tools: finding the repairs the filters are hiding', () => {
    * default view shows neither, and they are the two largest fixes there are. A summary drawn
    * from the visible rows would say "1 chart"; this one counts every row of the report.
    */
-  it('counts repairable charts the quality toggle is hiding, and says they are hidden', async () => {
+  it('counts repairable charts the charting-notes card is hiding, and says they are hidden', async () => {
     await renderFixable()
 
     expect(screen.getByText(/Encore can fix 3 of these charts/)).toBeTruthy()
-    // Two of those three charts are entirely off screen behind the quality toggle.
-    expect(screen.getByText(/2 of them are hidden by the current filters/)).toBeTruthy()
+    // Two of those three charts are entirely off screen behind the charting-notes card.
+    expect(screen.getByText(/2 of them are hidden by the cards above/)).toBeTruthy()
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
     expect(screen.getByText('2 CHARTS')).toBeTruthy()
   })
 
-  it('puts those rows on screen without touching the quality toggle', async () => {
+  it('puts those rows on screen without touching the charting-notes card', async () => {
     await renderFixable()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Show: Resize the album art/ }))
@@ -320,13 +376,13 @@ describe('Tools: finding the repairs the filters are hiding', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Show everything' }))
 
-    // Back to exactly the view the user had. The toggle was never turned on. The focus reached
+    // Back to exactly the view the user had. The card was never turned on. The focus reached
     // past it rather than through it, which is what keeps the other ~24,000 quality rows away.
     await waitFor(() => {
       expect(screen.getByText('No audio')).toBeTruthy()
     })
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
-    expect(screen.getByRole('button', { name: QUALITY_TOGGLE }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('button', { name: NOTES_CARD }).getAttribute('aria-pressed')).toBe(
       'false'
     )
   })
@@ -1022,6 +1078,76 @@ async function renderOn(platform: string, rows = videoAndFault): Promise<FixStub
   return stub
 }
 
+/**
+ * The two findings that look repairable, were looked at, and were refused.
+ *
+ * Both are decisions rather than gaps, and the view has to say so where the missing button is.
+ * `multipleChart` would have to delete a notes.mid or a notes.chart, which is the file Clone Hero
+ * matches charts by. `missingValue` in its difficulty-rating flavour cannot be filled from Chorus,
+ * because an exact hash match there means Chorus ingested this same upload and holds the same
+ * blank. Neither reason is scan-chart's; both are Encore's, so both are its to state.
+ */
+const refused: ChartIssueRow[] = [
+  {
+    chartPath: '/library/Rush - YYZ',
+    kind: 'folder',
+    code: 'multipleChart',
+    description: 'This chart has more than one chart file.'
+  },
+  {
+    chartPath: '/library/Rush - Limelight',
+    kind: 'metadata',
+    code: 'missingValue',
+    description: 'Metadata is missing a "diff_guitar" value.'
+  }
+]
+
+describe('Tools: the repairs Encore refuses to make', () => {
+  it('says on the row why a second chart file is not Encore to delete', async () => {
+    // Not renderFixable: nothing in this report is repairable, so the repair card never arrives
+    // and there is nothing for it to wait on.
+    stubFixes(refused)
+    render(Tools)
+    await screen.findByText('SHOW')
+
+    expect(screen.getByText('More than one chart file')).toBeTruthy()
+    expect(screen.getByText(/will not delete a chart file/)).toBeTruthy()
+    // The cost, which is the reason. Without it the row reads as a feature nobody wrote yet.
+    expect(screen.getByText(/costs it multiplayer/)).toBeTruthy()
+    // And no button, which is the whole point.
+    expect(screen.queryByRole('button', { name: /^Fix More than one chart file/ })).toBeNull()
+  })
+
+  it('says a rating Chorus does not have either cannot be filled in', async () => {
+    stubFixes(refused)
+    render(Tools)
+    await screen.findByText('SHOW')
+    await clickChip(NOTES_CARD)
+
+    expect(
+      await screen.findByText(/Only the person who charted it can say how hard it is/)
+    ).toBeTruthy()
+    expect(screen.getByText(/this same upload, carrying the same blank/)).toBeTruthy()
+  })
+
+  it('names both refusals beside the repairs it does offer', async () => {
+    await renderFixable()
+
+    expect(screen.getByText(/Two findings are left alone on purpose/)).toBeTruthy()
+    // Not an apology and not an error: a decision, said once, with the reasons on the rows.
+    expect(screen.getByText(/Neither is a gap in Encore/)).toBeTruthy()
+  })
+
+  it('says nothing extra on a row nobody decided anything about', async () => {
+    await renderFixable()
+
+    // noAudio is unrepairable because nothing could repair it from a button, which needs no
+    // sentence. Only the two deliberate refusals get one.
+    expect(screen.getByText('No audio')).toBeTruthy()
+    expect(document.querySelectorAll('.i-decision')).toHaveLength(0)
+  })
+})
+
 describe('Tools: a video that only fails on Linux', () => {
   it('counts it among the faults on Linux, where it is one', async () => {
     // The regression guard for the platform this was always right about. Nothing below this
@@ -1031,9 +1157,11 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
     expect(screen.getByText("Video won't play on Linux")).toBeTruthy()
     expect(await screen.findByText(/Encore can fix 1 of these chart/)).toBeTruthy()
-    // No second panel: converting IS the repair here, and the repair summary already says so.
+    // No second card, and no third card in the strip: converting IS the repair here, and the
+    // repair card already says so.
     expect(screen.queryByText(/cannot play on Linux$/)).toBeNull()
     expect(screen.queryByRole('button', { name: /^Convert all/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: PORTABILITY_CARD })).toBeNull()
   })
 
   it('does not count it among the faults on Windows', async () => {
@@ -1101,15 +1229,17 @@ describe('Tools: a video that only fails on Linux', () => {
   it('lets a Windows user read the rows without turning the charting notes on', async () => {
     await renderOn('win32')
 
-    // Its own chip, because the charting-quality toggle is about how a chart was made and this
-    // is not that.
-    const chip = screen.getByRole('button', { name: /Plays here, not everywhere/ })
-    expect(chip.getAttribute('aria-pressed')).toBe('false')
-    await fireEvent.click(chip)
+    // Its own card, because the charting-notes card is about how a chart was made and this is
+    // not that. It is also drawn on this platform and not on Linux, where the grade cannot be
+    // reached at all.
+    const card = screen.getByRole('button', { name: PORTABILITY_CARD })
+    expect(card.getAttribute('aria-pressed')).toBe('false')
+    await fireEvent.click(card)
 
     expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
     // Under its own heading. "Other problems" would be a category of one thing that is not one.
-    expect(screen.getByRole('heading', { name: 'Plays here, not everywhere' })).toBeTruthy()
+    // Two headings carry this text: the card, and the section of the list it opens.
+    expect(screen.getAllByRole('heading', { name: 'Plays here, not everywhere' })).toHaveLength(2)
     expect(screen.queryByRole('heading', { name: 'Other problems' })).toBeNull()
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
   })
@@ -1120,7 +1250,7 @@ describe('Tools: a video that only fails on Linux', () => {
     // Not counted as a fault, because nobody has checked that it is one.
     expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
 
-    await fireEvent.click(screen.getByRole('button', { name: /Plays here, not everywhere/ }))
+    await fireEvent.click(screen.getByRole('button', { name: PORTABILITY_CARD }))
     const meaning = await screen.findByText(/Nobody has checked what it does on this platform/)
     expect(meaning).toBeTruthy()
     // And not claimed to work either, which is the Windows sentence.
