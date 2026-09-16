@@ -26,7 +26,10 @@ export const SettingsSchema = z.object({
   tourSeen: z.boolean().default(SETTINGS_DEFAULTS.tourSeen),
   lastSeenVersion: z.string().default(SETTINGS_DEFAULTS.lastSeenVersion),
   // Read only, and only ever by the score-file watcher. Empty means the probe decides.
-  scoreFolder: z.string().default(SETTINGS_DEFAULTS.scoreFolder)
+  scoreFolder: z.string().default(SETTINGS_DEFAULTS.scoreFolder),
+  // The program the Launch button starts. Empty means nothing has been chosen; there is no probe
+  // behind it, so empty is not "look for it" the way scoreFolder's empty is.
+  gamePath: z.string().default(SETTINGS_DEFAULTS.gamePath)
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export { defaultSettings } from './settings-defaults'
