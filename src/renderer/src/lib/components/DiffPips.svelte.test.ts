@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import DiffPips from './DiffPips.svelte'
@@ -211,4 +213,103 @@ describe('DiffPips as an instrument icon', () => {
     expect(ring()).toBeNull()
     expect(document.querySelector('.letter')?.textContent).toBe('T')
   })
+})
+
+/**
+ * Every fixed track the ring form is dropped into, against the width it actually draws in.
+ *
+ * `.part` declares `flex-shrink: 0`, which is the point of it: the width of this thing is the
+ * information it carries, so it does not negotiate. That makes a track one pixel short a group
+ * painted over whatever is beside it rather than a group squeezed, and jsdom cannot see either.
+ * What is checkable without layout is the arithmetic the track widths were chosen by, read back
+ * out of the sources: a group is as wide as its six pips and their gaps, the track has to hold
+ * every group the view draws plus the gaps between them, and the numbers are all declared.
+ *
+ * It catches the realistic regression, which is a fourth instrument added to a row whose track
+ * was sized for three. `scripts/measure-explore-row.mjs` and `scripts/measure-home.mjs` are what
+ * report the other half, which is what the track costs the title beside it.
+ */
+describe('the row tracks are wide enough for the groups in them', () => {
+  const source = (name: string): string => readFileSync(join(__dirname, name), 'utf8')
+  const pips = source('DiffPips.svelte')
+
+  /** One number from a `prop: 12px` declaration, the first one in the given block. */
+  const px = (text: string, block: string, prop: string): number => {
+    const body = new RegExp(`${block}\\s*\\{([^}]*)\\}`).exec(text)
+    if (!body) throw new Error(`no ${block} rule`)
+    const found = new RegExp(`${prop}:\\s*([\\d.]+)px`).exec(body[1])
+    if (!found) throw new Error(`no ${prop} in ${block}`)
+    return Number(found[1])
+  }
+
+  // Six, the same constant the component declares and for the reason its own comment gives:
+  // Clone Hero's scale runs 0 to 6.
+  const SLOTS = Number(/const PIPS = (\d+)/.exec(pips)?.[1])
+  const pipWidth = px(pips, '\\.iconic \\.pip', 'width')
+  const pipGap = px(pips, '\\.pips', 'gap')
+  /** What one group comes to: six 4px dots with 2px between them, which is 34px. */
+  const group = SLOTS * pipWidth + (SLOTS - 1) * pipGap
+
+  /**
+   * Each row that draws the ring form, with the track it was given.
+   *
+   * Explore draws five and the other two draw three, which is not a disagreement: Explore's row
+   * folds the difficulty onto a line of its own below 800px of column and theirs do not, so five
+   * groups there are free at the widths where the column is narrow and would come straight off
+   * the title in Installed and Home. Both scripts above priced it at 74px of title at every
+   * width the shell supports.
+   */
+  const ROWS = [
+    { file: 'Browse.svelte', rule: '\\.diffs', parts: 5, track: 210 },
+    { file: 'Library.svelte', rule: '\\.diffs', parts: 3, track: 124 },
+    { file: 'Home.svelte', rule: '\\.diffs', parts: 3, track: 124 }
+  ]
+
+  it('draws six 4px pips to a group, which is what the tracks are counted in', () => {
+    expect(SLOTS).toBe(6)
+    expect(group).toBe(34)
+  })
+
+  /**
+   * One gap for all three rows, because a chart has to read the same in whichever list it is
+   * met in. Wider than the 4px between a group's ring and its own pips and than the 2px between
+   * the pips: the gap inside a group has to read as smaller than the gap between groups, or the
+   * pips read as one run rather than as a mark per instrument.
+   */
+  it('separates the groups by the same gap in every row, and by more than the pips', () => {
+    const gaps = ROWS.map((row) => px(source(row.file), row.rule, 'gap'))
+    expect(new Set(gaps).size).toBe(1)
+    expect(gaps[0]).toBeGreaterThan(px(pips, '\\.iconic', 'gap'))
+    expect(gaps[0]).toBeGreaterThan(pipGap)
+  })
+
+  for (const row of ROWS) {
+    it(`gives ${row.file} room for its ${row.parts} groups`, () => {
+      const text = source(row.file)
+      const gap = px(text, row.rule, 'gap')
+      const drawn = row.parts * group + (row.parts - 1) * gap
+
+      // The count is read out of the source rather than written here twice, so a part added to
+      // the row without the track being widened is what fails this rather than a stale number.
+      const list = /const ROW_PARTS[^[]*\[([\s\S]*?)\n {2}\]/.exec(text)
+      if (!list) throw new Error(`no ROW_PARTS in ${row.file}`)
+      expect((list[1].match(/\bkey:/g) ?? []).length).toBe(row.parts)
+
+      expect(drawn).toBeLessThanOrEqual(row.track)
+      // Every fixed declaration of that track, and not only the first: each container query
+      // redeclares the row's grid, and one left at the old width is a column that clips at
+      // exactly one range of window sizes.
+      const declared = [...text.matchAll(/grid-template-columns:([^;]*);/g)]
+        .map((m) => m[1])
+        .filter((tracks) => /\bminmax\(0, 1fr\)/.test(tracks))
+        // `minmax(0, 130px)` is a text track that gives way, not a fixed one, and its number is
+        // in the same range as the difficulty track's. Dropped before the numbers are read.
+        .map((tracks) => tracks.replace(/minmax\([^)]*\)/g, ''))
+        .flatMap((tracks) => tracks.match(/\d+(?=px)/g) ?? [])
+        .map(Number)
+        .filter((n) => n >= drawn)
+      expect(declared.length).toBeGreaterThan(0)
+      expect([...new Set(declared)]).toEqual([row.track])
+    })
+  }
 })
