@@ -28,6 +28,18 @@
  *               declares an ellipsis. STATE=long is what that case exists for.
  *   wraps       The health checklist running onto a second line, which is the one thing that
  *               makes the health card taller than the ring beside it for a reason nobody chose.
+ *   lane        The still highway, which is what this frame shows for as long as nothing is
+ *               playing. jsdom sees an SVG with the right number of shapes in it and nothing
+ *               about where any of them are, so this reads back the frame it landed in: whether
+ *               the strike line sits where a player would look, whether the outer frets are
+ *               inside the frame rather than clipped by it, and whether the drawing covers the
+ *               box or leaves a band of the old black rectangle showing.
+ *   transport   The row under it, which is the transport a user can actually reach: the player
+ *               bar cedes its own whenever a viewport is registered, and a preview can only live
+ *               inside one. A time either side of the track costs the track its width, and the
+ *               handle is a zero-height box translated by a percentage of its own width, which
+ *               is a thing that is off by half a handle the moment somebody centres it
+ *               differently and a thing no jsdom test can see.
  *
  * The states, because the happy one is not the one that breaks:
  *
@@ -384,6 +396,51 @@ const PANEL = `(() => {
     ring,
     rows,
     clipped,
+    lane: (() => {
+      const frame = rail.querySelector('.hw')
+      const holder = rail.querySelector('.hw .rest')
+      const svg = rail.querySelector('.hw .rest svg.highway')
+      if (!frame || !holder || !svg) return null
+      // The frame's CONTENT box, not its border box: the still lane is inset inside the 1px
+      // border, and comparing against the outer edge reports a two-pixel gap that is the border.
+      const f = { width: frame.clientWidth, height: frame.clientHeight }
+      const g = svg.getBoundingClientRect()
+      const strike = svg.querySelector('.strike').getBoundingClientRect()
+      const frets = [...svg.querySelectorAll('.fret')].map((el) => el.getBoundingClientRect())
+      return {
+        faded: getComputedStyle(holder).opacity !== '1',
+        state: svg.getAttribute('class'),
+        frame: { w: round(f.width), h: round(f.height) },
+        covers: round(g.width) >= round(f.width) - 1 && round(g.height) >= round(f.height) - 1,
+        strikeDown: Math.round(((strike.top - g.top) / g.height) * 100),
+        frets: frets.length,
+        leftGap: round(frets[0].left - g.left),
+        rightGap: round(g.right - frets[frets.length - 1].right),
+        fret: { w: round(frets[0].width), h: round(frets[0].height) }
+      }
+    })(),
+    transport: (() => {
+      const row = rail.querySelector('.preview .transport')
+      if (!row) return null
+      const seek = row.querySelector('.seek')
+      const track = row.querySelector('.seek .track')
+      const knob = row.querySelector('.seek .knob')
+      const b = (el) => {
+        const r = el.getBoundingClientRect()
+        return { left: round(r.left), right: round(r.right), w: round(r.width) }
+      }
+      return {
+        height: round(row.getBoundingClientRect().height),
+        parts: [...row.children].map((el) => ({
+          cls: el.className.split(' ')[0],
+          w: round(el.getBoundingClientRect().width),
+          says: el.tagName === 'SPAN' ? el.textContent.trim() : null
+        })),
+        seek: b(seek),
+        track: b(track),
+        knob: b(knob)
+      }
+    })(),
     sidewaysBy: rail.scrollWidth - rail.clientWidth,
     docSidewaysBy: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }
@@ -505,6 +562,24 @@ app.whenReady().then(async () => {
       ? '  clipped       nothing'
       : `  clipped       ${p.clipped.map((c) => `.${c.cls} at ${c.box}px: "${c.says}"`).join('\n                ')}`
   )
+  if (p.lane) {
+    console.log(
+      `  lane          ${p.lane.state}, ${p.lane.faded ? 'FADED OUT' : 'drawn'} in a ${p.lane.frame.w}x${p.lane.frame.h} frame, ${p.lane.covers ? 'covers it' : 'LEAVES A GAP'}`
+    )
+    console.log(
+      `                strike line ${p.lane.strikeDown}% down, ${p.lane.frets} frets of ${p.lane.fret.w}x${p.lane.fret.h}px, ${p.lane.leftGap}px clear at the left and ${p.lane.rightGap}px at the right`
+    )
+  }
+  if (p.transport) {
+    const t = p.transport
+    const off = Math.max(0, t.track.left - t.knob.left, t.knob.right - t.track.right)
+    console.log(
+      `  transport     ${t.height}px tall: ${t.parts.map((x) => `${x.cls} ${x.w}px${x.says ? ` "${x.says}"` : ''}`).join(', ')}`
+    )
+    console.log(
+      `                handle ${t.knob.w}px box at ${t.knob.left}-${t.knob.right}px on a track at ${t.track.left}-${t.track.right}px  ${off === 0 ? 'ok' : `OVERHANGS BY ${off}px`}`
+    )
+  }
   console.log(`  sideways      column ${p.sidewaysBy}px, document ${p.docSidewaysBy}px`)
 
   app.exit(0)
