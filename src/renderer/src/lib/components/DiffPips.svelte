@@ -6,7 +6,8 @@
     instrument,
     label,
     instruments,
-    tier
+    tier,
+    icon = false
   }: {
     /** The instrument key the catalog and the Encore API both use, e.g. `guitar`, `bassghl`. */
     instrument: string
@@ -16,6 +17,17 @@
     instruments: readonly string[]
     /** song.ini's rating: `diff_guitar` and its siblings, or the catalog's normalized copy. */
     tier: number | null | undefined
+    /**
+     * Draw the instrument as a glyph in a ring with its pips underneath, instead of as a letter
+     * with its pips beside it. Opt-in, and off by default, because the letter form is what three
+     * of the four callers want: Installed and Home put the group on one line of a row that has
+     * no vertical room to spare, and the chart page's matrix already spells the instrument out
+     * in a column of its own, where a glyph would say the same thing twice.
+     *
+     * Explore is the one that takes it. It shows five instruments where the others show three,
+     * and five letters in a row read as a word rather than as five columns.
+     */
+    icon?: boolean
   } = $props()
 
   /**
@@ -39,6 +51,38 @@
    */
   const colorVar = $derived(instrumentColorVar(instrument))
 
+  /**
+   * The part the key plays, read back off the colour it was given.
+   *
+   * Ten instrument keys collapse onto six parts, and the glyph and the colour want the same
+   * collapse: a six-fret bass is drawn as a bass in both. `instrumentColorVar` is where that
+   * mapping lives, so taking the part out of its answer keeps it in one place rather than
+   * copying the table here and letting the two drift.
+   */
+  const part = $derived(colorVar === null ? null : colorVar.replace('--inst-', ''))
+
+  /**
+   * One glyph per part, at Lucide's 24-unit grid and the stroke the rest of the app draws at.
+   *
+   * Five of the six are the prototype's own row icons, unchanged. Rhythm has no glyph of its
+   * own there and gets the guitar: it is a guitar part, which is also why it takes the guitar's
+   * place in the colour mapping. A key with no part draws no glyph and keeps the letter, for
+   * the same reason it draws no colour: an instrument this app has never heard of should not
+   * be dressed up as one it has.
+   */
+  const GLYPHS: Record<string, string> = {
+    guitar:
+      'M14.5 3.5 17 6M9 14l-3.5 3.5a2.5 2.5 0 1 0 3 3L12 17M19 4.5 14 9.5l-2 4.5 4.5-2 5-5a2.1 2.1 0 0 0-2.5-2.5z',
+    rhythm:
+      'M14.5 3.5 17 6M9 14l-3.5 3.5a2.5 2.5 0 1 0 3 3L12 17M19 4.5 14 9.5l-2 4.5 4.5-2 5-5a2.1 2.1 0 0 0-2.5-2.5z',
+    bass: 'M6 4v11M6 19a2.2 2.2 0 1 0 0-4.4M18 4v11M18 19a2.2 2.2 0 1 0 0-4.4M6 6h12',
+    drums: 'M4 9v5c0 2 3.6 3.6 8 3.6s8-1.6 8-3.6V9',
+    keys: 'M3 6h18v12H3zM8 6v7M12 6v7M16 6v7',
+    vocals: 'M9 3h6v11H9zM5 11a7 7 0 0 0 14 0M12 18v3'
+  }
+
+  const glyph = $derived(part === null ? null : (GLYPHS[part] ?? null))
+
   const name = $derived.by(() => {
     if (state.kind === 'absent') return `${label}: not charted`
     if (state.kind === 'unrated') return `${label}: charted, no difficulty rating`
@@ -53,12 +97,32 @@
 <span
   class="part"
   class:absent={state.kind === 'absent'}
+  class:iconic={icon}
   role="img"
   aria-label={name}
   title={name}
   style={colorVar ? `--pip: var(${colorVar})` : undefined}
 >
-  <span class="letter" aria-hidden="true">{label.charAt(0)}</span>
+  {#if icon && glyph}
+    <!-- The ring lights for a part the chart has, whether or not anybody rated it, so the glyph
+         answers "is this instrument here" and the pips below answer "how hard". Keeping those two
+         questions on two marks is what lets the icon form hold the same three states the letter
+         form does. -->
+    <span class="ring" aria-hidden="true">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.9"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d={glyph} />
+      </svg>
+    </span>
+  {:else}
+    <span class="letter" aria-hidden="true">{label.charAt(0)}</span>
+  {/if}
   {#if state.kind === 'absent'}
     <!-- A dash rather than six unfilled pips. Absent and unrated would otherwise differ only
          in opacity, which is the one channel that cannot carry a distinction on its own: the
@@ -130,5 +194,51 @@
     height: 1px;
     background: var(--text-3);
     opacity: 0.45;
+  }
+
+  /* The icon form. Everything below is scoped to `.iconic`, so a caller that does not ask for
+     it gets exactly the drawing above and nothing here can reach it. */
+  .iconic {
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* 19px, which is smaller than the 34px of pips under it, so the pip row is what sets the
+     group's width and five groups are five equal columns whatever each one is carrying. */
+  .ring {
+    display: grid;
+    place-items: center;
+    width: 19px;
+    height: 19px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid var(--hairline);
+    background: var(--surface-2);
+    color: var(--text-3);
+  }
+  .ring svg {
+    display: block;
+    width: 11px;
+    height: 11px;
+  }
+  /* Lit for a part the chart has. Half-strength on the ring and full on the glyph: at 19px a
+     full-strength circle is the loudest thing in the row, and five of them would out-shout the
+     title they sit beside. */
+  .iconic:not(.absent) .ring {
+    border-color: color-mix(in srgb, var(--pip) 50%, transparent);
+    color: var(--pip);
+  }
+  /* Round and 4px in this form, where the bars of the letter form would be a 9px-tall block
+     hanging under a 19px circle. The group is read down here rather than across, so the pips
+     are a row the eye measures against the ring above it, and a row of dots is the shape that
+     reads as a scale under a mark rather than as a second mark. */
+  .iconic .pip {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+  }
+  /* 6 * 4 + 5 * 2, the same footprint the dots take, for the same reason the letter form's
+     dash matches its bars. */
+  .iconic .dash {
+    width: 34px;
   }
 </style>

@@ -85,3 +85,127 @@ describe('DiffPips', () => {
     expect(lit()).toHaveLength(5)
   })
 })
+
+// The icon form Explore asks for, and the promise that asking for it changes nothing for the
+// callers that do not. jsdom still applies no CSS, so what these pin is which elements exist and
+// what the one accessible name says, never how any of it looks.
+describe('DiffPips as an instrument icon', () => {
+  const ring = (): Element | null => document.querySelector('.part .ring')
+
+  it('draws a letter and no ring unless the icon form is asked for', () => {
+    // The default, which is what Installed, Home and the chart page render. Every rule the icon
+    // form adds is scoped to the class this test asserts is absent.
+    render(DiffPips, { instrument: 'guitar', label: 'Guitar', instruments: ['guitar'], tier: 3 })
+    const group = document.querySelector('.part') as HTMLElement
+    expect(group.classList.contains('iconic')).toBe(false)
+    expect(ring()).toBeNull()
+    expect(document.querySelector('.letter')?.textContent).toBe('G')
+  })
+
+  it('swaps the letter for a glyph in a ring when it is', () => {
+    render(DiffPips, {
+      instrument: 'guitar',
+      label: 'Guitar',
+      instruments: ['guitar'],
+      tier: 3,
+      icon: true
+    })
+    expect(ring()).toBeTruthy()
+    expect(ring()?.querySelector('svg path')?.getAttribute('d')).toBeTruthy()
+    // Not both: two marks for one instrument is the row saying the same thing twice.
+    expect(document.querySelector('.letter')).toBeNull()
+  })
+
+  it('keeps the three states apart, with the ring carrying whether the part is there at all', () => {
+    // Absent: a dash under an unlit ring. The prototype draws absent and unrated alike; this
+    // does not, because they are different claims and the component exists to keep them apart.
+    const absent = render(DiffPips, {
+      instrument: 'bass',
+      label: 'Bass',
+      instruments: ['guitar'],
+      tier: -1,
+      icon: true
+    })
+    expect(screen.getByLabelText('Bass: not charted')).toBeTruthy()
+    expect(document.querySelector('.part')?.classList.contains('absent')).toBe(true)
+    expect(document.querySelectorAll('.dash')).toHaveLength(1)
+    expect(pips()).toHaveLength(0)
+    absent.unmount()
+
+    // Unrated: the ring is lit, because the chart has drums; the pips are all dark, because
+    // nobody said how hard they are.
+    const unrated = render(DiffPips, {
+      instrument: 'drums',
+      label: 'Drums',
+      instruments: ['drums'],
+      tier: -1,
+      icon: true
+    })
+    expect(screen.getByLabelText('Drums: charted, no difficulty rating')).toBeTruthy()
+    expect(document.querySelector('.part')?.classList.contains('absent')).toBe(false)
+    expect(pips()).toHaveLength(6)
+    expect(lit()).toHaveLength(0)
+    unrated.unmount()
+
+    render(DiffPips, {
+      instrument: 'keys',
+      label: 'Keys',
+      instruments: ['keys'],
+      tier: 2,
+      icon: true
+    })
+    expect(screen.getByLabelText('Keys: difficulty 2 of 6')).toBeTruthy()
+    expect(lit()).toHaveLength(2)
+  })
+
+  it('still saturates at six and still names the rating that ran past it', () => {
+    // A live query on 2026-09-16 found a chart rated 73. The scale is a frame, not a cap, and
+    // the icon form is a second drawing of the same fact rather than a second rule about it.
+    render(DiffPips, {
+      instrument: 'guitar',
+      label: 'Guitar',
+      instruments: ['guitar'],
+      tier: 73,
+      icon: true
+    })
+    expect(screen.getByLabelText('Guitar: difficulty 73, past the top of the scale')).toBeTruthy()
+    expect(pips()).toHaveLength(6)
+    expect(lit()).toHaveLength(6)
+  })
+
+  it('draws a six-fret bass as a bass, in the glyph as well as the colour', () => {
+    render(DiffPips, {
+      instrument: 'bassghl',
+      label: 'Bass (GHL)',
+      instruments: ['bassghl'],
+      tier: 3,
+      icon: true
+    })
+    const drawn = ring()?.querySelector('svg path')?.getAttribute('d')
+    const group = document.querySelector('.part') as HTMLElement
+    group.remove()
+
+    render(DiffPips, {
+      instrument: 'bass',
+      label: 'Bass',
+      instruments: ['bass'],
+      tier: 3,
+      icon: true
+    })
+    // One table, in `instrumentColorVar`, decides both the hue and the drawing. A controller
+    // variant that took a different glyph would be a second table disagreeing with the first.
+    expect(ring()?.querySelector('svg path')?.getAttribute('d')).toBe(drawn)
+  })
+
+  it('keeps the letter for an instrument it has no glyph for, rather than inventing one', () => {
+    render(DiffPips, {
+      instrument: 'theremin',
+      label: 'Theremin',
+      instruments: ['theremin'],
+      tier: 2,
+      icon: true
+    })
+    expect(ring()).toBeNull()
+    expect(document.querySelector('.letter')?.textContent).toBe('T')
+  })
+})
