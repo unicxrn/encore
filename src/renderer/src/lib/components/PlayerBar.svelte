@@ -99,7 +99,7 @@
              does not say. -->
         <span class="line">
           <span class="artist">{$nowPlaying.artist}</span>
-          <span class="track">{$nowPlaying.track}</span>
+          <span class="track-name">{$nowPlaying.track}</span>
         </span>
       </div>
     {:else}
@@ -314,16 +314,30 @@
     font-size: var(--fs-caption);
     color: var(--text-2);
   }
-  /* Never shrinks: see the note beside the markup. The separator belongs to the track and not
-     to the artist, so a chart whose artist is empty gets the track with nothing in front of
-     it rather than a middot floating at the start of the line. */
-  .track {
+  /* Never shrinks under the artist, but never takes more than half the line either.
+     Measured with `scripts/measure-player-bar.mjs`: the two lines share 190px at every width the
+     shell supports, "Expert Guitar" comes to 80px of it and the longest track this app can name,
+     "Medium Rhythm (GHL)", to 133px. Left to itself that leaves a long artist 57px, which is
+     about nine characters. Half the line is the floor: the common track still draws whole, and
+     the artist is never cut below the point where it stops being a name at all.
+
+     The separator belongs to the track and not to the artist, so a chart whose artist is empty
+     gets the track with nothing in front of it rather than a middot floating at the start.
+
+     Named `.track-name` and not `.track`, which is what it was for an afternoon: the scrubber's
+     4px bar three rules down is `.track` too, and one `max-width: 50%` meant for a label halved
+     the seek bar in every window. `scripts/measure-player-bar.mjs` is what said so, by reporting
+     the handle hanging 26px past the end of a track that had no business being 26px wide. */
+  .track-name {
     flex: none;
+    max-width: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: var(--fs-caption);
     color: var(--text-3);
     white-space: nowrap;
   }
-  .artist:not(:empty) + .track::before {
+  .artist:not(:empty) + .track-name::before {
     content: ' · ';
     white-space: pre;
   }

@@ -425,7 +425,7 @@ describe('PlayerBar: the name group', () => {
 
     expect(container.querySelector('.now .title')?.textContent).toBe('YYZ')
     expect(container.querySelector('.now .artist')?.textContent).toBe('Rush')
-    expect(container.querySelector('.now .track')?.textContent).toBe('Hard Bass')
+    expect(container.querySelector('.now .track-name')?.textContent).toBe('Hard Bass')
   })
 
   it('still names the track for a chart that credits no artist', () => {
@@ -433,7 +433,7 @@ describe('PlayerBar: the name group', () => {
     const { container } = render(PlayerBar)
 
     expect(container.querySelector('.now .artist')?.textContent).toBe('')
-    expect(container.querySelector('.now .track')?.textContent).toBe('Expert Drums')
+    expect(container.querySelector('.now .track-name')?.textContent).toBe('Expert Drums')
   })
 
   /**
@@ -453,13 +453,16 @@ describe('PlayerBar: the name group', () => {
       ''
     )
 
-    expect(/\.track\s*\{[^}]*flex:\s*none/.test(styles)).toBe(true)
+    expect(/\.track-name\s*\{[^}]*flex:\s*none/.test(styles)).toBe(true)
+    // And never more than half the line, so a track nobody can shorten cannot cut the artist
+    // down to nine characters. The two numbers are in `scripts/measure-player-bar.mjs`.
+    expect(/\.track-name\s*\{[^}]*max-width:\s*50%/.test(styles)).toBe(true)
     // The artist is the half that gives way, through the ellipsis rule it shares with the title.
     expect(/\.title,\s*\n\s*\.artist\s*\{[^}]*text-overflow:\s*ellipsis/.test(styles)).toBe(true)
     expect(/\.artist\s*\{[^}]*min-width:\s*0/.test(styles)).toBe(true)
-    expect(/\.artist:not\(:empty\)\s*\+\s*\.track::before\s*\{[^}]*content:/.test(styles)).toBe(
-      true
-    )
+    expect(
+      /\.artist:not\(:empty\)\s*\+\s*\.track-name::before\s*\{[^}]*content:/.test(styles)
+    ).toBe(true)
   })
 })
 
