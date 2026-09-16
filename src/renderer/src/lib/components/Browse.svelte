@@ -37,6 +37,7 @@
   import { msToTime, stripRichText } from '../../../../shared/format'
   import { issueSummary, issueTitle } from '../issue-summary'
   import { encore } from '../stores/bridge'
+  import { surprise } from '../stores/surprise'
   import AdvancedSearch from './AdvancedSearch.svelte'
   import DiffPips from './DiffPips.svelte'
   import type { ChartTarget } from './Home.svelte'
@@ -60,7 +61,7 @@
   // (and drop the pages already loaded) each time.
   const search = browseSearch
   const { results, groups, found, loading, error, searched, expanded, mode, selected } = search
-  const { advancedCount, advancedOpen, hasMore, atAutoCap } = search
+  const { advancedCount, advancedOpen, hasMore, atAutoCap, presented } = search
   const { advancedDropped, advancedDraftCount } = search
   // The applied query, not the draft: the band on screen has to be the band the rows came back
   // for. `advancedDraft` is what the panel is holding, which may never have been asked.
@@ -675,7 +676,12 @@
   // Gated on `searched` rather than on the rows alone: the store debounces for 300ms before it
   // requests anything, and during that window an unasked question looks exactly like one that
   // came back empty. `error` has its own card above the table and speaks for itself.
-  const showEmpty = $derived($searched && !$loading && !$error && $results.length === 0)
+  // `$presented` is the fourth condition because a handed-over set that came back with nothing
+  // has already said so in its own line above the list, and the branches below would answer the
+  // same emptiness with a sentence about a search nobody ran.
+  const showEmpty = $derived(
+    $searched && !$loading && !$error && $results.length === 0 && $presented === null
+  )
   /** Rows came back and Hide owned left none of them on screen; see the note beside the markup. */
   const allHidden = $derived(!$error && $results.length > 0 && shownGroups.length === 0)
   const activeQuery = $derived($globalQuery.trim())
@@ -836,6 +842,20 @@
     </div>
     {#if $advancedOpen}
       <AdvancedSearch {search} />
+    {/if}
+    <!-- Where the rows came from, when they did not come from the header above.
+         `SearchStore.presented` is what decides: it holds the sentence while a handed-over set is
+         on screen and is emptied by the next real search, so this band cannot outlive the rows it
+         describes. The only such set today is Surprise me, and Shuffle draws another.
+
+         role="status" and not "alert": it follows something the user pressed and is not an
+         interruption. It sits above the result bar because it is about the whole answer, where
+         the bar below it is about how the answer is drawn. -->
+    {#if $presented !== null}
+      <p class="dropped" role="status">
+        <span>{$presented}</span>
+        <button class="dropped-action" onclick={() => void surprise.roll()}>Shuffle</button>
+      </p>
     {/if}
     <!-- The bar over the list: how many charts came back, what is being left out of the drawing,
          and what to do with the ones that are ticked. It is about the answer, where everything

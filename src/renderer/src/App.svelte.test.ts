@@ -1420,3 +1420,34 @@ describe('the title bar buttons', () => {
     expect(screen.getByRole('button', { name: 'My library' })).toBeTruthy()
   })
 })
+
+/**
+ * The sidebar's Surprise me, which is the only quick action wired to anything.
+ *
+ * Last in the file on purpose. `browseSearch` is module state shared by the whole run, and a
+ * handed-over result set is the one thing in it that a later test would inherit: it records the
+ * wildcard as already answered, which is exactly what stops a remount re-querying and would
+ * therefore stop somebody else's `setQuery('')` from running.
+ */
+describe('Surprise me', () => {
+  it('goes to Explore and draws a random page out of Chorus Encore', async () => {
+    stubEncore({ existsByMeta: vi.fn().mockResolvedValue([]) })
+    searchCharts.mockResolvedValue({ found: 95_299, out_of: 95_299, page: 1, data: [] })
+    settingsLoaded.set(true)
+    render(App)
+    // From Home, which is where a launch starts: the press has to take the user to the list the
+    // five charts will be in, not merely fetch them.
+    expect(navItem('Home').getAttribute('aria-current')).toBe('page')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Surprise me' }))
+
+    expect(navItem('Explore').getAttribute('aria-current')).toBe('page')
+    await waitFor(() =>
+      expect(
+        searchCharts.mock.calls.some((call) => (call[0] as { perPage?: number }).perPage === 100)
+      ).toBe(true)
+    )
+    // The list says what it is showing, rather than leaving five rows under an empty search box.
+    await waitFor(() => expect(get(browseSearch.presented)).not.toBeNull())
+  })
+})

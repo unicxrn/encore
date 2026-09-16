@@ -1511,3 +1511,88 @@ describe('the intensity band', () => {
     expect(fetchFn.mock.calls.length).toBe(spent)
   })
 })
+
+/**
+ * Rows the store was handed rather than ones it searched for.
+ *
+ * The whole of what `present` has to get right is that the list stops behaving like a search:
+ * nothing appends under the rows, nothing in flight replaces them a moment later, and the mount
+ * effect that re-applies the global query on every remount finds its question already answered.
+ * The note over them is the store's, because the store is what knows when they stop being there.
+ */
+describe('a result set the store was handed', () => {
+  const five = [1, 2, 3, 4, 5].map((id) => makeChart(id, id))
+
+  it('shows the rows under a note, and counts them as the whole answer', () => {
+    const search = createSearch({ fetchFn: vi.fn(), debounceMs: 5 })
+    search.present('five charts', five)
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+    expect(get(search.found)).toBe(5)
+    expect(get(search.presented)).toBe('five charts')
+    expect(get(search.searched)).toBe(true)
+    expect(get(search.error)).toBeNull()
+    expect(get(search.loading)).toBe(false)
+  })
+
+  it('refuses to append under them, whatever their songIds group to', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    // Two charts of one song group to one row against a count of two, which is exactly the shape
+    // `hasMore` reads as "there is more". Without `exhausted` the sentinel would arm and append
+    // page 2 of the wildcard under a handed-over set.
+    search.present('two versions', [makeChart(1, 42), makeChart(2, 42)])
+    expect(get(search.hasMore)).toBe(false)
+    await search.loadMore()
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('cancels a search still waiting out the debounce, which would replace them', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('everlong')
+    search.present('five charts', five)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('records the wildcard as answered, so a remount does not re-query over them', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    // What Explore's mount effect does on every navigation back to it.
+    search.setQuery('')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(get(search.presented)).toBe('five charts')
+  })
+
+  it('leaves the rows alone when the note is about something still being fetched', () => {
+    const search = createSearch({ fetchFn: vi.fn(), debounceMs: 5 })
+    search.present('five charts', five)
+    search.present('looking for more', null)
+    expect(get(search.presented)).toBe('looking for more')
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('drops the note when a search of its own answers, because it no longer describes anything', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(get(search.results).map((c) => c.name)).toEqual(['Everlong'])
+    expect(get(search.presented)).toBeNull()
+  })
+
+  it('keeps the note when a search fails, because the rows it describes are still up', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(new Response('no', { status: 404 }))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(get(search.error)).not.toBeNull()
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+    expect(get(search.presented)).toBe('five charts')
+  })
+})

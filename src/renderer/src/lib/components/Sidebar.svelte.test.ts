@@ -30,18 +30,21 @@ function renderSidebar(
 ): {
   onNavigate: ReturnType<typeof vi.fn>
   onToggleDownloads: ReturnType<typeof vi.fn>
+  onSurprise: ReturnType<typeof vi.fn>
 } {
   const onNavigate = vi.fn()
   const onToggleDownloads = vi.fn()
+  const onSurprise = vi.fn()
   render(Sidebar, {
     view: 'tools',
     downloadsOpen: false,
     onNavigate,
     onToggleDownloads,
     onShowShortcuts: noop,
+    onSurprise,
     ...over
   })
-  return { onNavigate, onToggleDownloads }
+  return { onNavigate, onToggleDownloads, onSurprise }
 }
 
 const row = (name: string): HTMLElement => screen.getByRole('button', { name })
@@ -173,13 +176,24 @@ describe('Sidebar: the switchers above the nav', () => {
     expect(screen.getByText(/Not connected yet\. Encore searches Chorus Encore\./)).toBeTruthy()
   })
 
-  it('offers the two quick actions as controls that are not ready, not as live buttons', () => {
+  // Was both quick actions. Surprise me is built now, and the pair is deliberately split rather
+  // than dropped: the reason Import playlist is still disabled is the reason it is still drawn.
+  it('leaves Import playlist as a control that is not ready, not as a live button', () => {
     renderSidebar()
-    for (const name of ['Import playlist', 'Surprise me']) {
-      const button = screen.getByRole('button', { name })
-      expect((button as HTMLButtonElement).disabled).toBe(true)
-      expect(button.getAttribute('title')).toContain('not built yet')
-    }
+    const button = screen.getByRole('button', { name: 'Import playlist' })
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    expect(button.getAttribute('title')).toContain('not built yet')
+  })
+
+  it('offers Surprise me as a live control that says where it goes', () => {
+    const { onSurprise } = renderSidebar()
+    const button = screen.getByRole('button', { name: 'Surprise me' })
+    expect((button as HTMLButtonElement).disabled).toBe(false)
+    // A quick action that changes the view has to say so before it is pressed.
+    expect(button.getAttribute('title')).toContain('Opens Explore')
+    expect(button.getAttribute('title')).not.toContain('not built yet')
+    void fireEvent.click(button)
+    expect(onSurprise).toHaveBeenCalledTimes(1)
   })
 
   it('groups the nav under Library and Tools', () => {
@@ -233,7 +247,8 @@ describe('Sidebar: the update state in the footer', () => {
         downloadsOpen: false,
         onNavigate: noop,
         onToggleDownloads: noop,
-        onShowShortcuts: noop
+        onShowShortcuts: noop,
+        onSurprise: noop
       }
     })
     expect(screen.getByText('DOWNLOADING UPDATE')).toBeTruthy()

@@ -13,13 +13,16 @@
     downloadsOpen,
     onNavigate,
     onToggleDownloads,
-    onShowShortcuts
+    onShowShortcuts,
+    onSurprise
   }: {
     view: ViewId
     downloadsOpen: boolean
     onNavigate: (id: ViewId) => void
     onToggleDownloads: () => void
     onShowShortcuts: () => void
+    /** Draw five charts the user does not have, and go to where they will be. App owns both. */
+    onSurprise: () => void
   } = $props()
 
   interface NavItem {
@@ -201,10 +204,10 @@
   </div>
 
   <div class="quick">
-    <!-- Both are disabled rather than absent: the frame is what this step is for, and a control
-         that is coming reads better as a control that is not ready than as a gap that will
-         change shape later. `title` carries the reason; `disabled` keeps it out of the tab
-         order and out of every click. -->
+    <!-- Import playlist is disabled rather than absent: the frame is what this step is for, and a
+         control that is coming reads better as a control that is not ready than as a gap that
+         will change shape later. `title` carries the reason; `disabled` keeps it out of the tab
+         order and out of every click. Surprise me was the other one and is a control now. -->
     <button class="quick-btn" disabled title="Playlist import is not built yet">
       <svg
         viewBox="0 0 24 24"
@@ -217,7 +220,14 @@
       </svg>
       Import playlist
     </button>
-    <button class="quick-btn" disabled title="Surprise me is not built yet">
+    <!-- Goes to Explore and fills it, which is why the title says where: a quick action that
+         changes the view has to say so before it is pressed, or the list the user was looking at
+         appears to have been replaced by five charts for no reason. -->
+    <button
+      class="quick-btn"
+      title="Five charts you do not have, drawn at random. Opens Explore."
+      onclick={onSurprise}
+    >
       <svg
         viewBox="0 0 24 24"
         fill="none"

@@ -7,6 +7,16 @@ export const ENCHOR_FILES = ENCHOR_FILES_URL
 export interface SearchParams {
   search: string
   page?: number
+  /**
+   * How many charts one page carries. 25 when nothing asks, which is what every paged caller
+   * here wants: a page of Explore.
+   *
+   * `main/updates/client.ts` measured 100 as the largest the endpoint honours ("Asking
+   * Alexandria" returned 58 rows in one response), and that is what the surprise asks for. It
+   * makes one request out of a question that would otherwise take several; see
+   * `SURPRISE_PAGE_SIZE`.
+   */
+  perPage?: number
   instrument?: string | null
   difficulty?: string | null
   sort?: SortChoice | null
@@ -241,7 +251,7 @@ export async function searchCharts(
     // honour. The panel's Name field is where a title goes once advanced filters are on, and
     // Explore says so beside the box it disables.
     search: useAdvanced ? '*' : params.search,
-    per_page: 25,
+    per_page: params.perPage ?? 25,
     page: params.page ?? 1,
     instrument: params.instrument ?? null,
     difficulty: params.difficulty ?? null,
