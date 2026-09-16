@@ -179,6 +179,28 @@ export interface SearchStore {
    */
   atAutoCap: Readable<boolean>
   /**
+   * The sentence over the list when the rows were handed to the store instead of searched for,
+   * and null the rest of the time.
+   *
+   * Explore's rows normally answer a question the header is still showing: the term in the box,
+   * the filters, the order. A handed-over set answers none of them, so without a line saying
+   * where it came from the list is five charts with an empty search box over it, which reads as
+   * a bug. Holding the line here rather than in the caller is what makes it go away at the right
+   * moment: the store already knows when a real run replaces the rows, and nothing else does.
+   */
+  presented: Readable<string | null>
+  /**
+   * Put a note over the list, and with it the rows it describes.
+   *
+   * `charts` null means the note is about something still being fetched, or something that
+   * failed: the rows on screen are left exactly as they were, because a surprise that could not
+   * be found is no reason to throw away what the user was looking at.
+   *
+   * With rows, this takes the list over. Anything in flight or waiting out the debounce is
+   * cancelled first, or it would answer a moment later and replace them.
+   */
+  present: (note: string, charts: ChartData[] | null) => void
+  /**
    * Which of `SORT_OPTIONS` the results were asked for, by its `value`. Empty is the service's
    * own order.
    *
@@ -283,6 +305,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const autoCap = writable(AUTO_APPEND_CAP)
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
   const exhausted = writable(false)
+  const presented = writable<string | null>(null)
   const hasMore = derived(
     [groups, results, found, exhausted],
     ([songs, rows, total, done]) => !done && rows.length > 0 && songs.length < total
@@ -335,6 +358,11 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
         expanded.set(new Set())
         selected.set(new Set())
         scrollTop = 0
+        // These rows are a search's own answer, so whatever note described the last handed-over
+        // set no longer describes anything on screen. Cleared here rather than when a run starts:
+        // a run that fails leaves the previous rows up, and the note that explains them has to
+        // stay up with them.
+        presented.set(null)
         // A different question is a different list, so the appetite for it starts over: the
         // previous one's raised cap would let a fresh search run straight past the point the user
         // had to ask at last time.
@@ -582,6 +610,47 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     await run(true)
   }
 
+  /**
+   * Show rows the store did not fetch, under a note saying what they are.
+   *
+   * The header's own controls are deliberately left alone. The instrument, the difficulty, the
+   * order and the advanced panel all describe the next question rather than these rows, and
+   * clearing them would either lie to a mounted Explore (which seeds its selects once, on mount)
+   * or spend a request putting them back. The note is what says these five did not come from
+   * them.
+   *
+   * `exhausted` is what stops the list asking for more. `found` is the number of rows and there
+   * is no page 2 of a handed-over set, so without it a set whose charts share a songId would
+   * group to fewer than `found` and arm the sentinel, which would append page 2 of the wildcard
+   * under five charts that had nothing to do with it.
+   *
+   * The wildcard is recorded as already answered for the same reason `applyQuery` records it:
+   * Explore re-applies the global query from an `$effect` on every mount, and a remount that
+   * found the question unasked would run it and replace these rows.
+   */
+  function present(note: string, charts: ChartData[] | null): void {
+    presented.set(note)
+    if (charts === null) return
+    cancelPending()
+    controller?.abort()
+    controller = null
+    results.set(charts)
+    found.set(charts.length)
+    expanded.set(new Set())
+    selected.set(new Set())
+    scrollTop = 0
+    autoCap.set(AUTO_APPEND_CAP)
+    exhausted.set(true)
+    error.set(null)
+    // An aborted run returns without touching this, so nothing else would put it back.
+    loading.set(false)
+    searched.set(true)
+    query = '*'
+    lastRan = '*'
+    page = 1
+    globalQuery.set('')
+  }
+
   function setAdvancedDraft(next: AdvancedQuery): void {
     advancedDraft.set(cloneAdvanced(next))
   }
@@ -679,6 +748,8 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     hasMore,
     atAutoCap,
     sort: { subscribe: sortKey.subscribe },
+    presented: { subscribe: presented.subscribe },
+    present,
     setQuery,
     setFilters,
     setSort,
