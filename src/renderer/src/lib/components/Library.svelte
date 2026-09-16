@@ -20,13 +20,7 @@
     TRASH_PROMISE,
     removalMessage
   } from '../../../../shared/chart-removal'
-  import {
-    msToTime,
-    instrumentDiff,
-    fallbackChartName,
-    playedOn,
-    stripRichText
-  } from '../../../../shared/format'
+  import { msToTime, fallbackChartName, playedOn, stripRichText } from '../../../../shared/format'
   import { cancelScan, scanProgress, startScan } from '../stores/scan'
   import { encore } from '../stores/bridge'
   import { settings } from '../stores/settings'
@@ -39,7 +33,9 @@
     type LibraryFilterState
   } from '../stores/library-filter'
   import { libraryGap } from '../empty-state'
+  import { summarizeIssues, issueTitle, type Counted } from '../issue-summary'
   import Icon from './Icon.svelte'
+  import DiffPips from './DiffPips.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   // Rows open the full Detail page (local variant), same as Explore rows do for
@@ -354,52 +350,104 @@
   )
 
   /**
-   * The three difficulty columns of a row, with the ones this chart does not chart removed.
+   * The three instruments a row draws pips for, which are Explore's three.
    *
-   * Dropping absent instruments here rather than rendering an empty span keeps the `.d + .d`
-   * spacing between whichever columns survive. The keys are the scanner's instrument names,
-   * which is what `chart.instruments` is compared against.
-   *
-   * Still text, and not the `DiffPips` component Explore's rows use, which is a measurement
-   * rather than an oversight. Three pip groups are 133px wide whatever they say, where these
-   * cells are at most about 60: swapped in and measured with
-   * `VIEW=installed scripts/measure-explore-row.mjs` at a 668px view, which is this column at
-   * the default 1280px window, the title dropped from 112px to 86px. This row has no container
-   * query to fall back on and no slack to give, so adopting the component here means rebuilding
-   * its layout rather than changing what one cell draws. `instrumentDiff` reads the same
-   * `partState` the pips do, so the two still answer from one rule and only the drawing differs.
+   * The catalog stores eleven difficulty ratings and the chart page draws all of them. A list
+   * row draws the three anybody scans a library for, in the order a band is written down.
    */
-  function diffCells(chart: ChartRecord): { letter: string; text: string }[] {
-    const columns: [letter: string, key: string, diff: number | null][] = [
-      ['G', 'guitar', chart.diffGuitar],
-      ['B', 'bass', chart.diffBass],
-      ['D', 'drums', chart.diffDrums]
-    ]
-    return columns
-      .map(([letter, key, diff]) => ({
-        letter,
-        text: instrumentDiff(chart.instruments, key, diff)
-      }))
-      .filter((cell) => cell.text !== '')
-  }
+  const ROW_PARTS: readonly {
+    key: string
+    label: string
+    tier: (c: ChartRecord) => number | null
+  }[] = [
+    { key: 'guitar', label: 'Guitar', tier: (c) => c.diffGuitar },
+    { key: 'bass', label: 'Bass', tier: (c) => c.diffBass },
+    { key: 'drums', label: 'Drums', tier: (c) => c.diffDrums }
+  ]
 
   /**
-   * The row's second line: artist, album and genre, in that order, separated by a middle dot.
+   * The row's second line: artist, album, year and genre, separated by a middle dot.
    *
-   * All three are filterable, and a filter on something the row does not show is a filter on
-   * something the user cannot see. They share one line because the row is fixed at two: a third
-   * would make every row taller, and the density of this list is the reason it is usable at two
-   * hundred charts. Empty fields drop out with their separator rather than leaving a gap.
+   * Explore's row says artist, album and year, and this says the same three in the same order
+   * so a chart reads the same in both lists. Genre follows them rather than leading, because
+   * every field here is filterable and a filter on something the row does not show is a filter
+   * on something the user cannot see, and genre is the one of the four the eye gives up first
+   * when the line runs out of room. The year moved here from a column of its own: it is part of
+   * naming a song, not a measurement to line up down the list.
+   *
+   * One line for all four rather than a line each: this is the only text in the row that grows
+   * with what a chart happens to carry, and every line it took would be a line on every row,
+   * which is what the density of a two hundred chart list is made of. Empty fields drop out with
+   * their separator rather than leaving a gap.
    */
   function metaLine(chart: ChartRecord): string {
-    return [chart.artist, chart.album, chart.genre]
-      .map(stripRichText)
+    return [
+      stripRichText(chart.artist),
+      stripRichText(chart.album),
+      chart.year === null ? '' : String(chart.year),
+      stripRichText(chart.genre)
+    ]
       .filter(Boolean)
       .join(' \u00b7 ')
   }
 
   function coverFor(chart: ChartRecord): string | null {
     return chart.albumArtMd5 && !artFailed.has(chart.albumArtMd5) ? artUrl(chart.albumArtMd5) : null
+  }
+
+  // `explainIssue` needs to know which machine this is, because badVideo is a fault on Linux and
+  // a portability note everywhere else. Read once: it cannot change while the app runs.
+  const platform = encore().platform
+
+  /**
+   * What the last issue scan found, grouped by the path a row is keyed on.
+   *
+   * Explore gets this for nothing, because Chorus Encore runs scan-chart over everything it
+   * ingests and ships the findings with the search result. Nothing equivalent rides along with
+   * a catalog row: Encore's issue scan reads every chart on disk, which takes seconds, and the
+   * catalog does not store what it found. So this replays the report main already holds from
+   * the last scan the user ran, which costs one call and no disk.
+   *
+   * Empty until that call answers, and empty for good on a machine where no issue scan has ever
+   * run. A row with nothing to say draws nothing either way, so an unscanned library looks the
+   * same as a clean one here, and the Issues view is the place that says which it is.
+   */
+  const issuesByPath = new SvelteMap<string, Counted[]>()
+
+  /**
+   * Fetched on mount only, not after a library scan.
+   *
+   * A library scan does not re-read charts for issues, so main's report says exactly what it
+   * said before and asking again would only spend a round trip. Running the issue scan means
+   * leaving this view, and App destroys it on navigation, so coming back is what picks up a
+   * fresh report.
+   */
+  async function loadIssues(): Promise<void> {
+    try {
+      const rows = await encore().issuesLast()
+      issuesByPath.clear()
+      for (const row of rows ?? []) {
+        const found = issuesByPath.get(row.chartPath)
+        if (found) found.push({ code: row.code, description: row.description })
+        else issuesByPath.set(row.chartPath, [{ code: row.code, description: row.description }])
+      }
+    } catch {
+      // Best effort, like the facets and the play counts: the list is complete without the
+      // health marks and nothing here may take it down.
+    }
+  }
+
+  /** The row's health mark, or null for a chart with nothing recorded against it. */
+  function healthOf(chart: ChartRecord): { broken: boolean; title: string } | null {
+    const found = issuesByPath.get(chart.path)
+    if (!found) return null
+    const summary = summarizeIssues(found, platform)
+    // Named for what actually looked. These rows came off this disk, not off api.enchor.us, and
+    // they are as fresh as the last scan the user ran rather than as fresh as the chart.
+    const title = issueTitle(summary, "Encore's last issue scan")
+    return summary.worst === null || title === null
+      ? null
+      : { broken: summary.worst === 'blocking', title }
   }
 
   /**
@@ -460,6 +508,16 @@
   /** The name a row shows, which is also the name the confirmation has to use. */
   function chartTitle(chart: ChartRecord): string {
     return stripRichText(chart.name) || fallbackChartName(chart.path)
+  }
+
+  /** What the row announces itself as, in Explore's words for the same sentence. */
+  function chartLabel(chart: ChartRecord): string {
+    const artist = stripRichText(chart.artist)
+    const charter = stripRichText(chart.charter)
+    const attribution = [artist ? `by ${artist}` : '', charter ? `charted by ${charter}` : '']
+      .filter(Boolean)
+      .join(', ')
+    return attribution ? `${chartTitle(chart)} ${attribution}` : chartTitle(chart)
   }
 
   async function load(append = false): Promise<void> {
@@ -556,6 +614,7 @@
     void load()
     void loadLibraryTotal()
     void loadFacets()
+    void loadIssues()
     // Replayed from main's memory, never checked from here: see stores/updates.ts. On mount is
     // enough, since App recreates this view on every navigation and a check runs from Detail,
     // which is a navigation away.
@@ -827,11 +886,21 @@
     {#each charts as chart (chart.path)}
       {@const art = coverFor(chart)}
       {@const play = badgeFor(chart)}
+      {@const health = healthOf(chart)}
       <!-- The row itself is a button, so the removal cannot live inside it: a button inside a
            button is invalid and the inner one would not be reachable. The wrapper carries the
            row's bottom rule and lays the two out side by side. -->
       <div class="row-wrap">
-        <button class="row" onclick={() => onOpenChart({ kind: 'local', record: chart })}>
+        <!-- Named rather than left to its own text, which is what a button's name is by default.
+             The row now holds eighteen pips and a health mark, each carrying a sentence of its
+             own for a screen reader, and all of them would otherwise be read out as the name of
+             the control that opens the chart. Same label Explore puts on its row's name button,
+             for the same reason. -->
+        <button
+          class="row"
+          aria-label={chartLabel(chart)}
+          onclick={() => onOpenChart({ kind: 'local', record: chart })}
+        >
           {#if art}
             <!-- Decorative: the title and artist beside it already name the chart, so alt text
                  here would only repeat them to a screen reader. -->
@@ -882,18 +951,37 @@
             <span class="meta">{metaLine(chart)}</span>
           </span>
           <span class="charter">{stripRichText(chart.charter)}</span>
-          <!-- One grid child: the each block stays inside this span so the row's five columns
-               keep matching .row's five tracks. -->
-          <span class="diffs mono">
-            {#each diffCells(chart) as cell (cell.letter)}
-              <span class="d">{cell.letter}{cell.text}</span>
+          <!-- One grid child: the each block stays inside this span so the row's children keep
+               matching .row's tracks. -->
+          <span class="diffs">
+            {#each ROW_PARTS as part (part.key)}
+              <DiffPips
+                instrument={part.key}
+                label={part.label}
+                instruments={chart.instruments}
+                tier={part.tier(chart)}
+              />
             {/each}
           </span>
-          <!-- Year and length sit together at the end, and both are sortable columns: the user
-               has to be able to see the thing they just ordered the list by. An empty cell for a
-               chart with no year, not a placeholder glyph: the length beside it already spends
-               one, and two in a row reads as an error. -->
-          <span class="year mono">{chart.year ?? ''}</span>
+          <!-- Nothing at all unless the last issue scan found something in this chart, which is
+               Explore's rule: a mark on every row is a mark that means nothing. The span is here
+               either way, empty or not, because the row's children are placed in order against
+               its tracks and one missing on a clean chart would put the length in this column. -->
+          <span class="health">
+            {#if health}
+              <span
+                class="dot"
+                class:broken={health.broken}
+                role="img"
+                aria-label={health.title}
+                title={health.title}
+              ></span>
+            {/if}
+          </span>
+          <!-- Length is the one sortable field with nowhere else to be: the other five are the
+               title, the charter, and the artist, album and year on the line under the title. It
+               is also the first thing the row gives up when the column narrows, because it is the
+               only one of the six the chart page one click away also carries. -->
           <span class="len mono">{msToTime(chart.songLength)}</span>
         </button>
         <!-- Puts the chart in the preview column without opening it. The column carries the
@@ -960,10 +1048,20 @@
 </div>
 
 <style>
+  /* The width the row lays itself out against, named as Explore names it because it is the same
+     question asked about the other list: how much room has the view column got. A container
+     query rather than a media query because window width does not answer that. The rail is
+     374px and shows only above 1120px, so this column is 882px at a 1120px window and 509px at
+     a 1121px one, and a media query would have to encode that backwards step.
+
+     Declared here rather than on `.table`, which is the element that scrolls, for the reason
+     Browse.svelte gives on `.main`: `container-type` brings layout containment with it. */
   .library {
     display: flex;
     flex-direction: column;
     height: 100%;
+    container-type: inline-size;
+    container-name: results;
   }
   .bar {
     display: flex;
@@ -1198,9 +1296,19 @@
     overflow-y: auto;
     border-top: 1px solid var(--hairline);
   }
+  /* Six tracks: cover, song, charter, difficulty, health, length. Explore's row is nine, and the
+     three it has that this one does not are a checkbox, an index and a Download button. What the
+     two share is the four in the middle, in the same order, so a chart reads the same in both.
+
+     `minmax(0, …)` on both text tracks rather than a bare `1fr` and a bare `130px`: a grid
+     track's automatic minimum is the widest thing in it, which is what scrolls a list sideways
+     under a long title. The old row avoided that with `min-width: 0` on `.song` alone and paid
+     the other price for it, measured before this rewrite: at a 1121px window, where this column
+     is 509px, the title box was 0px wide on all thirty rows and every one of them was an
+     ellipsis. Folding the row is what fixes that; see the two container queries below. */
   .row {
     display: grid;
-    grid-template-columns: 32px 1fr 140px 110px 40px 56px;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 130px) 136px 10px 46px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1229,8 +1337,8 @@
   /* Cover and placeholder share the box so a row's height and the column below it don't
      shift depending on whether art was cached. */
   .thumb {
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     border-radius: 5px;
     object-fit: cover;
     background: var(--surface-2);
@@ -1305,20 +1413,42 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Difficulty codes. Caption size and tracked out, so a dense run of glyphs
-     like "G2B1D3" stays countable rather than becoming one word. */
+  /* The row's mono caption: the length, and the box around a badge. Tracked out, because these
+     are short runs of glyphs read one at a time rather than words read whole. */
   .mono {
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
   }
-  /* Spacing lives between the columns that rendered, so a chart missing an instrument loses
-     the gap with it instead of leaving a hole where the column would have been. */
-  .diffs .d + .d {
-    margin-left: 8px;
+  /* 6px between the three parts, Explore's number: half the 12px that separates a part's letter
+     from the previous part's pips, so the gap inside a group reads as smaller than the gap
+     between groups and the eighteen bars do not read as one run. */
+  .diffs {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
   }
-  .year,
+  .health {
+    display: flex;
+    justify-content: center;
+  }
+  /* Explore's mark, drawn the same way here because it is the same claim about a chart and two
+     drawings of it would be two claims. Hollow for a charting note, filled for breakage: a ring
+     and a disc differ in shape and not only in colour, which is what keeps them apart for a
+     red-green colour blind reader. */
+  .dot {
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-3);
+    cursor: help;
+  }
+  .dot.broken {
+    border-color: var(--danger);
+    background: var(--danger);
+  }
   .len {
     text-align: right;
   }
@@ -1405,6 +1535,79 @@
     margin-right: 3px;
     padding: 3px 5px;
     color: var(--text-3);
+  }
+  /* What the row gives up when the column it lives in is narrow, and why this one.
+     The length is the only field here that is also on the chart Detail one click away, and it
+     is the only one that goes. Everything else is either the chart's identity or something the
+     filter bar can select on, and a filter on something the row does not show is a filter on
+     something the user cannot see.
+
+     899px is Explore's breakpoint, kept rather than re-derived: the two lists sit in the same
+     column and folding at two different widths would make them look like two apps as the window
+     moves. Below it the row is two lines, the cover spans both, the charter drops under the
+     song, and the difficulty and the health mark stay as columns the eye can run down.
+
+     Every child placed by hand rather than two placed and the rest left to fall where they may,
+     which is the trap Browse.svelte's own note records: auto-placement resolves an item with a
+     definite row separately from one with neither, so six children into four tracks has no
+     reading that can be left to inference. */
+  @container results (max-width: 899px) {
+    .row {
+      grid-template-columns: 44px minmax(0, 1fr) 136px 10px;
+      grid-template-rows: auto auto;
+      row-gap: 1px;
+    }
+    .row .len {
+      display: none;
+    }
+    .row .thumb {
+      grid-area: 1 / 1 / 3 / 2;
+      width: 44px;
+      height: 44px;
+    }
+    .row .song {
+      grid-area: 1 / 2 / 2 / 3;
+    }
+    .row .charter {
+      grid-area: 2 / 2 / 3 / 3;
+    }
+    .row .diffs {
+      grid-area: 1 / 3 / 3 / 4;
+    }
+    .row .health {
+      grid-area: 1 / 4 / 3 / 5;
+    }
+  }
+  /* The narrowest this column ever gets, which is 509px at a 1121px window: the first width at
+     which the 374px rail appears and takes its share back from a column that had 882px one pixel
+     earlier. Four tracks do not fit in it once the row's two buttons have taken theirs, so two
+     lines become three and the difficulty moves under the charter.
+
+     The health mark stays a column of its own rather than joining that line. It is the one thing
+     in the row that is absent on most charts, and a mark that moves depending on what is beside
+     it is a mark the eye has to look for rather than glance at. */
+  @container results (max-width: 559px) {
+    .row {
+      grid-template-columns: 40px minmax(0, 1fr) 10px;
+      grid-template-rows: auto auto auto;
+    }
+    .row .thumb {
+      grid-area: 1 / 1 / 4 / 2;
+      width: 40px;
+      height: 40px;
+    }
+    .row .song {
+      grid-area: 1 / 2 / 2 / 3;
+    }
+    .row .charter {
+      grid-area: 2 / 2 / 3 / 3;
+    }
+    .row .diffs {
+      grid-area: 3 / 2 / 4 / 3;
+    }
+    .row .health {
+      grid-area: 1 / 3 / 4 / 4;
+    }
   }
   .confirm {
     display: flex;

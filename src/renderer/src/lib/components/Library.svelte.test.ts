@@ -15,6 +15,7 @@ import type {
   PlayDataStatus
 } from '../../../../shared/play'
 import type { ChartVerdict } from '../../../../shared/updates'
+import type { ChartIssueRow } from '../../../../main/catalog/issues'
 import { scanProgress } from '../stores/scan'
 import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
 import { settings } from '../stores/settings'
@@ -106,24 +107,25 @@ async function rowTitled(title: string): Promise<HTMLElement> {
 }
 
 /**
- * The rendered text of a row's difficulty cells, in order.
+ * What a row's three difficulty groups claim, in order.
  *
- * These are bare `<span>`s with no role, label or otherwise unique text, so a selector is the
- * only way to get hold of them; what is asserted is still their text, and the whole list of it,
- * so an instrument that renders when it should not fails the comparison.
+ * `DiffPips` draws bars, and jsdom applies no CSS, so the drawing is unreadable here and the
+ * accessible name is the whole assertable fact. That name is also the only thing a screen reader
+ * gets, so pinning it pins what the column says rather than how it looks. Always three, one per
+ * instrument the row draws: the component says "not charted" rather than rendering nothing, and
+ * the pips are a column the eye runs down, which a row with a missing group would break.
  */
-function diffCells(row: HTMLElement): string[] {
-  return [...row.querySelectorAll('.diffs .d')].map((cell) => cell.textContent ?? '')
+function diffParts(row: HTMLElement): string[] {
+  return [...row.querySelectorAll('.diffs .part')].map((part) =>
+    (part.getAttribute('aria-label') ?? '').trim()
+  )
 }
-
-// U+2013. diffDisplay() renders it for "charted, but the charter left no rating".
-const DASH = '–'
 
 describe('Library: the difficulty column', () => {
   // Charters copy song.ini between projects, so a bass rating on a chart with no bass track is
-  // ordinary rather than exotic. The note data has to win: a "B3" here tells the user to expect
-  // a bass part that does not exist.
-  it('renders no cell for an instrument the note data says is not charted', async () => {
+  // ordinary rather than exotic. The note data has to win: three lit pips here would tell the
+  // user to expect a bass part that does not exist.
+  it('says an instrument the note data does not have is not charted', async () => {
     renderLibrary([
       chart({
         path: '/library/Rush - YYZ',
@@ -135,7 +137,11 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('YYZ'))).toEqual(['G4'])
+    expect(diffParts(await rowTitled('YYZ'))).toEqual([
+      'Guitar: difficulty 4 of 6',
+      'Bass: not charted',
+      'Drums: not charted'
+    ])
   })
 
   // An empty `instruments` means "this row predates the note-count columns", not "this chart is
@@ -153,12 +159,16 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('Limelight'))).toEqual(['G4', 'B3', `D${DASH}`])
+    expect(diffParts(await rowTitled('Limelight'))).toEqual([
+      'Guitar: difficulty 4 of 6',
+      'Bass: difficulty 3 of 6',
+      'Drums: charted, no difficulty rating'
+    ])
   })
 
-  // The third state, and the reason a dash and an absent cell must not look alike: this chart
+  // The third state, and the reason "unrated" and "not charted" must not look alike: this chart
   // does have a guitar track, the charter just never rated it.
-  it('shows a dash for a charted instrument with no rating', async () => {
+  it('tells a charted instrument with no rating from one that is not charted', async () => {
     renderLibrary([
       chart({
         path: '/library/Rush - Subdivisions',
@@ -170,7 +180,29 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('Subdivisions'))).toEqual([`G${DASH}`, 'D5'])
+    expect(diffParts(await rowTitled('Subdivisions'))).toEqual([
+      'Guitar: charted, no difficulty rating',
+      'Bass: not charted',
+      'Drums: difficulty 5 of 6'
+    ])
+  })
+
+  // Real song.ini data: ratings run past the six Clone Hero's own scale stops at. The pips fill
+  // and the label keeps the number, which is the component's rule and has to survive the trip
+  // through a catalog row.
+  it('keeps a rating past the top of the scale in the label', async () => {
+    renderLibrary([
+      chart({
+        path: '/library/Rush - La Villa',
+        name: 'La Villa',
+        instruments: ['guitar'],
+        diffGuitar: 20
+      })
+    ])
+
+    expect(diffParts(await rowTitled('La Villa'))[0]).toBe(
+      'Guitar: difficulty 20, past the top of the scale'
+    )
   })
 })
 
@@ -204,17 +236,20 @@ describe('Library: the chart title', () => {
  * fail when either half moves, which is the point, since the two are edited independently and
  * a mismatch is invisible to typecheck, lint and build.
  *
- * Throws rather than guesses if the declaration is not a plain space-separated track list, so a
- * rewrite to `repeat()` surfaces as "update this parser" instead of a silent pass.
+ * Counts a bracketed function such as `minmax(0, 1fr)` as the one track it is, since the row
+ * needs those on its text columns to keep a long title from scrolling the list sideways. Throws
+ * rather than guesses on anything else with brackets in it, so a rewrite to `repeat()` surfaces
+ * as "update this parser" instead of a silent pass.
  */
 function declaredRowTracks(): number {
   const rule = /^\s*\.row\s*\{([^}]*)\}/m.exec(librarySource)
   if (!rule) throw new Error('no `.row {…}` rule in Library.svelte')
   const declaration = /grid-template-columns:\s*([^;]+);/.exec(rule[1])
   if (!declaration) throw new Error('`.row` declares no grid-template-columns')
-  const tracks = declaration[1].trim()
-  if (/[(),]/.test(tracks)) throw new Error(`cannot count tracks in \`${tracks}\` by splitting`)
-  return tracks.split(/\s+/).length
+  const tracks = declaration[1].trim().replace(/\s+/g, ' ')
+  const collapsed = tracks.replace(/minmax\([^()]*\)/g, 'minmax')
+  if (/[(),]/.test(collapsed)) throw new Error(`cannot count tracks in \`${tracks}\` by splitting`)
+  return collapsed.split(' ').length
 }
 
 /**
@@ -411,6 +446,119 @@ describe('Library: the row grid', () => {
     const badged = await rowTitled('Xanadu')
     expect(badged.querySelector('.badge')).not.toBeNull()
     expect(badged.children).toHaveLength(tracks)
+  })
+})
+
+/**
+ * The health mark, which is Explore's dot drawn from Encore's own issue scan.
+ *
+ * What is pinned here is the claim, not the drawing: whether a mark appears at all, and whether
+ * it says breakage or a charting note. jsdom applies no CSS, so the ring and the disc are the
+ * same element to this test and only the class tells them apart.
+ */
+describe('Library: the health mark', () => {
+  function renderScanned(rows: ChartRecord[], issues: ChartIssueRow[] | null): void {
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(rows),
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(issues)
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+  }
+
+  const dot = (row: HTMLElement): Element | null => row.querySelector('.health .dot')
+
+  it('marks a chart the scan found breakage in, and leaves a clean one bare', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'no chart file'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    expect(dot(await rowTitled('YYZ'))?.classList.contains('broken')).toBe(true)
+    expect(dot(await rowTitled('Limelight'))).toBeNull()
+  })
+
+  // The distinction the severity model exists for: this chart plays, and a filled dot would say
+  // it does not.
+  it('draws a charting note as the quieter mark, not as breakage', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'albumArtSize',
+        description: 'cover is 2000px'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    expect(dot(await rowTitled('YYZ'))?.classList.contains('broken')).toBe(false)
+  })
+
+  // The hover has to name who looked. These rows came off this disk from a scan the user ran,
+  // and Explore's wording would tell them a remote service had read their files.
+  it('says Encore found it, never Chorus', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'no chart file'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    const title = dot(await rowTitled('YYZ'))?.getAttribute('title') ?? ''
+    expect(title).toContain("Encore's last issue scan found")
+    expect(title).not.toContain('Chorus')
+  })
+
+  // A library nobody has run the issue scan over. Every row is bare, which is the same thing a
+  // clean library looks like, and the Issues view is where the difference is stated.
+  it('draws nothing at all when no scan has ever run', async () => {
+    renderScanned(LIBRARY, null)
+
+    expect(await rowTitled('YYZ')).toBeTruthy()
+    expect(document.querySelector('.health .dot')).toBeNull()
+  })
+
+  // Best effort, like the facets and the play counts. A bridge with no issue channel at all is
+  // the realistic case: this view must not be the thing that breaks on it.
+  it('keeps the list when the report cannot be read', async () => {
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(LIBRARY),
+      catalogCount: (): Promise<number> => Promise.resolve(LIBRARY.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast: (): Promise<ChartIssueRow[]> => Promise.reject(new Error('no channel'))
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    expect(screen.getByText('Limelight')).toBeTruthy()
+  })
+
+  // It costs one call for the whole visit, not one per row and not one per page: the report is
+  // keyed by path and main hands back the whole of it.
+  it('asks main once, however many rows are on screen', async () => {
+    const issuesLast = vi.fn(() => Promise.resolve([]))
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(LIBRARY),
+      catalogCount: (): Promise<number> => Promise.resolve(LIBRARY.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    await waitFor(() => expect(issuesLast).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -797,8 +945,10 @@ describe('Library: the filterable fields on a row', () => {
 
     const row = await rowTitled('YYZ')
     const text = (row.textContent ?? '').replace(/\s+/g, ' ')
-    expect(text).toContain('Rush · Moving Pictures · Rock')
-    expect(text).toContain('1981')
+    // The year sits in this line rather than in a column, which is where Explore's row puts it
+    // and what took a fixed track off the end of this one. It is still on screen, which is all
+    // the sort needs: ordering a list by something invisible is the failure being avoided.
+    expect(text).toContain('Rush · Moving Pictures · 1981 · Rock')
     expect(text).toContain('Skyline')
     // 265 seconds. Length was already on the row before the sort existed; this pins it there.
     expect(text).toContain('4:25')
@@ -813,11 +963,15 @@ describe('Library: the filterable fields on a row', () => {
     expect(meta?.textContent?.trim()).toBe('Rush')
   })
 
-  // The length cell beside it already spends a placeholder glyph; two in a row reads as an error.
-  it('leaves the year cell empty for a chart with no year', async () => {
-    renderLibrary([chart({ path: '/library/y', name: 'Undated', year: null })])
+  // The year is one of the four fields on that line and goes the same way the other three do.
+  // A chart with no year must not leave a stray separator behind it.
+  it('drops the year and its separator for a chart with no year', async () => {
+    renderLibrary([
+      chart({ path: '/library/y', name: 'Undated', artist: 'Rush', genre: 'Rock', year: null })
+    ])
 
-    expect((await rowTitled('Undated')).querySelector('.year')?.textContent?.trim()).toBe('')
+    const meta = (await rowTitled('Undated')).querySelector('.meta')
+    expect(meta?.textContent?.trim()).toBe('Rush · Rock')
   })
 })
 
