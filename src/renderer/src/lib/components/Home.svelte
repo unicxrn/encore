@@ -114,15 +114,37 @@
 
   const scanning = $derived($scanProgress?.status === 'running')
 
-  // Both rows bottom out on the catalog, so `libraryTotal` is the count with nothing filtering
-  // it and no second query is needed to tell an empty library from an emptied one.
+  /**
+   * Why the library is empty, `null` when it is not, and `undefined` while nobody knows yet.
+   *
+   * The third state is the one that had to exist. App recreates Home on every navigation back to
+   * it, so the count is re-asked every visit, and a gap computed from a count of zero before the
+   * count has answered would flash "nothing scanned yet" across the top of a full library each
+   * time. Treating unknown as empty is the same guess App refuses to make between Home and the
+   * folder picker, for the same reason.
+   *
+   * `libraryTotal` is the count with nothing filtering it, which is what libraryGap asks for: both
+   * rows bottom out on this catalog, so no second query is needed to tell an empty library from
+   * an emptied one.
+   */
   const gap = $derived(
-    libraryGap({
-      folderCount: $settings.libraryFolders.length,
-      libraryTotal: libraryTotal ?? 0,
-      scanFinished: $scanProgress?.status === 'done'
-    })
+    libraryTotal === null
+      ? undefined
+      : libraryGap({
+          folderCount: $settings.libraryFolders.length,
+          libraryTotal,
+          scanFinished: $scanProgress?.status === 'done'
+        })
   )
+
+  /**
+   * Whether the hero's button asks for a folder or offers a scan.
+   *
+   * Decided on the folder list alone rather than on `gap`, which waits for the catalog. App only
+   * renders Home once settings have loaded, so this is known on the first frame and the button
+   * does not change under the pointer a moment after the page appears.
+   */
+  const noFolder = $derived($settings.libraryFolders.length === 0)
 
   /**
    * One shape for a chart row, whichever side the chart came from.
@@ -373,7 +395,12 @@
   <section class="hero" aria-labelledby="hero-heading">
     <div class="hero-main">
       <h1 id="hero-heading">YOUR LIBRARY</h1>
-      {#if gap === null && libraryTotal !== null}
+      {#if gap === undefined}
+        <!-- The count has not answered. The line keeps its height (see .figure) so the hero does
+             not grow under the pointer when it does, and says nothing until it can say something
+             true. -->
+        <p class="figure"></p>
+      {:else if gap === null && libraryTotal !== null}
         <p class="figure">
           <span class="n">{libraryTotal.toLocaleString()}</span>
           <span class="unit">{libraryTotal === 1 ? 'chart' : 'charts'}</span>
@@ -405,7 +432,9 @@
             <span class="mono">{needWork.toLocaleString()}</span> missing art, video or lyrics
           </button>
         {:else if gap === null && needWork === 0}
-          <span class="fact">Every chart has its art, video and lyrics.</span>
+          <!-- Plain text, not a link: there is nowhere useful to send someone whose library has
+               nothing left to add to it. -->
+          <span>Every chart has its art, video and lyrics.</span>
         {/if}
         {#if totalCharts !== null}
           <button class="fact-link" onclick={() => onNavigate('browse')}>
@@ -415,7 +444,7 @@
       </p>
     </div>
     <div class="hero-actions">
-      {#if gap === 'no-folder'}
+      {#if noFolder}
         <button class="btn-primary" onclick={() => onNavigate('settings')}>Add your folder</button>
       {:else}
         <button class="btn-primary" disabled={scanning} onclick={() => void startScan()}>
@@ -583,10 +612,13 @@
     line-height: var(--lh-tight);
     color: rgba(255, 255, 255, 0.72);
   }
+  /* 46px is the 40px figure at its own leading, so the line is the same height before the count
+     lands as after it. */
   .figure {
     display: flex;
     align-items: baseline;
     gap: 8px;
+    min-height: 46px;
     margin-top: 4px;
     color: #fff;
   }

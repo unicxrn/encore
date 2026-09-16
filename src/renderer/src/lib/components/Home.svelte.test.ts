@@ -198,8 +198,27 @@ describe('Home: the hero', () => {
 
   it('omits the community figure rather than guessing one when the API did not say', async () => {
     renderHome(stocked([], 0))
-    await screen.findByText(/nothing scanned yet/i)
+    await screen.findByText('Nothing scanned yet')
     expect(screen.queryByText(/on Chorus Encore/)).toBeNull()
+  })
+
+  it('claims nothing about the library until the count has answered', async () => {
+    settings.set({ ...defaultSettings(), libraryFolders: [{ path: '/songs', isDefault: true }] })
+    renderHome({
+      catalogQuery: () => new Promise(() => {}),
+      catalogCount: () => new Promise(() => {})
+    })
+
+    // App recreates Home on every navigation back to it, so this state is entered on every
+    // visit. A hero that read an unanswered count as zero would say "nothing scanned yet" across
+    // the top of a 207-chart library for as long as SQLite took, on every one of them.
+    await screen.findByText('YOUR LIBRARY')
+    expect(screen.queryByText('Nothing scanned yet')).toBeNull()
+    // The figure's unit, which is the only element whose whole text is that one word.
+    expect(screen.queryByText('charts')).toBeNull()
+    // The button is decided on the folder list, which App has already loaded, so it does not
+    // change under the pointer a moment later.
+    expect(screen.getByRole('button', { name: 'Scan library' })).toBeTruthy()
   })
 
   it('reports a running scan in the hero, where the figures it is changing are', async () => {
@@ -219,7 +238,7 @@ describe('Home: a library with nothing in it', () => {
     const onNavigate = vi.fn()
     renderHome({}, { onNavigate })
 
-    expect(await screen.findByText(/no folder yet/i)).toBeTruthy()
+    expect(await screen.findByText('No folder yet')).toBeTruthy()
     // Scanning cannot help before a folder exists, so the button leads to the one thing that can.
     await fireEvent.click(screen.getByRole('button', { name: 'Add your folder' }))
     expect(onNavigate).toHaveBeenCalledWith('settings')
@@ -228,18 +247,18 @@ describe('Home: a library with nothing in it', () => {
 
   it('offers the scan once a folder is configured and nothing has been read yet', async () => {
     renderHome(stocked([], 0))
-    expect(await screen.findByText(/nothing scanned yet/i)).toBeTruthy()
+    expect(await screen.findByText('Nothing scanned yet')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Scan library' })).toBeTruthy()
   })
 
   it('says the scan came back empty, rather than repeating "nothing scanned yet"', async () => {
     renderHome(stocked([], 0))
-    await screen.findByText(/nothing scanned yet/i)
+    await screen.findByText('Nothing scanned yet')
 
     scanProgress.set(progress('done', 100))
 
     // The one case where the folder itself can be named as the problem; see libraryGap.
-    expect(await screen.findByText(/no charts found/i)).toBeTruthy()
+    expect(await screen.findByText('No charts found')).toBeTruthy()
   })
 
   it("keeps the row's own explanation, which is what names the folder and the scan", async () => {
@@ -251,7 +270,7 @@ describe('Home: a library with nothing in it', () => {
 
   it('claims no missing-asset figure for a library with no charts in it', async () => {
     renderHome(stocked([], 0, 0))
-    await screen.findByText(/nothing scanned yet/i)
+    await screen.findByText('Nothing scanned yet')
     // "Every chart has its art" is true of a library of nothing and useless; it is a claim about
     // charts, and there are none.
     expect(screen.queryByText(/every chart has its art/i)).toBeNull()
