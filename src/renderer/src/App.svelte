@@ -758,11 +758,12 @@
   }
   /* In flow rather than absolutely centred, which is what makes room for the two buttons.
      Centred, the box was placed from the row's midpoint and knew nothing about what was to its
-     right: at 1121px, the first width where the rail appears and the bar is 883px wide, a 420px
-     box centred on 441 ran to 651 and the buttons began at 497, so the two overlapped. Laid out
-     in the row, the buttons take their width first and the search takes what is left, up to the
-     same maximum it had before. `min-width` is what stops it collapsing to its content at the
-     960px window minimum; `flex: 1` is what keeps it as wide as it used to be above that. */
+     right, so the buttons were drawn straight over it. Measured with the centred rule and the
+     buttons both in place (scripts/measure-top-bar.mjs): 237px of overlap at a 960px window,
+     175px at 1120 and again at 1121, 95px at 1280, and clear only at 1920. Laid out in the row,
+     the buttons take their width first and the search takes what is left, up to the same
+     maximum it had before. `min-width` is what stops it collapsing to its content at the 960px
+     window minimum; `flex: 1` is what keeps it as wide as it used to be above that. */
   .search {
     position: relative;
     flex: 1 1 auto;

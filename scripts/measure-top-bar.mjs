@@ -16,11 +16,13 @@
  *
  *   height     The row is 50px and must stay 50px. Anything in it that grows the row instead of
  *              fitting inside it takes the height from the view underneath.
- *   overlap    The search field's right edge against the buttons' left edge. This is the defect
- *              the change had to fix rather than cause: the field used to be absolutely centred,
- *              which placed it from the row's midpoint with no knowledge of what was to its
- *              right, and at 1121px a 420px box centred on 441 ran to 651 while the buttons
- *              began at 497.
+ *   overlap    The search field's right edge against the buttons' left edge. This is the number
+ *              the script was written for. The field used to be absolutely centred, which placed
+ *              it from the row's midpoint with no knowledge of what was to its right; measured
+ *              with that rule and the buttons both in place, the two overlapped by 237px at a
+ *              960px window, 175px at 1120 and at 1121, and 95px at 1280, clearing only at 1920.
+ *              The field is laid out in the row now, and the number below is negative at every
+ *              width.
  *   clipped    A button whose label ran out of room. Both declare `white-space: nowrap`, so the
  *              symptom is text spilling out of the box rather than wrapping.
  *   sideways   The bar, or the document, pushed wider than the window.
@@ -35,7 +37,7 @@
  * The widths worth passing are the ones the shell supports: the window minimum is 960, the rail
  * is 374px wide and appears above 1120, so the bar is 722px at 960, 882px at 1120, and then
  * 883px at 1121 when it spans the view and the rail together. 1121 is where the layout changes
- * shape, which is why it is in the default list twice over.
+ * shape, which is why it is in the list beside 1120.
  *
  * What it touches: a throwaway user-data directory, and nothing else. No network, no catalogue,
  * no library, no settings: the preload it writes below answers every call from memory.
