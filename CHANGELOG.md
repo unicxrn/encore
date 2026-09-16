@@ -14,310 +14,198 @@ release.
 
 ### Added
 
-- A bar over the Explore results: how many charts the answer holds, a Hide owned toggle that
-  leaves out the charts already in your library, and, once anything is ticked, how many are ticked
-  and one button that queues all of them. Hide owned works a chart at a time rather than a song at
-  a time, so owning one version of a song still shows you the others, and it says how many of the
-  loaded charts it is leaving out rather than quietly showing a shorter list. Anything it hides
-  loses its tick, because a ticked row you cannot see is a download you did not ask for.
-
-- Issues opens with the state of your library instead of with a list. Two cards on Linux and
-  three elsewhere count the charts that are broken, the charts scan-chart has something to say
-  about the charting of, and on a machine where an mp4 background plays, the charts carrying one
-  that would not play on Linux. Each counts across the whole report rather than across whatever
-  is on screen, and each is the control that puts its own rows in the list below. One chart can
-  be counted by two of them, and the line under the cards says so rather than leaving the numbers
-  to be added up wrongly.
+- A third column, to the right of whatever you are looking at, holding the chart you last
+  clicked. Its cover, name, artist, album, year, genre and charter; a note highway you can play
+  it in, labelled with the track it plays; the instrument and difficulty that highway uses; what
+  that track is made of; and what the chart is missing. It keeps its chart while you go to
+  Settings or Stats rather than emptying out, the same way the player bar under it already does.
+  Below a window width of 1120px it is not drawn, because the columns either side leave it too
+  little room to be worth the space.
+- The column says what the track you picked is made of, in eight figures: its notes, the
+  intensity its charter rated it at, its notes per second on average and at its fastest, how many
+  difficulties it carries, how many tracks the chart has, how long the song runs, and whether it
+  marks out solo sections. Four of those follow the instrument and difficulty above them and four
+  describe the chart. Anything nothing measured reads as a dash and never as a zero, so a chart
+  scanned before Encore stored note counts says it does not know rather than claiming the chart is
+  empty. A drum chart needing a double pedal says so, beside the drums and nowhere else.
+- What a chart is missing is a score in a ring with the checklist beside it. The score counts only
+  the checks something actually looked at: a chart in your library is scored out of five, and one
+  on Chorus Encore out of the three a search answer covers, because a still background and a
+  lyrics track are not in that answer and calling either missing would be a guess. It moves one
+  whole check at a time, and the card says what the number is a fraction of rather than leaving it
+  to be assumed.
+- A bar over the Explore results: how many charts the answer holds, a Hide owned toggle, and,
+  once anything is ticked, how many are ticked and one button that queues all of them. Hide owned
+  works a chart at a time rather than a song at a time, so owning one version of a song still
+  shows you the others, and it says how many it is leaving out rather than quietly showing a
+  shorter list. Anything it hides loses its tick, because a ticked row you cannot see is a
+  download you did not ask for.
+- Issues opens with the state of your library instead of with a list. Two cards on Linux and three
+  elsewhere count the charts that are broken, the charts scan-chart has something to say about,
+  and, where an mp4 background plays, the charts carrying one that would not play on Linux. Each
+  counts across the whole report rather than what is on screen, and each is the control that puts
+  its own rows in the list below. One chart can be counted by two of them, and the line under the
+  cards says so rather than leaving the numbers to be added up wrongly.
 - The two findings Encore will not repair now say why on the row, because a missing button is
   otherwise read as an oversight. It will not delete a chart file, since which one Clone Hero
-  reads is what it matches charts by and removing the wrong one costs that chart its multiplayer
+  reads is what it matches charts by, and removing the wrong one costs that chart its multiplayer
   and its play history. It cannot fill in a difficulty rating either, and neither can Chorus: a
   chart matched there by hash is the same upload and carries the same blank.
-
-- A third column, to the right of whatever you are looking at, holding the chart you last opened:
-  its cover, name, artist, album, year, genre and charter, a note highway you can play it in
-  labelled with the track it would play, the instrument and difficulty that highway uses, what
-  that instrument and difficulty are made of, and what the chart is missing around its notes. It keeps that chart while you go to Settings or Stats rather
-  than emptying out, which is the same thing the player bar under it already does. It is hidden
-  below a window width of 1120px, where the columns either side of the view leave it too little
-  room to be worth the space.
-- The column says what the track you picked is made of, in eight figures: its notes, the
-  intensity its charter rated it at, its notes per second on average and over its fastest
-  stretch, how many difficulties it carries, how many tracks the chart has, how long the song
-  runs, and whether it marks out solo sections. Four of those move when you change the
-  instrument or the difficulty above them and four do not. Anything nothing measured reads as a
-  dash and never as a zero, so a chart scanned before Encore stored note counts says it does not
-  know rather than claiming the chart is empty. A drum chart that needs a double pedal says so,
-  beside the drums and nowhere else. A chart with no cover shows its initial rather than an empty
-  square.
-- What the chart is missing is a score out of 100 in a ring, with the checklist beside it. The
-  score counts only the checks something actually looked at: a chart in your library is scored
-  out of five, and one on Chorus Encore out of the three the search answer covers, because a
-  still background and a lyrics track are not in that answer and calling either of them missing
-  would be a guess. It moves one whole check at a time, which is why a five-check chart reads 0,
-  20, 40, 60, 80 or 100 and never anything in between, and the card says what the number is a
-  fraction of rather than leaving it to be assumed.
-- The column offers the one action its chart can answer: Download for a chart on Chorus Encore,
-  Show in folder for one in your library. There is no favourite and no setlist behind either of
-  those, so neither is drawn.
-- Installed's rows can fill that column without opening the chart. The mark at the end of a row
-  puts it in the column and leaves the list, its filters and its place on screen exactly where
-  they were.
+- Launch Clone Hero and My library, in the title bar beside the search field. Launch starts the
+  game and lets go of it, so closing Encore does not close Clone Hero; My library opens the folder
+  downloads land in. With no game chosen yet, Launch takes you to the setting rather than failing,
+  and when the game refuses to start the reason appears under the button instead of nowhere.
+- Settings asks where Clone Hero is, under Library. Encore does not look for this one: the game is
+  installed wherever you put it, so a wrong guess would be worse than asking. On Linux that is the
+  AppImage or the extracted binary, and a file nothing can start is refused with what to do about
+  it rather than stored; on Windows it is the .exe. Launching is not offered on macOS, which
+  nobody has been able to test.
 - Installed marks a chart Encore's own issue scan found problems in, the same dot Explore draws
   for a chart Chorus found problems in: nothing on a clean chart, a hollow dot for charting notes
   that do not stop it playing, a filled one for a chart that is broken. It reads the report the
   last scan left rather than reading your charts again, so it costs nothing and shows nothing
   until you have run that scan once.
-- The sidebar carries the things it had nowhere to say before: which game the library belongs to,
-  two quick actions, which chart source Explore searches, and whether a newer Encore exists. Two
-  of those offer more than Encore can do yet, and say so on the control rather than looking live:
-  there is no YARG library support, and Chorus Encore is the only source it searches.
-- The download folder template says what it would produce, on the settings the queue would
-  actually run with, so the one control in Settings written in a syntax no longer has to be
-  proved by a download. The example follows the field as you type; the setting itself is still
-  stored when you leave the field, not on every keystroke.
-- Launch Clone Hero and My library, in the title bar beside the search field. Launch starts the
-  game and lets go of it, so closing Encore does not close Clone Hero; My library opens the folder
-  downloads land in, in your own file manager. With no game chosen yet, Launch takes you to the
-  setting rather than failing, and when the game refuses to start the reason appears under the
-  button instead of nowhere.
-- Settings asks where Clone Hero is, under Library. Encore does not look for this one: the game is
-  installed wherever you put it, so there is nothing to search and a wrong guess would be worse
-  than asking. On Linux that is the AppImage or the extracted binary, and a file nothing can start
-  is refused with what to do about it rather than stored; on Windows it is the .exe. Launching is
-  not offered on macOS, which nobody has been able to test.
+- The sidebar carries what it had nowhere to say before: which game the library belongs to, two
+  quick actions, which source Explore searches, and whether a newer Encore exists. Some of those
+  offer more than Encore can do yet and say so on the control rather than looking live.
+- The download folder template shows what it would produce, on the settings the queue would
+  actually run with, so the one control written in a syntax no longer has to be proved by a
+  download. The example follows the field as you type; the setting is still stored when you leave
+  it, not on every keystroke.
 
 ### Changed
 
+- The window is a three by three frame rather than a stack of bars: a sidebar running the full
+  height beside a top bar, the view, the new chart column and the player bar, with the nav grouped
+  under two headings rather than three. Nothing a view does has changed, and `Ctrl+1` to `Ctrl+7`
+  still reach the same seven views in the same order.
+- The palette has depth it did not have: six steps of ground where there were two, and four steps
+  of shadow, so a dialog, a popover, a card and a row each sit somewhere distinct rather than
+  sharing one plane. Every instrument has a colour, rhythm included, and a co-op or six-fret track
+  takes the colour of the part it plays, since which controller it is for is already in the label
+  beside it. The dimmest text colour is lighter and now clears the contrast floor on every surface
+  the app draws it on, which it did not on the darkest of them before.
 - An Explore row says what a chart holds for five instruments rather than three: guitar, bass,
   drums, keys and vocals, each drawn as its own instrument in a ring over the pips that count how
   hard it was rated. The ring is lit for a part the chart has, so a part nobody rated still reads
-  as present, and a part that is not there still reads as missing. Ratings run past the six Clone
+  as present and a part that is not there still reads as missing. Ratings run past the six Clone
   Hero's scale draws, and a chart rated higher fills every pip while the number read out is the
-  real one. The chart page draws the difficulty as it did, in a grid with a row per instrument.
-- The cover in an Explore row is 52px, and the charter and the length have left columns of their
-  own for a band of badges under the artist, alongside the difficulties the chart was written at.
-  At the one window width where the view column is narrowest, a 1121px window with the preview
-  column open, the length drops out of that band: it is in the preview column in full, and the
-  room it was taking goes to the charter's name.
-- Installed and Home draw the difficulty the way an Explore row does: an instrument in a ring
-  over the pips that rate it, in place of a letter with its bars beside it. Both keep three
-  instruments, guitar, bass and drums, where Explore shows five. An Explore row can move the
-  difficulty onto a line of its own when its column is narrow and these two cannot, so five here
-  would come off the chart's name at every window width, measured at 74px of it, and on Home that
-  is the name of one of the six charts the page exists to show you. The ring is the narrower
-  drawing of the two, so both rows give their names 12px back instead. Their covers stay 40px
-  rather than growing to the 52px of an Explore row, whose row is taller because it carries a
-  band of badges: at 52px a Home row grows by a fifth and pushes the section under it that much
-  further down. Everything the two views do is unchanged, and what the column says about a
-  chart, that an instrument is rated, charted but unrated, or not there, is unchanged with it.
-
-- The Issues view scrolls as one thing. The duplicate report used to sit in the half of the
-  screen that does not scroll, so opening a report with twenty-five identical sets in it grew
-  that half and squeezed the issue list underneath to nothing, with no way to scroll the report
-  out of the way. The cards, the duplicate report and the rows now share one scroller and push
-  each other down the page, and the category chips stick to the top of it so the control for the
-  list is still there once the cards have scrolled past.
-- The duplicate report is one of those cards rather than a panel wedged above them, and reads as
-  one: a heading, the one-line answer, and Show. What it says about the three kinds of duplicate
-  has not moved. The same chart installed twice is the only one that offers to remove a copy, the
-  same song at two versions is listed and not judged, and the same song by two charters still
-  opens by saying nothing is wrong.
-- A video Clone Hero cannot play on Linux is one card on the machines where that is a note rather
-  than a fault, where it used to be a filter chip and a separate panel counting the same charts
-  twice. Its wording is unchanged: what the conversion buys, what it costs, and that nothing is
-  wrong with those charts as they are.
-- The repair card and the undo card open rather than arriving open, and the count each of them
-  leads with is on screen either way. Drawn open, every card together put the first chart 926px
-  down a 629px scroller at a 1280x800 window, which is a screen of summary with the report itself
-  below the fold.
-- Clicking a result in Explore fills that column instead of opening the chart page. The list,
-  the filters, the order and your place in it all stay where they are, so comparing three
-  versions of a song costs three clicks rather than three round trips through a page. The chart
-  page is still there and still has what the column does not, the full difficulty grid, the
-  check for a newer version, and where a chart lives on disk; "All details" in the column is the
-  way to it. Below the 1120px window width where the column is not drawn, a click opens the
-  chart page as it always did, since there is nothing else it could fill.
-- The chart page answers what the new column could not, and stops repeating what it already
-  does. Its four stat cards are gone: the column prints the length and a note count of its own,
-  and the grid below now has a row per instrument, which is the instrument count. In their place
-  the page carries the things one column has no room for.
-- The difficulty grid is the whole of what a chart says about its parts. Every instrument the
-  catalog stores a rating for, not just the four the preview could play, each with its rating as
-  pips and as the number the charter actually wrote, and every difficulty square carrying its
-  note count and the fastest stretch of that track in notes per second. Ratings run far past the
-  six Clone Hero's scale is drawn to, so the pips fill and a mark says the number ran off the
-  end: asking Chorus Encore for guitar charts rated 7 or more answers with 2,419 of them, and one
-  page of those carries 7, 8, 9 and on up to 73.
-- The grid tells apart the three things a chart can say about a part. Charted with a rating,
-  charted with nobody's rating on it, and rated in song.ini with no notes to match, which is a
-  Rock Band conversion artifact about six charts in a hundred carry and which the grid now names
-  in words underneath rather than drawing as an empty row. A chart nobody has scanned keeps its
-  ratings and marks every square uncounted, where it used to show nothing at all.
-- The chart page says where a chart lives and what identifies it: whether it is a folder or a
-  `.sng` archive, its path, when it was scanned, the key Clone Hero writes beside a score, and
-  the hash the version check compares. It also reports what the chart is made of, the nine
-  charting flags scan-chart reads, each as yes, no or unknown, because a row nobody has scanned
-  carries eight falses that were never measured.
-- A chart on Chorus Encore lists what scan-chart found in it, with what each problem means and
-  how many times it occurs. Explore's row already draws a dot for this and the dot cannot say
-  which problem it means. Nothing is requested for it: the checks arrive with every search result.
-- The chart page and its preview lay themselves out against their own column rather than against
-  the window, which are different numbers now that the third column takes 374px above 1120px: the
-  page is 842px wide at a 1120px window and 469px at a 1121px one. Measured at every width the
-  window supports. The preview's options used to take a fixed 260px of that, which left the note
-  highway 191px at the narrowest of them.
-- Explore's filter header asks three different questions rather than two. Instrument is which of
-  the ten parts Chorus Encore can filter to, difficulty is which charted difficulties exist, and
-  intensity is how hard the chart is, which is the same number the rows draw as pips. The last
-  one is what "expert, but not brutal" needs, and it is off until an instrument is chosen,
-  because a chart is rated one instrument at a time. Its lowest end goes past the six the scale
-  is drawn to, since charters rate past it and the service answers on what they wrote. There is
-  no Vocals filter: Chorus Encore refuses one, though a chart's vocal difficulty still shows on
-  its row.
-- Explore's advanced panel speaks the same language as the filter row it drops out of. Its boxes,
-  its toggles and its group labels are the chips that row already uses, and it reads as the header
-  getting taller rather than as a card that landed on the list. Exact and Exclude are pressed
-  pills now, like the chart features beside them, instead of twelve checkboxes asking one kind of
-  question a second way. The fields are grouped by what they ask rather than by their shape in the
-  request: words, numbers, what the chart has, and one exact chart.
-- The panel's intensity boxes are off until an instrument is chosen, the way the filter row's own
-  band is. A chart is rated one instrument at a time, and with none chosen a maximum of 1 answers
-  with 95,093 of the 95,299 charts there are. The boxes stay, because they take a tier the row's
-  two lists do not offer: a ceiling of 0, and either end above 6.
-- The open panel no longer takes the results off the screen. It never fitted the window: at
-  1280x800 the form was 846px tall and the list under it was 1px. It now takes what the window has
-  spare and scrolls itself, with Search and Clear always in reach, so there is still a list under
-  it at every size the window supports.
-- The panel no longer repeats how many filters are applied, which the Advanced button beside it
-  says already, open or shut. In its place it says when the boxes hold something nothing has been
-  searched for yet, which nothing on screen admitted to before.
-- Explore can put the results in an order. Eleven of them, reaching all eight fields Chorus
-  Encore sorts by, including the charts changed most recently, which nothing surfaced before.
-  There is no download or popularity order, because Chorus Encore does not keep one.
-- Explore's results say what Chorus actually knows about a chart. Every row now carries the real
-  album cover, the artist with the album and the year, a difficulty reading per instrument, and
-  a Download button of its own beside the "IN LIBRARY" mark. The three flags that survived the
-  cut are the uncommon ones that change a decision: a background video, a double kick pedal and
-  a modchart. The ones that were dropped were dropped for being too common to mean anything.
-- A chart's difficulty is six pips per instrument, coloured by the part, rather than a letter
-  and a number. Three states and not two: a part the chart does not have, a part that is there
-  with nobody's rating on it, and a rating. Ratings above the six Clone Hero's scale runs to
-  fill every pip and keep the real number in the label, because real charts carry 7s, 8s and one 20.
-- Explore marks a chart Chorus found problems in, before you download it. Nothing at all on a
-  chart with nothing wrong, which is most of them; a hollow dot for charting notes that do not
-  stop it playing, and a filled one for a chart that is broken. Hovering says what was found.
-  Chorus runs the same checks Encore's own Issues view runs, so this costs no extra request.
+  real one. The row also carries the real album cover at 52px and a band of badges holding what
+  used to sit in columns of its own; the three flags that survived are the uncommon ones that
+  change a decision, a background video, a double kick pedal and a modchart.
+- Clicking a result in Explore fills that column instead of opening the chart page. The list, the
+  filters, the order and your place in it all stay where they are, so comparing three versions of
+  a song costs three clicks rather than three round trips through a page. "All details" in the
+  column is the way to the chart page. Below 1120px, where the column is not drawn, a click opens
+  the chart page as it always did.
+- Explore marks a chart Chorus found problems in before you download it: nothing at all on a chart
+  with nothing wrong, which is most of them, a hollow dot for charting notes, a filled one for a
+  chart that is broken. Hovering says what was found. Chorus runs the same checks Encore's Issues
+  view runs, so this costs no extra request.
+- Explore's filter header asks three questions rather than two. Instrument is which of the ten
+  parts Chorus Encore can filter to, difficulty is which charted difficulties exist, and intensity
+  is how hard the chart is, which is the same number the rows draw as pips. Intensity is off until
+  an instrument is chosen, because a chart is rated one instrument at a time. There is no Vocals
+  filter: Chorus Encore refuses one, though a chart's vocal difficulty still shows on its row.
+  The results can be put in eleven orders, reaching all eight fields Chorus Encore sorts by,
+  including the charts changed most recently, which nothing surfaced before. There is no download
+  or popularity order, because Chorus Encore does not keep one.
+- Explore's advanced panel speaks the same language as the filter row it drops out of, and reads
+  as the header getting taller rather than as a card that landed on the list. Exact and Exclude
+  are pressed pills like the chart features beside them, instead of twelve checkboxes asking one
+  kind of question a second way, and the fields are grouped by what they ask. It no longer takes
+  the results off the screen: it takes what the window has spare and scrolls itself, with Search
+  and Clear always in reach. In place of a count the Advanced button already carries, it now says
+  when the boxes hold something nothing has been searched for yet.
 - Installed's rows say what Explore's rows say, and in the same order: a larger cover, the title,
-  the artist with the album, the year and the genre under it, the charter, six pips per instrument
-  in place of the old letter-and-number codes, and the health mark. The year left its own column
-  for the line under the title, which is where Explore already had it.
-- Installed's rows fold as the window narrows, which they never did before. They now use Explore's
-  two widths and its two foldings: the length goes first, then the charter drops under the title
-  and the difficulty under that. Measured at every width the window supports. It fixes a real
-  failure rather than making room for the pips alone: at the 509px the view column has at a 1121px
-  window, which is the narrowest it ever gets, every title in the list was squeezed to nothing and
-  read as a bare ellipsis. The same title now has 282px.
-- A row in Installed announces itself to a screen reader as the chart it opens rather than reading
-  out everything printed on it, which after the pips and the health mark would have been eighteen
-  difficulty bars and a paragraph about the chart's problems.
-- Explore's rows fold rather than crush as the window narrows: the track number and the length
-  go first, then the charter drops under the title and the difficulty under that. Measured at
-  every width the window supports, down to the 509px the results column has at a 1121px window,
-  which is the narrowest it ever gets and is not the smallest window.
-- The window is a three by three frame rather than a stack of bars: a sidebar running the full
-  height beside a top bar, the view, the new chart column and the player bar, with the nav grouped
-  under two headings rather than three. Nothing a view does has changed, and nothing moved past
-  anything else, so `Ctrl+1` to `Ctrl+7` still reach the same seven views in the same order.
-- The palette has depth it did not have: six steps of ground where there were two, and four
-  steps of shadow, so a dialog, a popover, a card and a row each sit somewhere distinct rather
-  than sharing one plane. Every instrument has a colour, rhythm included, and a co-op or six-fret
-  track takes the colour of the part it plays, since which controller it is for is already in
-  the label beside it.
-- What that moved on every screen: the dimmest text colour is lighter, and now clears the
-  contrast floor on every surface the app draws it on, which it did not on the darkest of them
-  before. Hover states on links and the player's progress are a lighter violet than the
-  pink-violet they were, the wash behind a selected row is a flat colour rather than a tint that
-  changed with whatever it sat on, and hairlines are violet cast rather than white at low
-  opacity. Scrollbar thumbs moved with the hairlines.
-- Home opens on the state of your library rather than on a title. The top of the window says how
-  many charts you have, how many of them are still missing album art, a background, a video or
-  lyrics, and how many charts Chorus Encore has to search; the middle figure is a link into the
-  Asset Studio, which is the view that acts on it. A scan running says so there, with its percent
-  and the way to stop it. The figures are counts the catalog can answer from SQL, so they cost
-  two counts however large the library is.
-- Home's chart rows are the row Explore draws: a cover, the name over its artist, album and year,
-  the charter, a difficulty reading per instrument as pips, a mark on a chart Chorus found
-  problems in, and the length. Six charts a row rather than ten, with See all for the rest. The
-  library rows carry no problem mark, because nothing has looked inside those charts: the Issues
-  report is not kept between launches, so a mark there would be missing more often than it was
-  right.
-- Clicking a chart on Home fills the chart column instead of opening the chart page, which is
-  what clicking a result in Explore now does. Home is the other screen where charts are looked
-  over rather than read, so the two answer a click the same way. Below the 1120px window width
-  where the column is not drawn, a click opens the chart page as it always did.
-- Home with nothing in it reads as a step not taken rather than as a failure, and says which step:
-  no folder yet points at Settings, a folder with nothing read yet offers the scan, and a scan
-  that came back empty says what a chart folder has to contain. The sentence naming the folder
-  and the scan stays in the row it is about.
+  the artist with the album, the year and the genre under it, the charter, the difficulty and the
+  health mark. They also fold as the window narrows, which they never did before. That fixes a
+  real failure rather than making room: at the narrowest the view column ever gets, every title in
+  the list was squeezed to nothing and read as a bare ellipsis. A row announces itself to a screen
+  reader as the chart it opens rather than reading out everything printed on it, which would have
+  been eighteen difficulty bars and a paragraph about the chart's problems.
+- Installed and Home draw the difficulty the way an Explore row does, an instrument in a ring over
+  the pips that rate it, in place of a letter with its bars beside it. Both keep three instruments
+  where Explore shows five: an Explore row can move the difficulty onto a line of its own when its
+  column is narrow and these two cannot, so five here would come off the chart's name at every
+  width. The ring is the narrower drawing of the two, so both rows give their names room back
+  instead.
+- Home opens on the state of your library rather than on a title: how many charts you have, how
+  many are still missing album art, a background, a video or lyrics, and how many charts Chorus
+  Encore has to search. The middle figure links into the Asset Studio, which is the view that acts
+  on it. A scan running says so there, with its percent and the way to stop it.
+- Home's chart rows are the row Explore draws, six a section with See all for the rest, and
+  clicking one fills the chart column the way an Explore result does. The library rows carry no
+  problem mark, because nothing has looked inside those charts: the Issues report is not kept
+  between launches, so a mark there would be missing more often than it was right. Home with
+  nothing in it reads as a step not taken rather than as a failure, and says which step: no folder
+  yet points at Settings, a folder with nothing read yet offers the scan, and a scan that came
+  back empty says what a chart folder has to contain.
 - The first-run screen leads with what it is asking for rather than with the app's name, and when
-  no Clone Hero folder is found on the machine it is headed "Choose your songs folder" rather
-  than "No Clone Hero folder found". Nothing has gone wrong at that point, and it is the one
-  screen a new user cannot walk past.
-- The welcome tour has a screen for Stats, which is where the play data went when it left Home.
-  Its Installed and Explore screens describe the views as they are now: Installed has filters
-  rather than one filter box, and an Explore result is heard and judged where it lands rather
-  than opened.
+  no Clone Hero folder is found it is headed "Choose your songs folder" rather than "No Clone Hero
+  folder found". Nothing has gone wrong at that point, and it is the one screen a new user cannot
+  walk past. The welcome tour has a screen for Stats, and its Installed and Explore screens
+  describe those views as they are now.
+- The chart page answers what the new column cannot, and stops repeating what it already does.
+  Its four stat cards are gone, and in their place it carries the whole of what a chart says about
+  its parts: every instrument the catalog stores a rating for, each with its rating as pips and as
+  the number the charter wrote, and every difficulty square carrying its note count and that
+  track's fastest stretch. It tells apart the three things a chart can say about a part, including
+  a rating in song.ini with no notes to match, which is a Rock Band conversion artifact the grid
+  now names in words rather than drawing as an empty row. It says where a chart lives and what
+  identifies it, folder or `.sng` archive, its path, when it was scanned, the key Clone Hero
+  writes beside a score and the hash the version check compares; it reports what the chart is made
+  of as yes, no or unknown, because a row nobody has scanned carries flags that were never
+  measured; and for a chart on Chorus Encore it lists what scan-chart found, which the row's
+  single dot cannot say. None of that costs a request.
+- The Issues view scrolls as one thing. The duplicate report used to sit in the half of the screen
+  that does not scroll, so a report with twenty-five sets in it squeezed the issue list underneath
+  to nothing with no way to scroll the report out of the way. The cards, the report and the rows
+  now share one scroller, and the category chips stick to the top of it so the control for the
+  list is still there once the cards have scrolled past.
+- The duplicate report is one of those cards rather than a panel wedged above them. What it says
+  about the three kinds of duplicate has not moved: the same chart installed twice is the only one
+  that offers to remove a copy, the same song at two versions is listed and not judged, and the
+  same song by two charters still opens by saying nothing is wrong. A video Clone Hero cannot play
+  on Linux is one card on the machines where that is a note rather than a fault, where it used to
+  be a filter chip and a separate panel counting the same charts twice.
 - Stats opens with what you came for rather than with the first of seven cards. One block at the
   top carries how much you have played, how well, and how much of your library you have played at
-  all, each labelled with the record it came from. The rest of the page is a flat band per
-  question instead of a run of boxes of equal weight. No figure moved twice: the three in that
-  block are taken out of the sections below rather than repeated into them, so every number on the
-  page is still drawn once, under one heading, with one source tag.
-- How much of the library has been played is a pair of bars at the top of Stats, not only a
-  sentence at the bottom. One bar per record against one total, never one bar inside the other,
-  because the two counts come from tables nothing joins. The bars carry no minimum width: 84
-  charts of 4,000 is a sliver, which is the truth about a library that size, and the counts are
-  written beside them. A count that runs past its own total stops at the end of its bar and is
-  still printed in full.
-- Stats draws the instruments you play in the same colours the difficulty pips use, so the two
-  screens agree about what a guitar looks like. Difficulty stays one colour, because a difficulty
-  is not an instrument. An instrument name Encore has never met is drawn uncoloured rather than as
-  some other instrument, and its full name is on the hover.
+  all, each labelled with the record it came from. No figure is drawn twice: the three in that
+  block are taken out of the sections below rather than repeated into them. How much of the
+  library has been played is a pair of bars, one per record against one total and never one inside
+  the other, because the two counts come from tables nothing joins. Stats draws the instruments
+  you play in the same colours the difficulty pips use.
 - Settings answers four questions rather than listing seven sections: where your songs are, what
-  happens when Encore downloads, which Encore this is and where a new one comes from, and what
-  the repairs are costing you on disk. yt-dlp and ffmpeg moved out of the update section and in
-  with the downloading they serve, since one fetches video backgrounds and the other converts
-  them. Each group says in a sentence what it is for. The library folders sit in a well of their
-  own and their paths wrap rather than being cut off in the middle, because three folders that
-  differ only in their last segment are three identical rows once a path is ellipsised, and that
-  list is the highest-consequence setting in the app: Encore scans those folders, downloads into
-  the one you pick, and refuses to write to a chart outside them. Removing one now says so.
-  Measured at every width the window supports with the chart column both drawn and hidden,
-  including a 100 character library path at the 509px the view has at a 1121px window, where it
-  wraps to four lines and nothing is clipped or pushed sideways.
+  happens when Encore downloads, which Encore this is and where a new one comes from, and what the
+  repairs are costing you on disk. yt-dlp and ffmpeg moved out of the update section and in with
+  the downloading they serve, since one fetches video backgrounds and the other converts them. The
+  library folders sit in a well of their own and their paths wrap rather than being cut off in the
+  middle, because three folders differing only in their last segment are three identical rows once
+  a path is ellipsised, and that list is the highest-consequence setting in the app: Encore scans
+  those folders, downloads into the one you pick, and refuses to write to a chart outside them.
+  Removing one now says so.
 
 ### Fixed
 
 - Narrowing the window under 1120px while the chart column was playing something left the chart
-  playing behind the hidden column, with the player bar still handing it the transport and
-  nothing on screen able to stop it. The column now gives the preview back as it goes.
+  playing behind the hidden column, with the player bar still handing it the transport and nothing
+  on screen able to stop it. The column now gives the preview back as it goes.
+- Opening the advanced panel took the results off the screen. It never fitted the window: the form
+  was taller than the window at a common size and the list under it came back a single pixel.
+- A chart whose notes were read and found to carry none was told to run a library scan, which is
+  the one instruction that could not help it. The scan is offered only to a chart nothing has read
+  yet; a measured zero now says it was measured.
+- Stats left a charter's name almost no room at the width where the chart column appears and the
+  view is at its narrowest, and put its most-played and recently-played lists side by side long
+  before there was room for a song title in either.
+- The version buttons in a chart's detail panel have the border they were written to have, and a
+  version note reporting an error is red rather than grey. Both have asked since 0.1.0 for a
+  colour the stylesheet never defined, so one drew no border at all and the other fell back to the
+  colour of ordinary text.
 - The selected row in the Asset Studio no longer fades out through a hardcoded copy of an accent
   colour that has since moved. It looked the same and would have stopped looking the same the
   first time anyone touched it.
-- The version buttons in a chart's detail panel have the border they were written to have, and a
-  version note reporting an error is red rather than grey. Both have asked since 0.1.0 for a
-  colour the stylesheet never defined, so one drew no border at all and the other fell back to
-  the colour of ordinary text.
-- A chart whose notes were read and found to carry none was told to run a library scan, which is
-  the one instruction that could not help it. The scan is offered only to a chart nothing has
-  read yet; a measured zero now says it was measured.
-- Stats' charter list left the charter's name 34px of box at a 1121px window, which is where the
-  chart column appears and the view is at its narrowest. The bar beside each name is what goes at
-  that width, since the count next to it already says what the bar says.
-- Stats put its most-played and recently-played lists side by side as soon as the pane reached
-  760px, which left each song title 80px at a 1440px window. They stack until there is room for a
-  title, so they are side by side at 1920 and stacked below it.
 
 ## [0.3.1] - 2026-09-13
 
