@@ -2023,7 +2023,9 @@
   .cover {
     width: 52px;
     height: 52px;
-    border-radius: 5px;
+    /* --radius-sm rather than the 5px this was: 5px is not a step in the scale, and the row
+       cover is drawn in three files that have to agree about it. */
+    border-radius: var(--radius-sm);
     object-fit: cover;
     display: block;
     background: var(--surface-2);
