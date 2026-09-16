@@ -7,6 +7,10 @@
   import { onMount } from 'svelte'
   import { encore } from '../stores/bridge'
   import { appUpdate } from '../stores/app-update'
+  import { downloads } from '../stores/downloads'
+  import { spareCopies } from '../stores/duplicates'
+  import { issueTally } from '../stores/issue-tally'
+  import { scanProgress } from '../stores/scan'
   import { APP_VERSION } from '../../../../shared/constants'
 
   let {
@@ -28,6 +32,74 @@
     d: string
     view?: ViewId
     action?: () => void
+    /** Which of the four figures below belongs on this row, if any. */
+    count?: CountId
+  }
+
+  /**
+   * The four numbers this nav can carry, and what each one costs to know.
+   *
+   * The rule they all obey: **a count is drawn only when it is greater than zero.** On every one
+   * of these four, a zero is at least as likely to mean "nothing has looked" as "there is none"
+   * — an unscanned catalog counts no charts, a launch where nobody opened Issues has no report —
+   * and drawing the same glyph for both would be the nav telling the user something it does not
+   * know. An absent count claims nothing, which is the honest thing to claim.
+   *
+   * - `library` is `catalogCount({})`, the same call Home's hero makes, on the same channel. One
+   *   indexed `SELECT COUNT(*)`, asked once on mount and again when a library scan stops. Nothing
+   *   is asked per render.
+   * - `downloads` is the queue, filtered to what is still running or waiting. It costs nothing at
+   *   all: `downloads` is a store App subscribes to for the whole launch so the player bar can
+   *   draw the same number, and this is a second reader of it rather than a second subscription.
+   * - `duplicates` is the spare-copy count off the duplicate report, read once per launch by its
+   *   store (see stores/duplicates.ts for what that read costs). It counts byte-identical copies
+   *   and nothing else, because the other two tiers of that report are not faults.
+   * - `issues` is the only one that cannot be asked for. Main's report is a cache that is null
+   *   until a scan completes in this launch, and reading it copies 24,151 rows to count them. It
+   *   is published by the Issues view instead, so the pill appears once something has looked and
+   *   is absent every launch nothing has. stores/issue-tally.ts carries the whole reasoning.
+   */
+  type CountId = 'library' | 'downloads' | 'duplicates' | 'issues'
+
+  /** Charts in the catalog, or null before the count answers and after one that failed. */
+  let libraryTotal = $state<number | null>(null)
+
+  const activeDownloads = $derived(
+    $downloads.filter((item) => item.status === 'running' || item.status === 'queued').length
+  )
+
+  const countValues = $derived<Record<CountId, number | null>>({
+    library: libraryTotal,
+    downloads: activeDownloads,
+    duplicates: $spareCopies,
+    issues: $issueTally?.brokenCharts ?? null
+  })
+
+  /**
+   * What each figure means, said in words for the row's accessible name.
+   *
+   * Without this a screen reader gets "Installed 1,204", which is a number with no unit attached
+   * to a word that is not a noun. The figure on screen is the same one; only the reading changes.
+   */
+  const COUNT_SAYS: Record<CountId, (n: number) => string> = {
+    library: (n) => `${n.toLocaleString()} charts`,
+    downloads: (n) => `${n} still to download`,
+    duplicates: (n) => `${n} spare ${n === 1 ? 'copy' : 'copies'}`,
+    issues: (n) => `${n} ${n === 1 ? 'chart is' : 'charts are'} broken`
+  }
+
+  /** The Issues figure is a warning and is drawn as one; the other three are quiet. */
+  const isPill = (id: CountId): boolean => id === 'issues'
+
+  function countOf(item: NavItem): { figure: string; says: string; pill: boolean } | null {
+    if (item.count === undefined) return null
+    const n = countValues[item.count]
+    if (n === null || n <= 0) return null
+    return {
+      figure: n.toLocaleString(),
+      says: COUNT_SAYS[item.count](n),
+      pill: isPill(item.count)
+    }
   }
 
   /**
@@ -49,10 +121,11 @@
           label: 'Explore',
           d: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm9 16-3.5-3.5'
         },
-        { view: 'library', label: 'Installed', d: 'M4 5h16M4 12h16M4 19h10' },
+        { view: 'library', label: 'Installed', d: 'M4 5h16M4 12h16M4 19h10', count: 'library' },
         {
           label: 'Downloads',
           d: 'M12 4.5v9.5m0 0 4-4m-4 4-4-4M5.5 19.5h13',
+          count: 'downloads',
           // Closure (not a direct reference) so the current prop value is called.
           action: () => onToggleDownloads()
         },
@@ -76,13 +149,15 @@
         {
           view: 'tools',
           label: 'Issues',
-          d: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm7 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z'
+          d: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm7 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z',
+          count: 'issues'
         },
         {
           view: 'duplicates',
           label: 'Duplicates',
           // Two overlapping squares, the shape every file manager uses for a copy.
-          d: 'M8 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Zm7 0V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2'
+          d: 'M8 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Zm7 0V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2',
+          count: 'duplicates'
         },
         {
           view: 'settings',
@@ -158,7 +233,38 @@
     }
   })
 
+  /**
+   * How many charts the catalog holds.
+   *
+   * `catalogCount({})` is what Home's hero asks for the same figure, on the same channel: this is
+   * a second reader of one question, not a second way to ask it. A failure leaves the number null
+   * and the row draws nothing, which is right: a sidebar that answered a failed count with 0
+   * would be reporting an empty library.
+   */
+  async function readLibraryTotal(): Promise<void> {
+    try {
+      libraryTotal = await encore().catalogCount({})
+    } catch {
+      libraryTotal = null
+    }
+  }
+
+  /**
+   * A scan that has stopped has moved the catalog under this number, so it is re-asked.
+   *
+   * 'canceled' counts along with 'done' for the reason the scan store gives: a cancelled scan
+   * keeps every row it wrote. The `mounted` guard is what stops an already-settled status from
+   * firing a second read on top of the one onMount does.
+   */
+  let mounted = false
+  $effect(() => {
+    const status = $scanProgress?.status
+    if (mounted && (status === 'done' || status === 'canceled')) void readLibraryTotal()
+  })
+
   onMount(() => {
+    void readLibraryTotal()
+    mounted = true
     encore()
       .sidecarStatus('ytdlp')
       .then((s) => {
@@ -263,6 +369,7 @@
     <div class="section" role="group" aria-labelledby="sidebar-{section.header}">
       <div class="section-header" id="sidebar-{section.header}">{section.header}</div>
       {#each section.items as item (item.label)}
+        {@const count = countOf(item)}
         <!-- Two different kinds of item share this button, and they need
              different state words. A view is a destination, so the active one is
              `aria-current="page"`, not `aria-selected`, which only means
@@ -284,6 +391,8 @@
           class:open={item.view === undefined && downloadsOpen}
           aria-current={item.view !== undefined && view === item.view ? 'page' : undefined}
           aria-expanded={item.view === undefined ? downloadsOpen : undefined}
+          aria-label={count === null ? undefined : `${item.label}, ${count.says}`}
+          title={count === null ? undefined : count.says}
           onclick={() => (item.view ? onNavigate(item.view) : item.action?.())}
         >
           <!-- Decorative: every item's name is the text beside the glyph. -->
@@ -296,7 +405,14 @@
           >
             <path d={item.d} />
           </svg>
-          {item.label}
+          <!-- The label is its own box so it can ellipsise against the figure beside it rather
+               than pushing it out of the 238px column. -->
+          <span class="label">{item.label}</span>
+          <!-- aria-hidden because the row's own `aria-label` already reads the figure with its
+               unit attached; announced here as well it would be a bare number after a noun. -->
+          {#if count !== null}
+            <span class="count" class:pill={count.pill} aria-hidden="true">{count.figure}</span>
+          {/if}
         </button>
       {/each}
     </div>
@@ -564,6 +680,44 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
+  }
+  /* The label gives way, never the figure. `min-width: 0` is what lets it: without it a flex item
+     refuses to shrink below its content and the count is pushed past the column's right edge
+     instead. What that costs at the widest label and the largest figure is measured, not guessed:
+     scripts/measure-sidebar.mjs. */
+  .item .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .item .count {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    line-height: var(--lh-flat);
+    letter-spacing: var(--ls-caps);
+    /* So a figure changing from 999 to 1,000 does not shuffle the digits left of it. */
+    font-variant-numeric: tabular-nums;
+    color: var(--text-3);
+  }
+  /* Issues alone. It is the only one of the four that is a report of something wrong, and the
+     approved design draws it as a warning rather than as a tally. Dark text on --warning, which
+     is the pairing tokens.css intends for that colour as a fill. */
+  .item .count.pill {
+    color: var(--ground-0);
+    background: var(--warning);
+    border-radius: 9px;
+    padding: 2px 7px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+  /* The open Downloads row draws a chevron at `right: 12px` (see `.item.open::after`), and the
+     figure would be underneath it. The row is the only one that can carry both, so the gap is
+     made here rather than in the chevron's own rule. */
+  .item.open .count {
+    margin-right: 13px;
   }
   .bottom {
     margin-top: auto;

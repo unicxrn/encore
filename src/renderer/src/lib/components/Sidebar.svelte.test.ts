@@ -1,7 +1,12 @@
-import { fireEvent, render, screen } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { QueuedDownload } from '../../../../shared/schemas'
 import { SHORTCUTS, SHORTCUT_VIEWS, renderKeys } from '../shortcuts'
 import { appUpdate } from '../stores/app-update'
+import { downloads } from '../stores/downloads'
+import { duplicates } from '../stores/duplicates'
+import { issueTally } from '../stores/issue-tally'
+import { scanProgress } from '../stores/scan'
 import Sidebar from './Sidebar.svelte'
 
 /**
@@ -14,14 +19,31 @@ import Sidebar from './Sidebar.svelte'
  * carrying the wrong one is the bug, whether or not a test can see the paint.
  */
 
+/** The bridge the sidebar actually uses: the sidecar probe, and the library count. */
+function stubBridge(over: Record<string, unknown> = {}): Record<string, ReturnType<typeof vi.fn>> {
+  const api = {
+    // The status card probes the yt-dlp sidecar on mount; the answer is not under test here.
+    sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),
+    // An empty catalog, which is what leaves the Installed row carrying no figure at all.
+    catalogCount: vi.fn().mockResolvedValue(0),
+    ...over
+  }
+  vi.stubGlobal('encore', api)
+  return api
+}
+
 beforeEach(() => {
-  // The status card probes the yt-dlp sidecar on mount; the answer is not under test here.
-  vi.stubGlobal('encore', {
-    sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null })
-  })
+  stubBridge()
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  // All three are module state that would otherwise be the next test's starting point.
+  downloads.set([])
+  duplicates.set(null)
+  issueTally.set(null)
+  scanProgress.set(null)
+})
 
 const noop = (): void => {}
 
@@ -132,7 +154,7 @@ describe('Sidebar order and the view shortcuts', () => {
     // no view, so it takes no digit and is not part of this ordering.
     const rows = [...document.querySelectorAll('nav .section button')]
       .filter((button) => button.getAttribute('aria-expanded') === null)
-      .map((button) => button.textContent?.trim())
+      .map((button) => button.querySelector('.label')?.textContent?.trim())
 
     const labels = SHORTCUT_VIEWS.map((view) =>
       SHORTCUTS.find((spec) => spec.id === `go:${view}`)?.what.replace('Go to ', '')
@@ -274,5 +296,198 @@ describe('Sidebar: the update state in the footer', () => {
     } as never)
     renderSidebar()
     expect(screen.getByText('UPDATE STATE UNKNOWN')).toBeTruthy()
+  })
+})
+
+/**
+ * The figures beside the nav items, and the one rule they all share.
+ *
+ * **Nothing here ever draws a zero.** Each of these four numbers has a state where zero and "not
+ * checked" are the same reading: an unscanned catalog counts no charts, a launch where nobody
+ * opened Issues has no report, a duplicate query over a catalog with no chart IDs in it finds no
+ * identical copies. A figure that could mean either is a figure the sidebar has no business
+ * drawing, so the row draws none and claims nothing.
+ *
+ * jsdom applies no stylesheet and computes no layout, so nothing here says what happens when a
+ * five-digit figure meets the longest label in a 238px column. That is measured, in
+ * scripts/measure-sidebar.mjs, and the classes these tests pin are the hooks those rules hang on.
+ */
+const figure = (label: string): string | null =>
+  screen.getByRole('button', { name: new RegExp(`^${label}`) }).querySelector('.count')
+    ?.textContent ?? null
+
+const queued = (md5: string, status: QueuedDownload['status']): QueuedDownload => ({
+  md5,
+  url: `https://example.invalid/${md5}`,
+  folderName: md5,
+  status,
+  percent: null,
+  message: null,
+  finalPath: null
+})
+
+const withCopies = (n: number): void =>
+  duplicates.set({
+    identical: [
+      {
+        checksum: 'a'.repeat(32),
+        copies: Array.from({ length: n + 1 }, (_, i) => ({
+          path: `/library/song (${i})`,
+          chartType: 'folder' as const,
+          name: 'YYZ',
+          artist: 'Rush',
+          charter: 'Ann',
+          album: null,
+          songLength: 300_000,
+          modifiedTime: 1,
+          cloneHeroChecksum: 'a'.repeat(32),
+          hasAlbumArt: false,
+          hasVideo: false,
+          hasBackground: false,
+          hasLyrics: false,
+          sizeBytes: null
+        }))
+      }
+    ],
+    versions: [],
+    alternates: [],
+    totalCharts: n + 1,
+    unidentifiedCharts: 0
+  })
+
+describe('Sidebar: the figures on the nav items', () => {
+  it('draws the size of the library beside Installed, grouped and read out in words', async () => {
+    stubBridge({ catalogCount: vi.fn().mockResolvedValue(1204) })
+    renderSidebar()
+
+    await waitFor(() => expect(figure('Installed')).toBe('1,204'))
+    // The name carries the unit. "Installed 1,204" alone is a number attached to a word that is
+    // not a noun, which is what a screen reader would otherwise read out.
+    expect(screen.getByRole('button', { name: 'Installed, 1,204 charts' })).toBeTruthy()
+  })
+
+  it('asks for the count the way Home asks for it, once, over the whole catalog', async () => {
+    const api = stubBridge({ catalogCount: vi.fn().mockResolvedValue(9) })
+    renderSidebar()
+
+    await waitFor(() => expect(api.catalogCount).toHaveBeenCalledTimes(1))
+    expect(api.catalogCount).toHaveBeenCalledWith({})
+  })
+
+  it('asks again when a scan stops, because the catalog has moved under the number', async () => {
+    const api = stubBridge({ catalogCount: vi.fn().mockResolvedValue(9) })
+    renderSidebar()
+    await waitFor(() => expect(api.catalogCount).toHaveBeenCalledTimes(1))
+
+    scanProgress.set({
+      jobId: 'scan-1',
+      kind: 'scan',
+      phase: 'scanning',
+      percent: 100,
+      message: null,
+      status: 'done'
+    })
+
+    await waitFor(() => expect(api.catalogCount).toHaveBeenCalledTimes(2))
+  })
+
+  it('draws no figure at all when the count fails, rather than an empty library', async () => {
+    stubBridge({ catalogCount: vi.fn().mockRejectedValue(new Error('no ipc')) })
+    renderSidebar()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Installed' })).toBeTruthy())
+    expect(figure('Installed')).toBeNull()
+  })
+
+  it('counts the downloads still to come and not the ones that are over', () => {
+    downloads.set([
+      queued('a', 'running'),
+      queued('b', 'queued'),
+      queued('c', 'queued'),
+      queued('d', 'done'),
+      queued('e', 'error'),
+      queued('f', 'canceled')
+    ])
+    renderSidebar()
+
+    expect(figure('Downloads')).toBe('3')
+    expect(screen.getByRole('button', { name: 'Downloads, 3 still to download' })).toBeTruthy()
+  })
+
+  it('leaves the Downloads row bare once the queue has drained', () => {
+    downloads.set([queued('d', 'done'), queued('e', 'error')])
+    renderSidebar()
+
+    expect(figure('Downloads')).toBeNull()
+  })
+
+  it('counts the spare copies beside Duplicates, in copies rather than sets', () => {
+    withCopies(4)
+    renderSidebar()
+
+    expect(figure('Duplicates')).toBe('4')
+    expect(screen.getByRole('button', { name: 'Duplicates, 4 spare copies' })).toBeTruthy()
+  })
+
+  it('says copy rather than copies when there is one of them', () => {
+    withCopies(1)
+    renderSidebar()
+
+    expect(screen.getByRole('button', { name: 'Duplicates, 1 spare copy' })).toBeTruthy()
+  })
+
+  /**
+   * The count that cannot be asked for.
+   *
+   * Main's issue report is a cache that is null until a scan completes in this launch, so on a
+   * launch where nobody opens Issues there is nothing to draw and nothing is drawn. A pill
+   * reading 0 over a library full of broken charts is the failure this shape exists to prevent.
+   */
+  it('draws nothing beside Issues until something in this launch has scanned', () => {
+    renderSidebar()
+
+    expect(figure('Issues')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Issues' })).toBeTruthy()
+  })
+
+  it('draws the broken charts as a warning once a scan has published them', () => {
+    issueTally.set({ brokenCharts: 33 })
+    renderSidebar()
+
+    expect(figure('Issues')).toBe('33')
+    expect(screen.getByRole('button', { name: 'Issues, 33 charts are broken' })).toBeTruthy()
+    // The one figure of the four that is a report of something wrong, and the only one drawn as
+    // a warning. What `pill` looks like is a stylesheet jsdom never reads; this pins the hook.
+    const pill = screen.getByRole('button', { name: /^Issues/ }).querySelector('.count')
+    expect(pill?.classList.contains('pill')).toBe(true)
+  })
+
+  it('draws nothing beside Issues when the scan that ran found nothing broken', () => {
+    issueTally.set({ brokenCharts: 0 })
+    renderSidebar()
+
+    expect(figure('Issues')).toBeNull()
+  })
+
+  it('keeps the other three figures quiet rather than warnings', () => {
+    stubBridge({ catalogCount: vi.fn().mockResolvedValue(12) })
+    downloads.set([queued('a', 'running')])
+    withCopies(2)
+    renderSidebar()
+
+    for (const label of ['Downloads', 'Duplicates']) {
+      expect(
+        screen.getByRole('button', { name: new RegExp(`^${label}`) }).querySelector('.count.pill')
+      ).toBeNull()
+    }
+  })
+
+  it('keeps the figure out of the label, which is what lets the label give way', () => {
+    downloads.set([queued('a', 'running')])
+    renderSidebar()
+
+    const downloadsRow = screen.getByRole('button', { name: /^Downloads/ })
+    expect(downloadsRow.querySelector('.label')?.textContent).toBe('Downloads')
+    expect(downloadsRow.querySelector('.count')?.textContent).toBe('1')
   })
 })

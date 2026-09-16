@@ -23,6 +23,7 @@
   import { assetJobs } from '../stores/assets'
   import { encore } from '../stores/bridge'
   import { spareCopies } from '../stores/duplicates'
+  import { issueTally } from '../stores/issue-tally'
   import type { ViewId } from './Sidebar.svelte'
 
   let { onNavigate }: { onNavigate: (id: ViewId) => void } = $props()
@@ -877,6 +878,19 @@
       csvState = { status: 'error', message: err instanceof Error ? err.message : String(err) }
     }
   }
+
+  /**
+   * Hand the sidebar the one number it can honestly draw about this report.
+   *
+   * Published from here because this is where the rows already are: main's cache is null until a
+   * scan completes in this launch, and reading it to count it copies the whole report across the
+   * boundary. Only written once a report has actually loaded, so a mount that finds nothing
+   * cached leaves a figure an earlier scan published alone rather than blanking it for the frames
+   * before `issuesLast` answers.
+   */
+  $effect(() => {
+    if (hasLoaded) issueTally.set({ brokenCharts: counts.blocking.charts })
+  })
 
   // ── mount: load last report if one exists ────────────────────────────────
   onMount(() => {

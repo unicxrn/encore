@@ -6,7 +6,9 @@ import type { FixableCode } from '../../../../main/issues/fix'
 import type { JobProgress } from '../../../../shared/schemas'
 import { assetJobs } from '../stores/assets'
 import type { DuplicateCopy } from '../../../../shared/duplicates'
+import { get } from 'svelte/store'
 import { duplicates } from '../stores/duplicates'
+import { issueTally } from '../stores/issue-tally'
 import Tools from './Tools.svelte'
 
 /**
@@ -87,8 +89,9 @@ const PORTABILITY_CARD = /: Plays here, not everywhere$/
 afterEach(() => {
   vi.unstubAllGlobals()
   onNavigate.mockClear()
-  // Module state, read by the pointer card's label.
+  // Module state, read by the pointer card's label and by the sidebar's warning pill.
   duplicates.set(null)
+  issueTally.set(null)
 })
 
 /**
@@ -1386,5 +1389,53 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(
       await screen.findByRole('heading', { name: /1 chart has a video Clone Hero cannot play/ })
     ).toBeTruthy()
+  })
+})
+
+/**
+ * The one number this view hands the sidebar, and why it is handed rather than fetched.
+ *
+ * Main's report is a cache that is null until a scan completes in this launch, and reading it
+ * across the boundary to count its rows copies 24,151 of them for one integer. The rows are
+ * already here, so the count is taken here. stores/issue-tally.ts carries the rest.
+ */
+describe('Tools: what it tells the sidebar', () => {
+  it('publishes the charts that are actually broken, not the size of the report', async () => {
+    // Three rows across two charts: two blocking findings on one chart, and a charting note on
+    // the other. Charts, findings and rows are 1, 2 and 3 here, so only one of the three passes.
+    await renderWithRows([
+      ...mixedSeverities,
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'No chart files were found.'
+      }
+    ])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 1 })
+  })
+
+  it('publishes a zero once a scan has looked and found nothing broken', async () => {
+    await renderWithRows([mixedSeverities[1]])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 0 })
+  })
+
+  /**
+   * Null and zero are different answers here. Main has no report, so nothing in this launch has
+   * looked, and the sidebar must draw nothing rather than claim a clean library.
+   */
+  it('publishes nothing at all when no scan has ever run', async () => {
+    vi.stubGlobal('encore', {
+      ...ON_LINUX,
+      issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(null),
+      issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve([]),
+      saveTextFile: (): Promise<string | null> => Promise.resolve(null)
+    })
+    render(Tools, { onNavigate })
+    await screen.findByText(/Checks every chart in your library for problems/)
+
+    expect(get(issueTally)).toBeNull()
   })
 })
