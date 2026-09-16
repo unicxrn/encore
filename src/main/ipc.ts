@@ -13,6 +13,12 @@ import {
   SettingsSchema
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
+import { EDITABLE_INI_KEYS } from '../shared/metadata-fields'
+import type {
+  ChartMetadataRead,
+  ChartMetadataSaved,
+  ChartMetadataWriteRequest
+} from './metadata/edit'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from './assets/art'
 import type { LyricsSearchResult } from './assets/lyrics'
@@ -147,6 +153,26 @@ export interface IpcDeps {
    * copies across, so a .sng is read selectively and the renderer never parses a chart file.
    */
   readLyricLines: (path: string, chartType: 'folder' | 'sng') => Promise<LyricLinesResult>
+  /**
+   * The six editable `song.ini` fields as the file or the archive header actually holds them,
+   * plus the seven gameplay keys the editor shows and refuses to touch.
+   *
+   * `chartType` is the renderer echoing the catalog row's own value back, exactly as
+   * `readChartFiles` and the asset writers take it, so the read and the write that follows it
+   * agree about the chart's shape without sniffing the path twice.
+   */
+  readChartMetadata: (path: string, chartType: 'folder' | 'sng') => Promise<ChartMetadataRead>
+  /**
+   * Write what the user typed into one chart, then re-index it.
+   *
+   * The field names are parsed against `EDITABLE_INI_KEYS` at this boundary and refused again in
+   * `writeChartMetadata`, which also refuses any of the seven keys Clone Hero matches charts by
+   * and re-scans the chart afterwards to prove neither identity moved. Resolves with what
+   * changed and the chart's fresh catalog row; rejects, with a sentence the UI can show, on a
+   * chart that has moved, a `.sng` that packs its own `song.ini`, a failed write, and a write
+   * that landed as something other than what was asked for.
+   */
+  writeChartMetadata: (req: ChartMetadataWriteRequest) => Promise<ChartMetadataSaved>
   sidecarStatus: (name: SidecarName) => Promise<SidecarStatus>
   // Deps are pre-wired with a send callback so progress flows to the renderer.
   sidecarInstall: (name: SidecarName) => Promise<void>
@@ -302,6 +328,24 @@ const ChartReadFilesSchema = z.object({
   path: z.string(),
   chartType: ChartTypeSchema
 })
+/**
+ * A metadata save, as the renderer is allowed to name it.
+ *
+ * `fields` is a closed record: a key outside `EDITABLE_INI_KEYS` does not reach main at all, so
+ * the seven keys `getChartHash` mixes in cannot be smuggled through this channel even before
+ * `assertKeyIsNotHashed` refuses them at the writer. A partial object is the point rather than a
+ * convenience: the form sends only what the user changed, and a key that is absent here is a
+ * line the ini editor never looks at.
+ *
+ * The 400-character cap is well past anything real (the longest `name` in the reference library
+ * is 96 characters) and is here so one channel cannot be used to grow a chart's ini without
+ * bound. `min(1)` on the path catches a caller naming no chart at all.
+ */
+const ChartMetadataWriteSchema = z.object({
+  path: z.string().min(1),
+  chartType: ChartTypeSchema,
+  fields: z.partialRecord(z.enum(EDITABLE_INI_KEYS), z.string().max(400))
+})
 // Both sidecars accept all three operations. install/update used to be narrowed to 'ytdlp'
 // because ffmpeg ships as an archive and nothing could extract it; unzip.ts closed that hole.
 const SidecarNameSchema = z.enum(['ytdlp', 'ffmpeg'])
@@ -454,6 +498,19 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     const { path, chartType } = ChartReadFilesSchema.parse(raw)
     return deps.readLyricLines(path, chartType)
   })
+  // And again for the metadata read, which names a chart with the same two values. Reading is
+  // safe on any path the user can open, so the containment check lives on the write below, where
+  // it protects something.
+  ipcMain.handle(IPC.chartReadMetadata, (_e, raw) => {
+    const { path, chartType } = ChartReadFilesSchema.parse(raw)
+    return deps.readChartMetadata(path, chartType)
+  })
+  // The field names are narrowed to `EDITABLE_INI_KEYS` here, so a renderer cannot name one of
+  // the seven keys Clone Hero matches charts by even before the writer refuses it. Containment
+  // is `assertUnderLibrary` at the write site, which both chart shapes go through.
+  ipcMain.handle(IPC.chartWriteMetadata, (_e, raw) =>
+    deps.writeChartMetadata(ChartMetadataWriteSchema.parse(raw))
+  )
   ipcMain.handle(IPC.sidecarStatus, (_e, raw) => deps.sidecarStatus(SidecarNameSchema.parse(raw)))
   ipcMain.handle(IPC.sidecarInstall, (_e, raw) => deps.sidecarInstall(SidecarNameSchema.parse(raw)))
   ipcMain.handle(IPC.sidecarUpdate, (_e, raw) => deps.sidecarUpdate(SidecarNameSchema.parse(raw)))

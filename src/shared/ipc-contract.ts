@@ -36,6 +36,19 @@ export const IPC = {
   // unlinks: a trash that fails leaves the chart and its row untouched and says so.
   chartRemove: 'chart:remove',
   chartLyricLines: 'chart:lyric-lines',
+  // The six song.ini fields the metadata editor offers, read raw rather than through scan-chart:
+  // an unset album reads as `Unknown Album` once scan-chart has been over it, and writing that
+  // back would put those words in the user's file. The answer also carries the seven gameplay
+  // keys the chart sets, which the editor SHOWS and refuses to edit, and a sentence when the
+  // chart cannot be edited at all.
+  chartReadMetadata: 'chart:read-metadata',
+  // The one channel in Encore that writes what a user typed into a chart they own. Refused for a
+  // path outside the configured library folders, for a key outside `EDITABLE_INI_KEYS`, and for
+  // any of the seven `getChartHash` mixes in. The write goes through the same per-chart lock,
+  // temp file and verification every asset write does, and main re-scans the chart afterwards and
+  // rejects unless both multiplayer identities are byte-identical and every field reads back as
+  // asked. Resolves with what changed and the chart's re-indexed catalog row.
+  chartWriteMetadata: 'chart:write-metadata',
   windowControl: 'window:control',
   dialogPickFolder: 'dialog:pick-folder',
   // Picking the program Clone Hero is started by. A separate dialog from dialog:pick-folder

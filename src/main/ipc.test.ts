@@ -67,6 +67,23 @@ const deps = (): IpcDeps => ({
   launchGame: vi.fn().mockResolvedValue(undefined),
   readChartFiles: vi.fn().mockResolvedValue([{ fileName: 'song.ini', data: new Uint8Array([1]) }]),
   readLyricLines: vi.fn().mockResolvedValue({ lines: [{ ms: 1000, endMs: 2000, text: 'Hello' }] }),
+  readChartMetadata: vi.fn().mockResolvedValue({
+    chartPath: '/lib/song',
+    chartType: 'folder',
+    iniName: 'song.ini',
+    synthetic: false,
+    fields: { name: 'YYZ', artist: 'Rush', album: '', genre: '', year: '', charter: '' },
+    gameplay: [{ key: 'pro_drums', value: 'True' }],
+    refusal: null
+  }),
+  writeChartMetadata: vi.fn().mockResolvedValue({
+    chartPath: '/lib/song',
+    chartType: 'folder',
+    changed: ['album'],
+    chartHash: 'hash',
+    cloneHeroChecksum: 'checksum',
+    record: null
+  }),
   sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null, path: '/s/yt-dlp' }),
   sidecarInstall: vi.fn().mockResolvedValue(undefined),
   sidecarUpdate: vi.fn().mockResolvedValue(undefined),
@@ -374,6 +391,58 @@ describe('registerIpc', () => {
       ipc.invoke(IPC.chartLyricLines, { path: '/lib/song', chartType: 'zip' })
     ).rejects.toThrow()
     expect(d.readLyricLines).not.toHaveBeenCalled()
+  })
+  it('routes chart:read-metadata with a valid payload', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const result = (await ipc.invoke(IPC.chartReadMetadata, {
+      path: '/lib/song',
+      chartType: 'folder'
+    })) as { fields: Record<string, string> }
+    expect(d.readChartMetadata).toHaveBeenCalledWith('/lib/song', 'folder')
+    expect(result.fields.artist).toBe('Rush')
+  })
+  it('routes chart:write-metadata with a valid payload', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const result = (await ipc.invoke(IPC.chartWriteMetadata, {
+      path: '/lib/song',
+      chartType: 'folder',
+      fields: { album: 'Moving Pictures' }
+    })) as { changed: string[] }
+    expect(d.writeChartMetadata).toHaveBeenCalledWith({
+      path: '/lib/song',
+      chartType: 'folder',
+      fields: { album: 'Moving Pictures' }
+    })
+    expect(result.changed).toEqual(['album'])
+  })
+  // The boundary is where a key Clone Hero matches charts by has to stop. `assertKeyIsNotHashed`
+  // refuses it again at the writer, but a channel that accepted the name at all would be one
+  // handler's mistake away from the filesystem.
+  it.each([
+    ['a hashed gameplay key', { pro_drums: 'False' }],
+    ['a key the editor does not offer', { loading_phrase: 'go' }],
+    ['a value longer than any real field', { album: 'x'.repeat(401) }]
+  ])('rejects chart:write-metadata carrying %s', async (_label, fields) => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.chartWriteMetadata, { path: '/lib/song', chartType: 'folder', fields })
+    ).rejects.toThrow()
+    expect(d.writeChartMetadata).not.toHaveBeenCalled()
+  })
+  it('rejects a chart:write-metadata payload naming no chart', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.chartWriteMetadata, { path: '', chartType: 'folder', fields: { album: 'a' } })
+    ).rejects.toThrow()
+    expect(d.writeChartMetadata).not.toHaveBeenCalled()
   })
   it('routes updates:check with an explicit path list', async () => {
     const d = deps()
