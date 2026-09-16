@@ -195,6 +195,22 @@ release.
   Its Installed and Explore screens describe the views as they are now: Installed has filters
   rather than one filter box, and an Explore result is heard and judged where it lands rather
   than opened.
+- Stats opens with what you came for rather than with the first of seven cards. One block at the
+  top carries how much you have played, how well, and how much of your library you have played at
+  all, each labelled with the record it came from. The rest of the page is a flat band per
+  question instead of a run of boxes of equal weight. No figure moved twice: the three in that
+  block are taken out of the sections below rather than repeated into them, so every number on the
+  page is still drawn once, under one heading, with one source tag.
+- How much of the library has been played is a pair of bars at the top of Stats, not only a
+  sentence at the bottom. One bar per record against one total, never one bar inside the other,
+  because the two counts come from tables nothing joins. The bars carry no minimum width: 84
+  charts of 4,000 is a sliver, which is the truth about a library that size, and the counts are
+  written beside them. A count that runs past its own total stops at the end of its bar and is
+  still printed in full.
+- Stats draws the instruments you play in the same colours the difficulty pips use, so the two
+  screens agree about what a guitar looks like. Difficulty stays one colour, because a difficulty
+  is not an instrument. An instrument name Encore has never met is drawn uncoloured rather than as
+  some other instrument, and its full name is on the hover.
 
 ### Fixed
 
@@ -211,6 +227,12 @@ release.
 - A chart whose notes were read and found to carry none was told to run a library scan, which is
   the one instruction that could not help it. The scan is offered only to a chart nothing has
   read yet; a measured zero now says it was measured.
+- Stats' charter list left the charter's name 34px of box at a 1121px window, which is where the
+  chart column appears and the view is at its narrowest. The bar beside each name is what goes at
+  that width, since the count next to it already says what the bar says.
+- Stats put its most-played and recently-played lists side by side as soon as the pane reached
+  760px, which left each song title 80px at a 1440px window. They stack until there is room for a
+  title, so they are side by side at 1920 and stacked below it.
 
 ## [0.3.1] - 2026-09-13
 

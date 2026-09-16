@@ -322,7 +322,11 @@ const PAGE = `(() => {
   // is only doing its job if it is on its heading's line, inside its section, and whole.
   const sections = [...document.querySelectorAll('.stats section')]
   const tagged = sections.filter((el) => el.querySelector('.src'))
-  const tags = [...document.querySelectorAll('.src')]
+  // Heading tags only. The lead block renders the same tag beside each of its own figures,
+  // because those come from different records and the heading above them cannot say which; those
+  // are not on a heading line and reading them here would answer \`onHeadingLine\` with null for a
+  // tag that was never meant to be on one. scripts/measure-stats-page.mjs measures the lead's.
+  const tags = [...document.querySelectorAll('h2 .src')]
   const tagState = tags.map((tag) => {
     const heading = tag.closest('h2')
     const section = tag.closest('section')
