@@ -1,11 +1,11 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { browseSearch } from '../stores/search'
 import { globalQuery } from '../stores/global-search'
 import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
-import type { ChartData, SearchResult } from '../api/enchor'
+import { DIFFICULTIES, type ChartData, type SearchResult } from '../api/enchor'
 import type { AdvancedQuery } from '../api/advanced'
 import {
   EIGHT_TAG_CHARTER,
@@ -24,6 +24,15 @@ vi.mock('../api/enchor', async (importOriginal) => ({
 }))
 
 import Browse, { hideOwned } from './Browse.svelte'
+
+/**
+ * The difficulty control, which is a group of dots rather than a list.
+ *
+ * Reached by the group's accessible name, so every query for a dot is scoped to it: "Expert" and
+ * "Hard" are ordinary enough words that an unscoped query would eventually pick up a badge.
+ */
+const difficultyDots = (): HTMLElement =>
+  screen.getByRole('group', { name: 'Filter by difficulty' })
 
 function chart(
   chartId: number,
@@ -1391,16 +1400,65 @@ describe('Explore filter header', () => {
     // Which charted difficulties exist, and how hard the chart is. Collapsing them into one
     // control loses "expert, but not brutal", which is what someone learning wants.
     await show()
-    const difficulties = [
-      ...screen.getByLabelText('Filter by difficulty').querySelectorAll('option')
-    ]
-    expect(difficulties.map((o) => o.value).filter(Boolean)).toEqual([
-      'expert',
-      'hard',
-      'medium',
-      'easy'
+    const dots = within(difficultyDots()).getAllByRole('button')
+    expect(dots.map((dot) => dot.getAttribute('aria-label'))).toEqual([
+      'Easy',
+      'Medium',
+      'Hard',
+      'Expert'
     ])
     expect(screen.getByRole('group', { name: 'Filter by intensity' })).toBeTruthy()
+  })
+
+  it('draws one dot per difficulty the endpoint has, and no more', async () => {
+    // The endpoint names its whole enum back in the 400 it answers a bad value with:
+    // `'expert' | 'hard' | 'medium' | 'easy'` (measured against the live service on 2026-09-16).
+    // The approved design draws six dots here, which is the intensity scale its own rows draw
+    // six pips of; two of six toggles over four difficulties would filter nothing. DIFFICULTIES
+    // is where the four live, and this pins the dots to that list rather than to a number.
+    await show()
+    const dots = within(difficultyDots()).getAllByRole('button')
+    expect(dots).toHaveLength(DIFFICULTIES.filter((opt) => opt.value !== null).length)
+    expect(dots).toHaveLength(4)
+  })
+
+  it('asks for one difficulty at a time, because that is what the endpoint takes', async () => {
+    // `difficulty` is one string on the wire, not a list: an array of two answers 400 with
+    // `received: array` from the same check that names the enum (measured 2026-09-16). A second
+    // press therefore moves the choice rather than adding to it.
+    await show()
+    const dots = difficultyDots()
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Hard' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('hard'))
+
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Expert' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
+    expect(
+      within(dots)
+        .getAllByRole('button')
+        .filter((dot) => dot.getAttribute('aria-pressed') === 'true')
+        .map((dot) => dot.getAttribute('aria-label'))
+    ).toEqual(['Expert'])
+  })
+
+  it('goes back to any difficulty when the lit dot is pressed again', async () => {
+    // Nothing in the row says "Any difficulty" any more, so pressing the lit dot is the way out.
+    // The chosen one is named beside the dots while there is one; with none lit the label is
+    // the whole of what the control says, which is what the filter row has width for.
+    await show()
+    const dots = difficultyDots()
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Medium' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('medium'))
+    expect(within(dots).getByText('medium')).toBeTruthy()
+
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Medium' }))
+    await waitFor(() => expect(lastParams().difficulty).toBeNull())
+    expect(within(dots).queryByText('medium')).toBeNull()
+    expect(
+      within(dots)
+        .getAllByRole('button')
+        .every((dot) => dot.getAttribute('aria-pressed') === 'false')
+    ).toBe(true)
   })
 
   it('leaves the band off until an instrument is chosen, and says why', async () => {
@@ -1537,7 +1595,7 @@ describe('Explore filter header', () => {
     await show()
     // Through a filter rather than off the first paint: the store is module-scoped and ignores a
     // question it has already answered, so a bare mount may spend no request at all.
-    await pick('Filter by difficulty', 'expert')
+    await fireEvent.click(within(difficultyDots()).getByRole('button', { name: 'Expert' }))
     await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
     expect(lastParams().sort ?? null).toBeNull()
   })
@@ -1858,9 +1916,7 @@ describe('Explore selection against a list that moves', () => {
     })
     await show('selection-filter')
 
-    await fireEvent.change(screen.getByLabelText('Filter by difficulty'), {
-      target: { value: 'expert' }
-    })
+    await fireEvent.click(within(difficultyDots()).getByRole('button', { name: 'Expert' }))
 
     await waitFor(() => expect(screen.queryByText('1 selected')).toBeNull())
   })

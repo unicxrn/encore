@@ -31,7 +31,8 @@
     DIFFICULTIES,
     SORT_OPTIONS,
     albumArtUrl,
-    type ChartData
+    type ChartData,
+    type FilterOption
   } from '../api/enchor'
   import { INTENSITY_CEILINGS, INTENSITY_FLOORS } from '../api/advanced'
   import { msToTime, stripRichText } from '../../../../shared/format'
@@ -319,6 +320,38 @@
       end === 'max' ? value : numbers.maxIntensity
     )
   }
+
+  /**
+   * The difficulties as a scale, which is what a row of dots is.
+   *
+   * Four dots, because there are four difficulties. The endpoint names its whole enum back in
+   * the 400 it answers a bad value with: `'expert' | 'hard' | 'medium' | 'easy'`, and an array
+   * of two comes back as `received: array` from the same check (measured against the live
+   * service on 2026-09-16). So the control is single-select, and `DIFFICULTIES` was already the
+   * same four. The approved design draws six dots here; six is the intensity scale its own rows
+   * draw six pips of, and two of six toggles over four difficulties would filter nothing.
+   *
+   * Reversed out of `DIFFICULTIES` rather than written out again, so the list stays in one
+   * place. A select puts the most-asked-for option first, which is why that one starts at
+   * expert; a row of dots is read left to right as a scale, and a scale runs upwards.
+   */
+  const named = (opt: FilterOption): opt is FilterOption & { value: string } => opt.value !== null
+  const DIFFICULTY_DOTS = DIFFICULTIES.filter(named).reverse()
+
+  /**
+   * Pressing the lit dot is how "any difficulty" is asked for, now that no option says it.
+   *
+   * `aria-pressed` rather than a radio group: a radio group cannot express none-chosen, and
+   * none-chosen is the state this control is in nearly all the time. The same idiom the List and
+   * Grid pair beside it uses, and the pressed dot is the only lit thing in the group.
+   */
+  function onDifficultyDot(value: string): void {
+    onFilterChange('difficulty', difficulty === value ? '' : value)
+  }
+
+  const difficultyName = $derived(
+    DIFFICULTY_DOTS.find((opt) => opt.value === difficulty)?.label.toLowerCase() ?? ''
+  )
 
   export function focusSearch(): void {
     inputEl?.focus()
@@ -731,16 +764,33 @@
           <option value={opt.value ?? ''}>{opt.label}</option>
         {/each}
       </select>
-      <select
-        class="chip"
-        aria-label="Filter by difficulty"
-        value={difficulty ?? ''}
-        onchange={(e) => onFilterChange('difficulty', e.currentTarget.value)}
-      >
-        {#each DIFFICULTIES as opt (opt.label)}
-          <option value={opt.value ?? ''}>{opt.label}</option>
+      <!-- Four dots rather than a list, which is the shape the approved design draws and the
+           count the endpoint has: a bad difficulty comes back as a 400 naming the whole enum,
+           `'expert' | 'hard' | 'medium' | 'easy'`, and an array of two is refused by the same
+           check as `received: array` (measured 2026-09-16). So one at a time, easy on the left,
+           and the design's six dots are the intensity scale its rows draw pips of, not this. -->
+      <div class="dots" role="group" aria-label="Filter by difficulty">
+        <span class="band-label">Difficulty</span>
+        {#each DIFFICULTY_DOTS as opt (opt.value)}
+          <button
+            class="dot"
+            aria-label={opt.label}
+            aria-pressed={difficulty === opt.value}
+            title={difficulty === opt.value
+              ? `Charts written at ${opt.label.toLowerCase()}. Press again for any difficulty.`
+              : `Charts written at ${opt.label.toLowerCase()}`}
+            onclick={() => onDifficultyDot(opt.value)}
+          ></button>
         {/each}
-      </select>
+        <!-- The dots carry no visible word, so the chosen one is named here: reading a row of
+             dots and knowing which difficulty the third one is otherwise means counting. Only
+             while one is chosen. Nothing lit under a label reading Difficulty already says no
+             difficulty is being asked for, and this row is at three lines at its narrowest, so a
+             word that says what the control already shows is one the header cannot afford. -->
+        {#if difficulty !== null}
+          <span class="band-to">{difficultyName}</span>
+        {/if}
+      </div>
       <!-- The third control, and a different question from the two above it. Difficulty is which
            charted difficulties exist; intensity is how hard the chart is, the same number the
            row's pips draw. Without it "expert, but not brutal" cannot be asked, which is the
@@ -1322,6 +1372,34 @@
     font-size: var(--fs-caption);
     color: var(--text-3);
     white-space: nowrap;
+  }
+  /* The difficulty scale, drawn as the approved design draws it: a label, four round toggles
+     and the word for whichever one is lit. */
+  .dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .dot {
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1.5px solid var(--hairline);
+    background: var(--surface-1);
+    cursor: pointer;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .dot:hover,
+  .dot:focus-visible {
+    border-color: var(--accent);
+  }
+  .dot[aria-pressed='true'] {
+    background: var(--accent);
+    border-color: var(--accent);
   }
   /* A tier is one or two characters, so this select is sized for its contents rather than for
      its longest label the way the instrument one is. */
