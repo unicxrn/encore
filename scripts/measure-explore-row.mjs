@@ -22,11 +22,20 @@
  *               gaps is a fixed width, and a grid track is not, so this compares the two.
  *   sideways    `.table` scrolling horizontally, which is what a grid track with an automatic
  *               minimum does to a row holding a long title.
+ *   cover       The one fixed box in the row, and the thing that used to set its height.
+ *   song        The column the difficulty column is taken out of, narrowest first: that is the
+ *               row that decides whether a title fits.
+ *   band        The badges under the subtitle, and how many lines they take. The set is not
+ *               fixed per chart, so a band that wraps on some rows and not others is a list of
+ *               two row heights, which is the thing the eye stumbles down.
+ *   bar         The results bar over the list, which is one line until a sentence appears in it.
  *
  * The widths worth passing are the ones the shell supports. The window minimum is 960px and the
  * rail is 374px wide and appears above 1120px, so the view column is 722px at a 960px window,
  * 882px at 1120px, and then drops to 509px at 1121px when the rail takes its share back. 1121
- * is the narrowest this row is ever asked to be, and it is not the smallest window.
+ * is the narrowest this row is ever asked to be, and it is not the smallest window. 1280, 1600
+ * and 1920 are the three above it, and they are where the row's two folds are crossed: the
+ * difficulty comes back up beside the song at 800px of column, and the index at 900px.
  *
  *     VIEW=grid       the same list as cards
  *     VIEW=installed  the Installed list, which draws the same difficulty component
@@ -164,10 +173,31 @@ async function waitFor(win, expression, timeoutMs = 40000) {
  * holding 140.9px of text is not a truncation anybody can see.
  */
 const SHAPE = `(() => {
+  // How many lines a wrapping flex row actually took. Not the number of distinct tops: items of
+  // different heights on one line have different tops, and counting those reports every row of
+  // chips as two. A new line starts where an item begins at or below the bottom of the last one.
+  // A child folded away by a container query still has a rect, at 0x0 in the corner, and it
+  // would otherwise be counted as a line of its own. Only what is drawn takes a line.
+  const lineCount = (items) => {
+    const boxes = items
+      .map((el) => el.getBoundingClientRect())
+      .filter((b) => b.width > 0 && b.height > 0)
+      .sort((a, b) => a.top - b.top)
+    let lines = 0
+    let floor = -Infinity
+    for (const box of boxes) {
+      if (box.top >= floor - 1) { lines++; floor = box.bottom }
+      else floor = Math.max(floor, box.bottom)
+    }
+    return lines
+  }
   const main = document.querySelector('.main') || document.querySelector('.library')
   const table = document.querySelector('.table')
   const rows = [...document.querySelectorAll('.table .row, .table .card')]
   const heights = [...new Set(rows.map(r => Math.round(r.getBoundingClientRect().height)))]
+  // How many rows at each height, not just which heights exist: one tall row among twenty-four is
+  // a different fact from half the list being tall, and only the counts tell the two apart.
+  const heightCounts = heights.map((h) => h + 'px x' + rows.filter((r) => Math.round(r.getBoundingClientRect().height) === h).length)
 
   // Every element that CAN ellipsise, grouped by class, with the narrowest box any of them got
   // and how many actually ran out of room. An ellipsis on a 60-character title in a 280px box is
@@ -233,6 +263,49 @@ const SHAPE = `(() => {
     return { track: Math.round(cell.getBoundingClientRect().width), drawn, parts: parts.length }
   }).filter(Boolean)
 
+  // The cover, which is the one fixed box in the row and the one the row's height used to be
+  // set by. Every row has to agree about it: a cover sized from its column is a cover that
+  // changes the row's height when the column does.
+  const covers = [...new Set(rows.map((row) => {
+    const art = row.querySelector('.cover, .art')
+    if (!art) return null
+    const box = art.getBoundingClientRect()
+    return Math.round(box.width) + 'x' + Math.round(box.height)
+  }).filter(Boolean))]
+
+  // The song column, which is what the difficulty column is taken out of. Reported as the
+  // narrowest any row got, because that is the one that decides whether a title fits.
+  const songs = rows.map((row) => {
+    const cell = row.querySelector('.song')
+    return cell ? Math.round(cell.getBoundingClientRect().width) : null
+  }).filter((n) => n !== null)
+
+  // The badge band under the subtitle, and the one thing about it worth watching: how many lines
+  // it takes. The badges a chart carries are not a fixed set, so a band that wraps on some rows
+  // and not others is a list whose rows are two heights. Counted by how many distinct tops the
+  // badges in one band have, which is what a wrap actually is.
+  const bands = rows.map((row) => {
+    const band = row.querySelector('.badges')
+    if (!band) return null
+    const kids = [...band.children].filter((k) => k.getBoundingClientRect().width > 0)
+    return {
+      lines: lineCount(kids),
+      badges: kids.length,
+      width: Math.round(band.getBoundingClientRect().width)
+    }
+  }).filter(Boolean)
+
+  // The bar over the list. One line is the design; two means something in it wrapped, which is
+  // what the sentences that only appear sometimes are for.
+  const barEl = document.querySelector('.rbar')
+  const bar = barEl
+    ? {
+        height: Math.round(barEl.getBoundingClientRect().height),
+        lines: lineCount([...barEl.children]),
+        says: [...barEl.children].map((k) => (k.textContent || '').trim().replace(/\\s+/g, ' ')).filter(Boolean)
+      }
+    : null
+
   // Installed's row is a button and its two actions cannot sit inside it, so they are siblings
   // under .row-wrap and every pixel they take comes off the row's own grid. That is invisible in
   // the track list and is the first thing to look at when the title is tighter than the tracks
@@ -250,7 +323,14 @@ const SHAPE = `(() => {
     rowWidth: rows.length ? Math.round(rows[0].getBoundingClientRect().width) : null,
     actions,
     rows: rows.length,
-    rowHeights: heights,
+    rowHeights: heightCounts,
+    covers,
+    songNarrowest: songs.length ? Math.min(...songs) : null,
+    songWidest: songs.length ? Math.max(...songs) : null,
+    bandLines: [...new Set(bands.map((b) => b.lines))].sort(),
+    bandWidth: bands.length ? Math.min(...bands.map((b) => b.width)) : null,
+    bandBadges: [...new Set(bands.map((b) => b.badges))].sort(),
+    bar,
     pipTrack: pips.length ? Math.min(...pips.map(p => p.track)) : null,
     pipDrawn: pips.length ? Math.max(...pips.map(p => p.drawn)) : null,
     pipGroups: [...new Set(pips.map(p => p.parts))],
@@ -347,6 +427,20 @@ app.whenReady().then(async () => {
     console.log(`  beside a row  ${shape.actions.map((a) => `.${a.cls} ${a.width}px`).join(', ')}`)
   }
   console.log(`  row heights   ${JSON.stringify(shape.rowHeights)}`)
+  console.log(`  cover         ${shape.covers.join(', ')}`)
+  if (shape.songNarrowest !== null) {
+    console.log(`  song column   ${shape.songNarrowest}px to ${shape.songWidest}px`)
+  }
+  if (shape.bandWidth !== null) {
+    console.log(
+      `  badge band    ${shape.bandWidth}px wide, ${JSON.stringify(shape.bandLines)} lines, ${JSON.stringify(shape.bandBadges)} badges per row`
+    )
+  }
+  if (shape.bar) {
+    console.log(
+      `  results bar   ${shape.bar.height}px tall on ${shape.bar.lines} line(s): ${shape.bar.says.join(' | ')}`
+    )
+  }
   console.log(
     `  pips          ${shape.pipDrawn}px drawn in a ${shape.pipTrack}px track, ${JSON.stringify(shape.pipGroups)} groups per row`
   )

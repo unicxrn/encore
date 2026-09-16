@@ -975,7 +975,7 @@
       {@const spread = spreadOf(c)}
       <span class="badges">
         {#if c.song_length != null && c.song_length >= 0}
-          <span class="badge mono">{msToTime(c.song_length)}</span>
+          <span class="badge mono length">{msToTime(c.song_length)}</span>
         {/if}
         {#if spread}
           <span class="badge mono" title={spread.title}>{spread.text}</span>
@@ -1839,24 +1839,40 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* The band under the subtitle. Wraps, because the badges a chart carries are not a fixed set
-     and the column they sit in is 281px at its narrowest; the alternative is clipping one, and
-     a half-drawn badge is worse than a second line. Every row has at least the length, the
-     difficulty spread and the charter, so the common case is one line and the rows that take
-     two are the rows with something extra to say. */
+  /* The band under the subtitle. One line, and the charter is what gives.
+
+     It wrapped first, which is what the design does, and that was measured at the narrowest
+     column the shell has: at a 1121px window the band is 266px and fourteen rows of twenty-five
+     took two lines, so the list ran 102px, 123px, 102px, 123px down the screen. Rows of two
+     heights are the thing the eye trips over, and here the cause is a charter's name, which is
+     not a reason for a row to be taller than the one above it.
+
+     So the band does not wrap and the charter shrinks into whatever the fixed badges leave it,
+     which is 369px at a 960px window and 156px at a 1121px one. An ellipsis on a name is what
+     an ellipsis is for. `overflow: hidden` is the belt: a row carrying all three of the rare
+     flags at the narrowest width has more badges than 266px holds even with the charter at
+     nothing, and clipping that against the cell is better than painting it over the column
+     beside it. */
   .badges {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 4px 6px;
+    gap: 6px;
     margin-top: 5px;
     min-width: 0;
+    overflow: hidden;
   }
-  /* A badge like the others now, rather than a column of its own. Capped and ellipsised because
-     a charter name is the one field here with no bound on it: "CCC, Toppin, and four more" would
-     otherwise push the whole band onto a second line on its own. */
-  .charter {
-    max-width: 16ch;
+  /* A badge like the others now, rather than a column of its own, and the only one in the band
+     that gives way. `.badge` holds every other badge at its natural width, so this override is
+     what decides which of them ellipsises when the column is narrow: a charter's name, rather
+     than the length or the difficulties, because those two are the same four characters on
+     every row and a name is the one field here with no bound on it.
+
+     Specificity on purpose: `.badge` is declared after this and sets `flex-shrink: 0`, so the
+     two-class selector is what lets this one shrink. */
+  .badges .charter {
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -2052,6 +2068,20 @@
     .row .cover,
     .row .pick {
       align-self: start;
+    }
+  }
+  /* The narrowest the column ever gets, 509px at a 1121px window, where the band has 266px and
+     the charter is what runs out of room. The length goes, and the 42px it was taking goes to
+     the name: measured at this width, keeping it left fourteen charters of twenty-five
+     ellipsised and the tightest at 36px.
+
+     The length rather than anything else in the band, and not grudgingly: it is the one field
+     here that is also in the rail this width exists to make room for, one click away and in
+     full. The row before this one hid it below 900px of column, so it is drawn over a wider
+     range now than it used to be, not a narrower one. */
+  @container results (max-width: 559px) {
+    .row .badges .length {
+      display: none;
     }
   }
   .more-row {
