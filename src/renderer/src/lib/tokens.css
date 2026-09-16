@@ -168,7 +168,7 @@
      as the box being off the surface.
 
      Every floating surface in the app now reads one of these, by what it is: the downloads
-     panel is --elev-3, the five dialogs (the tour, what's new, the update prompt, the shortcut
+     panel and the title bar's failure note are --elev-3, the five dialogs (the tour, what's new, the update prompt, the shortcut
      sheet and the Issues repair confirmation) are --elev-4, and the rail's card and art are
      --elev-2. --elev-1 is the row step, spent so far on the rail's health card's neighbour
      rows; the app's list rows are separated by hairlines rather than by shadow and are
