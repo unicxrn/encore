@@ -94,13 +94,24 @@ describe('activeFilterCount', () => {
     expect(activeFilterCount(state())).toBe(0)
   })
 
+  // The catalog applies this in SQL over the whole library, so it has to reach the query rather
+  // than being something the view sorts out of the page it was handed.
+  it('sends favouritesOnly only when it is on', () => {
+    expect(toCatalogFilter(state(), PAGE)).not.toHaveProperty('favouritesOnly')
+    expect(toCatalogFilter(state({ favouritesOnly: true }), PAGE).favouritesOnly).toBe(true)
+  })
+
   it('counts the search box as a filter', () => {
     expect(activeFilterCount(state({ search: 'rush' }))).toBe(1)
     expect(activeFilterCount(state({ search: '   ' }))).toBe(0)
   })
 
-  it('counts each set control once, including the never-played toggle', () => {
-    expect(activeFilterCount(state({ artist: 'Rush', yearMin: '1980', neverPlayed: true }))).toBe(3)
+  it('counts each set control once, including the two toggles', () => {
+    expect(
+      activeFilterCount(
+        state({ artist: 'Rush', yearMin: '1980', neverPlayed: true, favouritesOnly: true })
+      )
+    ).toBe(4)
   })
 
   // A sort takes no charts away, so counting it would offer to clear something that is not
@@ -122,7 +133,8 @@ describe('clearedFilters', () => {
       yearMax: '1989',
       lengthMinMin: '2',
       lengthMaxMin: '6',
-      neverPlayed: true
+      neverPlayed: true,
+      favouritesOnly: true
     })
     expect(activeFilterCount(clearedFilters(messy))).toBe(0)
   })

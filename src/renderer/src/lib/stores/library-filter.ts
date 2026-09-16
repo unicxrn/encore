@@ -28,6 +28,8 @@ export interface LibraryFilterState {
   lengthMaxMin: string
   /** Charts with no play recorded while Encore has been watching. See shared/play.ts. */
   neverPlayed: boolean
+  /** Only charts the user hearted. Filtered in SQL, over the library rather than over the page. */
+  favouritesOnly: boolean
   /** Empty means the view's existing default order, which is not one order: see CatalogFilter. */
   sort: CatalogSortField | ''
   direction: SortDirection
@@ -44,6 +46,7 @@ export const EMPTY_LIBRARY_FILTER: LibraryFilterState = {
   lengthMinMin: '',
   lengthMaxMin: '',
   neverPlayed: false,
+  favouritesOnly: false,
   sort: '',
   direction: 'asc'
 }
@@ -93,6 +96,7 @@ export function toCatalogFilter(
     ...(lengthMin !== undefined ? { lengthMinMs: Math.round(lengthMin * MS_PER_MINUTE) } : {}),
     ...(lengthMax !== undefined ? { lengthMaxMs: Math.round(lengthMax * MS_PER_MINUTE) } : {}),
     ...(state.neverPlayed ? { neverPlayed: true } : {}),
+    ...(state.favouritesOnly ? { favouritesOnly: true } : {}),
     ...(state.sort ? { sort: state.sort, direction: state.direction } : {})
   }
 }
@@ -116,7 +120,7 @@ export function activeFilterCount(state: LibraryFilterState): number {
     state.lengthMinMin.trim(),
     state.lengthMaxMin.trim()
   ].filter((value) => value !== '').length
-  return set + (state.neverPlayed ? 1 : 0)
+  return set + (state.neverPlayed ? 1 : 0) + (state.favouritesOnly ? 1 : 0)
 }
 
 /** Clear every narrowing control, keeping the sort. See activeFilterCount. */

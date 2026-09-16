@@ -782,6 +782,18 @@
     >
       No plays recorded
     </button>
+    <!-- The charts the user hearted in the rail. A toggle beside the others rather than a
+         destination of its own: it narrows the library exactly as they do, it is applied in the
+         same SQL over the whole catalog rather than over the page on screen, and it composes with
+         them, which a separate list would have to rebuild to offer. The line below the bar is
+         where the one thing this list cannot show is stated. -->
+    <button
+      class="toggle"
+      aria-pressed={$libraryFilter.favouritesOnly}
+      onclick={() => setFilter({ favouritesOnly: !$libraryFilter.favouritesOnly })}
+    >
+      Favourites
+    </button>
     {#if activeFilters > 0}
       <button class="clear" onclick={() => clearFilters()}>
         Clear filters ({activeFilters})
@@ -818,6 +830,18 @@
       {/if}
     </span>
   </div>
+  {#if $libraryFilter.favouritesOnly}
+    <!-- The caveat this filter owes the user, in the shape the one below it already set. A
+         favourite is attached to the chart rather than to a copy of it, so it can outlive the
+         copy: hearted on Chorus and not downloaded yet, or hearted and later moved to the Trash.
+         Neither is a row in a list of installed charts, and a list named Favourites that quietly
+         held back part of what the user hearted would be the misleading half of the feature. -->
+    <p class="caveat">
+      Favourites are kept for the chart, not for the folder it is in, so this shows the ones your
+      library holds. A chart you hearted on Chorus and have not downloaded, or one you have since
+      removed, is still a favourite and still shows a filled heart when you open it.
+    </p>
+  {/if}
   {#if $libraryFilter.neverPlayed}
     <!-- The caveat the schema's own comment asks any UI offering this filter to state. It is
          shown beside the list rather than hidden in a tooltip because a user reading a short

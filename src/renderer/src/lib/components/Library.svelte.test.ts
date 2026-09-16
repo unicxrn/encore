@@ -902,6 +902,37 @@ describe('Library: the filter bar', () => {
     expect(caveat.textContent).toMatch(/score files/i)
   })
 
+  /**
+   * The favourites toggle, which has to be the catalog's answer rather than the view's.
+   *
+   * The list is paged, so picking the hearted rows out of the hundred on screen is not picking
+   * them out of the library. What jsdom can pin is that the filter leaves for main; that it is
+   * one filter over the whole library is pinned in SQL, in catalog/favourites.test.ts.
+   */
+  it('asks the catalog for favourites only while the toggle is pressed', async () => {
+    const { filters } = renderWithFilters()
+    const toggle = screen.getByRole('button', { name: 'Favourites' })
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.favouritesOnly === true)
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.favouritesOnly === undefined)
+  })
+
+  // A favourite is kept for the chart, not for the copy of it on disk, so this list is the
+  // favourites the library HOLDS. Said out loud, for the reason the play caveat beside it is:
+  // a list named after something that quietly omits part of it is the misleading half.
+  it('says that a favourite it cannot list is still a favourite', async () => {
+    renderWithFilters()
+    expect(document.querySelector('.caveat')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourites' }))
+    const caveat = await waitFor(() => {
+      const found = document.querySelector('.caveat')
+      if (!found) throw new Error('no caveat shown')
+      return found
+    })
+    expect(caveat.textContent).toMatch(/hearted on Chorus/i)
+  })
+
   it('asks for neverPlayed only while the toggle is pressed', async () => {
     const { filters } = renderWithFilters()
     const toggle = screen.getByRole('button', { name: 'No plays recorded' })
