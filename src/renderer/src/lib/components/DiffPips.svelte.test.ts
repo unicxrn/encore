@@ -159,8 +159,11 @@ describe('DiffPips as an instrument icon', () => {
   })
 
   it('still saturates at six and still names the rating that ran past it', () => {
-    // A live query on 2026-09-16 found a chart rated 73. The scale is a frame, not a cap, and
-    // the icon form is a second drawing of the same fact rather than a second rule about it.
+    // 73 is not a number anybody has seen: the highest in 100 charts read from api.enchor.us on
+    // 2026-09-16, asked for the ones rated above 6, was 20. It is here because song.ini's rating
+    // is a free integer and nothing in the format bounds it, so the test has to be about the
+    // absence of a ceiling rather than about the highest value observed so far. The scale is a
+    // frame, and the icon form is a second drawing of the same fact, not a second rule about it.
     render(DiffPips, {
       instrument: 'guitar',
       label: 'Guitar',
