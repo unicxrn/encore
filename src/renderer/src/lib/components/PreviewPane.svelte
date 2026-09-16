@@ -22,6 +22,7 @@
     togglePlay
   } from '../stores/preview-controller'
   import { settings } from '../stores/settings'
+  import Highway from './Highway.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   let { target, instruments }: { target: ChartTarget; instruments: MatrixRow[] } = $props()
@@ -479,6 +480,13 @@
     <div class="stage">
       <div class="screen">
         <div class="viewport" bind:this={viewportEl}></div>
+        <!-- The still lane, over the viewport rather than inside it: `.viewport` is what the
+             controller appends the player element into and Svelte never renders into it, and
+             the player that lands there is opaque anyway. The same lane the rail draws, at the
+             size this pane gives it. -->
+        <div class="rest" class:gone={$nowPlaying !== null}>
+          <Highway state={opening ? 'opening' : 'rest'} />
+        </div>
         {#if currentLyric !== null}
           <!-- Keyed on the line so a new line remounts and replays the fade-in;
              the global reduced-motion rule in tokens.css turns that off. -->
@@ -791,6 +799,26 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* Faded out rather than torn out, and clipped to the viewport's own corners because it sits
+     over it rather than in it. Inert to the pointer throughout, so the player's own clicks and
+     shortcuts land on the player. */
+  .rest {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius);
+    overflow: hidden;
+    pointer-events: none;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear;
+  }
+  .rest.gone {
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear var(--t-med);
   }
 
   .transport {

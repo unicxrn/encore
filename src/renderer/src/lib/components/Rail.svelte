@@ -32,6 +32,7 @@
   } from '../stores/preview-controller'
   import type { ChartTarget } from './Home.svelte'
   import type { PreviewSource } from '../preview/player'
+  import Highway from './Highway.svelte'
 
   /**
    * `onOpenDetail` is the rail's way through to the chart page, and the only one Explore has.
@@ -708,6 +709,13 @@
       <div class="hw">
         <!-- The controller appends `<chart-preview-player>` here; Svelte never renders into it. -->
         <div class="viewport" bind:this={viewportEl}></div>
+        <!-- The still lane, and the answer to what this box shows with nothing playing. It is
+             drawn AFTER the viewport, which is to say over it: the player element that lands in
+             there is opaque, and a picture underneath an opaque player is a picture nobody
+             sees. -->
+        <div class="rest" class:gone={live}>
+          <Highway state={opening ? 'opening' : 'rest'} />
+        </div>
         <span class="hwt mono" aria-hidden="true">{trackLabel}</span>
       </div>
       <div class="transport">
@@ -1145,6 +1153,25 @@
     width: 100%;
     height: 100%;
     display: block;
+  }
+  /* Faded out rather than torn out, which is what the player bar does with its transport and
+     for the same reason: the frame is a fixed aspect and nothing in the column may move when
+     the real highway arrives. Inert to the pointer throughout, so the player element's own
+     clicks and shortcuts land on it and not on a picture lying over it. */
+  .rest {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear;
+  }
+  .rest.gone {
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear var(--t-med);
   }
   .hwt {
     position: absolute;

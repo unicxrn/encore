@@ -1008,3 +1008,78 @@ describe('Rail: the way through to the chart page', () => {
     expect(screen.queryByRole('button', { name: 'All details' })).toBeNull()
   })
 })
+
+/**
+ * The lane the rail draws with nothing playing.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here can see a lane: `highway.test.ts`
+ * checks the geometry to the number and `Highway.svelte.test.ts` checks what the drawing is made
+ * of. What is pinnable here is which of the three states the rail asks for, which is the part
+ * that can be wrong while the drawing is right.
+ */
+describe('Rail: the highway with nothing playing', () => {
+  afterEach(() => {
+    closePreview()
+    viewportMounted.set(false)
+    viewportOwner.set(null)
+  })
+
+  const lane = (): HTMLElement => {
+    const el = document.querySelector('.rail .hw .rest')
+    if (el === null) throw new Error('no resting lane')
+    return el as HTMLElement
+  }
+
+  it('draws a still lane rather than leaving the frame empty', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+
+    expect(lane().classList.contains('gone')).toBe(false)
+    const svg = lane().querySelector('svg.highway')
+    expect(svg?.classList.contains('rest')).toBe(true)
+    expect(svg?.querySelector('.strike')).toBeTruthy()
+    expect(svg?.querySelectorAll('.fret').length).toBeGreaterThan(0)
+  })
+
+  // The lane sits OVER the viewport, not under it: the player element the controller appends
+  // there is opaque, and a picture behind it is a picture nobody sees.
+  it('draws it over the viewport the controller writes into, never inside it', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    const frame = document.querySelector('.rail .hw') as HTMLElement
+    const kids = [...frame.children].map((el) => el.className.split(' ')[0])
+
+    expect(kids.indexOf('rest')).toBeGreaterThan(kids.indexOf('viewport'))
+    expect(document.querySelector('.rail .viewport')?.children).toHaveLength(0)
+  })
+
+  /**
+   * The seconds between pressing Play and the first note, which on a chart fetched from Chorus
+   * and unpacked is several of them. Before this the only sign was a mono OPENING… under the
+   * transport; the lane is the thing being looked at, so the lane is what answers.
+   */
+  it('says it is opening for as long as the chart is being read', async () => {
+    let release: (files: unknown[]) => void = () => {}
+    vi.stubGlobal('encore', {
+      chartReadFiles: vi.fn(() => new Promise((resolve) => (release = resolve)))
+    })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+    await waitFor(() => {
+      if (!lane().querySelector('svg.highway')?.classList.contains('opening')) {
+        throw new Error('lane is not waiting')
+      }
+    })
+    release([])
+  })
+
+  it('gets out of the way once a preview of its own is live', async () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+
+    await waitFor(() => {
+      if (!lane().classList.contains('gone')) throw new Error('lane still over the player')
+    })
+    // Faded rather than removed, so the frame cannot change size when the real highway arrives.
+    expect(document.querySelector('.rail .hw .rest')).toBeTruthy()
+  })
+})

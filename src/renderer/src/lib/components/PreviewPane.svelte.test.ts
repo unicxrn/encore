@@ -208,6 +208,37 @@ describe('PreviewPane hands the player bar a name it can read', () => {
 })
 
 /**
+ * The still lane, which the pane draws for the same reason the rail does: with nothing playing
+ * the viewport is a dark rectangle, and this is the surface a chart page is opened to look at.
+ *
+ * jsdom applies no CSS and computes no layout, so the drawing itself is checked in
+ * `highway.test.ts` and `Highway.svelte.test.ts`. What is pinnable here is that the pane asks
+ * for it, over the element the controller writes into rather than inside it, and gets out of the
+ * way once there is a preview to see.
+ */
+describe('PreviewPane draws the still highway with nothing playing', () => {
+  it('draws a lane over the viewport rather than leaving it empty', () => {
+    renderPane(localRecord())
+    const screenBox = document.querySelector('.stage .screen') as HTMLElement
+    const rest = screenBox.querySelector('.rest') as HTMLElement
+
+    expect(rest.classList.contains('gone')).toBe(false)
+    expect(rest.querySelector('svg.highway .strike')).toBeTruthy()
+    const kids = [...screenBox.children].map((el) => el.className.split(' ')[0])
+    expect(kids.indexOf('rest')).toBeGreaterThan(kids.indexOf('viewport'))
+    expect(document.querySelector('.stage .viewport')?.children).toHaveLength(0)
+  })
+
+  it('gets out of the way once something is playing', async () => {
+    renderPane(localRecord())
+    nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null })
+    await tick()
+
+    expect(document.querySelector('.stage .rest')?.classList.contains('gone')).toBe(true)
+  })
+})
+
+/**
  * The pane shares the chart page's column with the preview rail, and the rail takes 374px of it
  * above the shell's breakpoint. A window at 1121px leaves the page 469px, so the fixed 260px
  * options column this replaced left the highway 191px: a 16:9 video 107px tall.
