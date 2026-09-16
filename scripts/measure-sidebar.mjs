@@ -7,10 +7,9 @@
  *       node_modules/electron/dist/electron scripts/measure-sidebar.mjs \
  *       --ozone-platform=x11 --disable-gpu --disable-software-rasterizer
  *
- * A sibling of `measure-top-bar.mjs` and built the same way, for the reason CLAUDE.md gives: the
- * jsdom tests apply no CSS and compute no layout, so a nav row there is zero pixels wide and no
- * label can run out of room. This runs the built renderer in an offscreen window and reads the
- * geometry back.
+ * A sibling of `measure-top-bar.mjs` and built the same way, for the same reason: the jsdom tests
+ * apply no CSS and compute no layout, so a nav row there is zero pixels wide and no label can run
+ * out of room. This runs the built renderer in an offscreen window and reads the geometry back.
  *
  * The sidebar is a fixed 238px column with 12px of padding either side, which leaves 214px for a
  * row, and a row is an icon, a gap, a label and now a figure. So the questions are:

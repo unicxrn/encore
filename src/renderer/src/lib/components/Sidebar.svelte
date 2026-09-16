@@ -40,10 +40,10 @@
    * The four numbers this nav can carry, and what each one costs to know.
    *
    * The rule they all obey: **a count is drawn only when it is greater than zero.** On every one
-   * of these four, a zero is at least as likely to mean "nothing has looked" as "there is none"
-   * — an unscanned catalog counts no charts, a launch where nobody opened Issues has no report —
-   * and drawing the same glyph for both would be the nav telling the user something it does not
-   * know. An absent count claims nothing, which is the honest thing to claim.
+   * of these four, a zero is at least as likely to mean "nothing has looked" as "there is none".
+   * An unscanned catalog counts no charts; a launch where nobody opened Issues has no report. A
+   * nav drawing the same glyph for both would be telling the user something it does not know, so
+   * it draws none. An absent count claims nothing, which is the honest thing to claim.
    *
    * - `library` is `catalogCount({})`, the same call Home's hero makes, on the same channel. One
    *   indexed `SELECT COUNT(*)`, asked once on mount and again when a library scan stops. Nothing
@@ -687,8 +687,8 @@
 
      Measured rather than assumed (scripts/measure-sidebar.mjs): the row track is 213px and the
      padding, glyph and gap take 46 of them, so a label and a figure share 167px. At the largest
-     figures anyone could reach — 99,999 charts, 9,999 queued — every one of the nine labels is
-     drawn whole, and the tightest, "Asset Studio", still has 87.9px of the 167 spare because it
+     figures anyone could reach (99,999 charts, 9,999 queued) every one of the nine labels is
+     drawn whole, and the longest, "Asset Studio", still has 87.9px of the 167 spare because it
      carries no figure at all. The ellipsis this rule declares has nothing to do yet. */
   .item .label {
     min-width: 0;
