@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { HIGHWAY_HEIGHT, HIGHWAY_WIDTH, highwayShape } from '../highway'
+  import { HIGHWAY_FRET_COLOURS, HIGHWAY_HEIGHT, HIGHWAY_WIDTH, highwayShape } from '../highway'
 
   /**
    * What the lane is doing. `rest` is a still frame; `opening` is the seconds between pressing
@@ -10,19 +10,6 @@
   // Constant, so it is computed once for the life of the module rather than per instance: the
   // lane has no inputs, and both places that draw it draw the same lane at a different size.
   const shape = highwayShape()
-
-  /**
-   * Clone Hero's five frets, in the order `chart-preview` names its five-fret lanes: green, red,
-   * yellow, blue, orange.
-   *
-   * Values rather than custom properties, and here rather than in tokens.css, because they name
-   * the buttons on a controller and not anything in Encore's palette. The red in particular is
-   * the guitar's second fret and not --danger: drawn from that token it would be the app's error
-   * colour saying something it does not mean, and it would move the day the error colour is
-   * retuned. tokens.css is the one source for the scale, and the way to keep that true is to
-   * declare a colour that is not in the scale as what it is instead of inventing a token for it.
-   */
-  const FRETS = ['#4ade80', '#f87171', '#facc15', '#60a5fa', '#fb923c']
 
   // The two gradients are referenced by id, and the rail and the chart page's pane can both be
   // on screen at once. Two elements sharing one id is one gradient between them, so each
@@ -86,7 +73,7 @@
   />
 
   {#each shape.frets as fret, i (i)}
-    <ellipse class="fret" style="stroke: {FRETS[i]}" {...fret} />
+    <ellipse class="fret" style="stroke: {HIGHWAY_FRET_COLOURS[i]}" {...fret} />
   {/each}
 </svg>
 
