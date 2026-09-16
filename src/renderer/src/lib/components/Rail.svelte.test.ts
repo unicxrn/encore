@@ -816,6 +816,22 @@ describe('Rail: the setlist button', () => {
     )
   })
 
+  // The raw `song.ini` text, not the stripped form the title above it is drawn from. Main is what
+  // normalises, and it has to be the only thing that does, or a chart added from Explore and the
+  // same chart added from Installed could become two rows.
+  it('hands main the chart text raw, markup and all', async () => {
+    const setlistsSetEntry = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    setlists.set([SETLIST])
+    const marked = record({ charter: '<color=#8200f3>SirMonkfish</color>' })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: marked } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect(setlistsSetEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ charter: '<color=#8200f3>SirMonkfish</color>' })
+    )
+  })
+
   it('offers to name one when there are none, rather than an empty list', async () => {
     render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     await openPanel()

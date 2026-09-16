@@ -161,6 +161,27 @@ describe('Setlists: a chart the library does not hold', () => {
     await waitFor(() => expect(document.querySelector('.s-len')?.textContent).toBe('—'))
   })
 
+  // The mutation this exists for: a total that counted a held chart with no length as zero would
+  // read as a running time rather than as a partial one, and nothing else on the screen would say
+  // the number was short.
+  it('times nothing at all when the charts it holds carry no length', async () => {
+    setlists.set([list('a', 'Friday night', ['Everlong', 'Painkiller'])])
+    stubBridge({
+      setlistsCharts: vi
+        .fn()
+        .mockResolvedValue([record('/lib/Everlong', null), record('/lib/Painkiller', null)])
+    })
+    render(Setlists)
+    const summary = await waitFor(() => {
+      const el = document.querySelector('.s-summary')
+      expect(el?.textContent).toContain('2 charts')
+      return el
+    })
+    expect(summary?.textContent).not.toContain('0:00')
+    expect(summary?.textContent).not.toContain('of music')
+    expect(summary?.textContent).not.toContain('timed')
+  })
+
   it('offers no preview for an entry with no chart behind it', async () => {
     setlists.set([list('a', 'Friday night', ['Painkiller'])])
     stubBridge({ setlistsCharts: vi.fn().mockResolvedValue([null]) })

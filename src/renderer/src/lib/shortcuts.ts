@@ -232,11 +232,12 @@ export function matchShortcut(e: KeyChord): ShortcutId | null {
     if (e.altKey || e.shiftKey) return null
     if (e.key.toLowerCase() === 'k') return 'focus-search'
     const digit = Number(/^Digit([1-9])$/.exec(e.code)?.[1])
-    // Bounded by SHORTCUT_DIGITS and not by the array's length: the tenth view has no digit, and
-    // a bound that followed the array would silently give it one the moment an eleventh appeared.
-    if (digit >= 1 && digit <= Math.min(SHORTCUT_DIGITS, SHORTCUT_VIEWS.length)) {
-      return `go:${SHORTCUT_VIEWS[digit - 1]}`
-    }
+    // Bounded by SHORTCUT_DIGITS and not by the array's length, which used to be the same number
+    // and is not any more: there are ten views and nine digits, so a bound that followed the array
+    // would be claiming a tenth key exists. The `[1-9]` above says the same thing a second time,
+    // and both are kept: the regex is what stops `Digit0`, and this is what the sheet is generated
+    // from, so they have to agree and only one of them can be read as the rule.
+    if (digit >= 1 && digit <= SHORTCUT_DIGITS) return `go:${SHORTCUT_VIEWS[digit - 1]}`
     return null
   }
 

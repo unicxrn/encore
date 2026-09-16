@@ -357,8 +357,8 @@ const PANEL = `(() => {
 
   // The probe that used to be here cloned a second icon button into the row to price the
   // add-to-setlist button before it existed. It is gone because the button is here now and
-  // `actions` above measures the real thing: at 1280x800 the action is 153px with all three
-  // drawn, which is exactly what the clone predicted. A fourth icon button would want the
+  // the actions list above measures the real thing: at 1280x800 the action is 153px with all
+  // three drawn, which is exactly what the clone predicted. A fourth icon button would want the
   // probe back; nothing has asked for one.
 
   return {
