@@ -1,6 +1,12 @@
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store'
 import { searchCharts, sortFor, type ChartData } from '../api/enchor'
-import { advancedCount, cloneAdvanced, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
+import {
+  advancedBody,
+  advancedCount,
+  cloneAdvanced,
+  emptyAdvanced,
+  type AdvancedQuery
+} from '../api/advanced'
 import { globalQuery } from './global-search'
 
 export interface SearchConfig {
@@ -200,6 +206,19 @@ export interface SearchStore {
    * strings mean that end is not bounded, exactly as a blank box in the panel does.
    */
   setIntensity: (min: string, max: string) => void
+  /**
+   * Edits the applied advanced query in place from the filter header, and re-runs.
+   *
+   * The header's band and its chips are views of fields the panel already holds, so neither one
+   * may keep a value of its own: `edit` is applied to the applied query and to the draft
+   * together, which is what stops a chip and a panel row from disagreeing about one filter.
+   *
+   * The draft takes the same edit on top of what it is holding rather than being replaced, so a
+   * form that was filled in and never searched keeps its typing. Nothing happens at all when the
+   * edit would send the same request body, because that is one of the 50 requests a minute the
+   * API allows spent on the rows already on screen.
+   */
+  setAdvancedField: (edit: (query: AdvancedQuery) => void) => void
   /** Records what the panel holds. Changes no results; `applyAdvanced` is what searches. */
   setAdvancedDraft: (next: AdvancedQuery) => void
   /** Runs the draft as the query. */
@@ -492,14 +511,27 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   }
 
   function setIntensity(min: string, max: string): void {
+    setAdvancedField((query) => {
+      query.numbers.minIntensity = min
+      query.numbers.maxIntensity = max
+    })
+  }
+
+  function setAdvancedField(edit: (query: AdvancedQuery) => void): void {
     const applied = get(advancedApplied)
-    if (applied.numbers.minIntensity === min && applied.numbers.maxIntensity === max) return
-    // Written into the draft as well as the applied query, so an open panel shows the band the
-    // header just set rather than the one it used to hold. `draftReset` is what tells the panel
-    // to re-seed the local copy its inputs are bound to; see `advancedDraftReset`.
-    advancedDraft.set(withIntensity(get(advancedDraft), min, max))
+    const next = cloneAdvanced(applied)
+    edit(next)
+    // Compared as request bodies rather than as forms, the way the panel decides whether it is
+    // holding an unsearched edit: an edit the endpoint would not be told about is not a question.
+    if (JSON.stringify(advancedBody(next)) === JSON.stringify(advancedBody(applied))) return
+    // Written into the draft as well as the applied query, so an open panel shows what the header
+    // just set rather than what it used to hold. `draftReset` is what tells the panel to re-seed
+    // the local copy its inputs are bound to; see `advancedDraftReset`.
+    const draft = cloneAdvanced(get(advancedDraft))
+    edit(draft)
+    advancedDraft.set(draft)
     draftReset.update((n) => n + 1)
-    applyQuery(withIntensity(applied, min, max))
+    applyQuery(next)
   }
 
   function toggleExpanded(songId: number): void {
@@ -683,6 +715,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     setFilters,
     setSort,
     setIntensity,
+    setAdvancedField,
     setAdvancedDraft,
     applyAdvanced,
     clearAdvanced,
