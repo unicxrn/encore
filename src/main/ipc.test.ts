@@ -26,12 +26,23 @@ const APP_UPDATE_STATUS: AppUpdateStatus = {
   state: { kind: 'idle' }
 }
 
+const FAVOURITES = [
+  {
+    name: 'Everlong',
+    artist: 'Foo Fighters',
+    charter: 'GuitarHero',
+    addedAt: '2026-09-16T00:00:00.000Z'
+  }
+]
+
 const deps = (): IpcDeps => ({
   getSettings: vi.fn().mockReturnValue({ downloadFormat: 'sng' }),
   setSettings: vi.fn(),
   queryCharts: vi.fn().mockReturnValue([]),
   countCharts: vi.fn().mockReturnValue(0),
   chartsExistByMeta: vi.fn().mockReturnValue([true]),
+  listFavourites: vi.fn().mockReturnValue(FAVOURITES),
+  setFavourite: vi.fn().mockReturnValue(FAVOURITES),
   chartFacets: vi.fn().mockReturnValue({ artists: [], genres: [], charters: [], years: [] }),
   duplicateCharts: vi.fn().mockReturnValue({
     identical: [],
@@ -507,6 +518,38 @@ describe('registerIpc', () => {
       ipc.invoke(IPC.catalogExistsByMeta, [{ name: 'Song', artist: 'Artist' }])
     ).rejects.toThrow()
     expect(d.chartsExistByMeta).not.toHaveBeenCalled()
+  })
+
+  it('routes favourites:list to deps.listFavourites', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.favouritesList)).toEqual(FAVOURITES)
+    expect(d.listFavourites).toHaveBeenCalled()
+  })
+  it('routes favourites:set to deps.setFavourite and answers with the list', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const req = { name: 'Everlong', artist: 'Foo Fighters', charter: null, favourite: true }
+    expect(await ipc.invoke(IPC.favouritesSet, req)).toEqual(FAVOURITES)
+    expect(d.setFavourite).toHaveBeenCalledWith(req)
+  })
+  it('rejects a favourites:set that does not say which way at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.favouritesSet, { name: 'Everlong' })).rejects.toThrow()
+    expect(d.setFavourite).not.toHaveBeenCalled()
+  })
+  it('rejects a favourites:set carrying text no chart could have at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.favouritesSet, { name: 'x'.repeat(401), favourite: true })
+    ).rejects.toThrow()
+    expect(d.setFavourite).not.toHaveBeenCalled()
   })
 
   it('routes catalog:rescan-charts to deps and returns the refreshed rows', async () => {

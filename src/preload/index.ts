@@ -9,6 +9,7 @@ import type {
   Settings
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
+import type { Favourite } from '../shared/favourites'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from '../main/assets/art'
 import type { LibraryCandidate } from '../main/catalog/detect-library'
@@ -90,6 +91,19 @@ const api = {
   // current filter: narrowing the lists as filters are applied would take options away the moment
   // they were used.
   catalogFacets: (): Promise<CatalogFacets> => ipcRenderer.invoke(IPC.catalogFacets),
+  // Every chart the user hearted. Read once on mount and kept as a set, because the rail asks
+  // about whatever chart is in front of it on every navigation and a call per chart would be a
+  // round trip to answer a question the renderer already has the data for.
+  favouritesList: (): Promise<Favourite[]> => ipcRenderer.invoke(IPC.favouritesList),
+  // Heart a chart or un-heart it, answering with the list as it now stands. The three fields are
+  // the chart's own, raw: main strips the markup and decides what is stored, so two screens
+  // hearting the same chart cannot write two rows. See shared/favourites.ts.
+  favouritesSet: (req: {
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    favourite: boolean
+  }): Promise<Favourite[]> => ipcRenderer.invoke(IPC.favouritesSet, req),
   // What the library holds more than one copy of, in three separate relationships: the same
   // chart file installed twice, several versions of one charter's chart, and the same song by
   // different charters. The third is not a fault and is labelled so. Read straight out of the

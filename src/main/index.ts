@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 import { ENCORE_TMP_DIR, ENCHOR_FILES_URL } from '../shared/constants'
 import { IPC } from '../shared/ipc-contract'
 import { resolveChartFolderName } from '../shared/naming'
+import { favouriteKey, isFavouritable } from '../shared/favourites'
 import type { ChartRecord } from '../shared/schemas'
 import { isUnderLibrary } from './assets/library-guard'
 import { sweepOrphanArt } from './catalog/art-cache'
@@ -19,6 +20,7 @@ import { openCatalog, type CatalogDb } from './catalog/db'
 import { findDuplicates } from './catalog/duplicates'
 import { withCopySizes } from './catalog/chart-size'
 import { removeChart } from './catalog/remove-chart'
+import { listFavourites, setFavourite } from './catalog/favourites'
 import {
   chartFacets,
   chartsExistByMeta,
@@ -535,6 +537,19 @@ function wireIpc(): {
     countCharts: (f) => countCharts(db, f),
     chartsExistByMeta: (keys) => chartsExistByMeta(db, keys),
     chartFacets: () => chartFacets(db),
+    listFavourites: () => listFavourites(db),
+    // Normalised here rather than in the renderer, so the row stored is the same row whichever
+    // screen the heart was pressed on: Explore hands over the raw `song.ini` text a chart from
+    // Chorus carries, Installed hands over the catalog's copy of it, and `favouriteKey` is the one
+    // place that decides what those two have in common. A key that names no chart is refused
+    // rather than stored: see `isFavouritable`.
+    setFavourite: (req) => {
+      const key = favouriteKey(req)
+      if (!isFavouritable(key)) {
+        throw new Error('A chart with no name of its own cannot be favourited.')
+      }
+      return setFavourite(db, key, req.favourite)
+    },
     // Sizes are added on top of the query rather than inside it, and only for the tier that
     // offers a removal: the report itself never touches the filesystem. See chart-size.ts.
     duplicateCharts: () => withCopySizes(findDuplicates(db)),
