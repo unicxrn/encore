@@ -945,28 +945,36 @@
             <span class="thumb placeholder" aria-hidden="true"></span>
           {/if}
           <span class="song">
-            <span class="title-line">
-              <!-- title fallback is the file/folder name, not the full path: paths are unreadable
-                   in a list, and a chart can legitimately have no parsed title. -->
-              <span class="title" title={chart.path}>
-                {chartTitle(chart)}
-              </span>
+            <!-- title fallback is the file/folder name, not the full path: paths are unreadable
+                 in a list, and a chart can legitimately have no parsed title. Alone on its line
+                 now: everything that used to sit beside it is a chip in the band below, so the
+                 name gets the whole of the column on every row rather than whatever four
+                 sometimes-present chips leave it. -->
+            <span class="title" title={chart.path}>
+              {chartTitle(chart)}
+            </span>
+            <span class="meta">{metaLine(chart)}</span>
+            <!-- The band under the subtitle, which is Explore's: what the chart is, rather than
+                 what it is called. Length, the two flags this list can raise, and the charter.
+                 The length and the charter were tracks at the far end of the row until this
+                 band existed, which is where a column of grey text goes to be read last. -->
+            <span class="badges">
+              <span class="badge mono length">{msToTime(chart.songLength)}</span>
               <!-- Only for an `alternate` verdict already in main's memory. `current` earns no ink
                    in a list, and a chart nobody has checked must not look checked. The words are
                    Detail's: "different version", never "newer", because nothing in the Chorus API
                    orders two uploads of a chart. -->
               {#if $verdicts.get(chart.path)?.kind === 'alternate'}
                 <span
-                  class="badge mono"
+                  class="badge mono version"
                   title="Chorus Encore has a different version of this chart. Open it to compare."
                 >
                   DIFFERENT VERSION
                 </span>
               {/if}
-              <!-- Inside the title line rather than as a column of its own: the grid has no room
-                   to spare, and a seventh track would be empty down its whole length for the
-                   many users with no play data at all. Absent when there is no record, so it
-                   costs nothing on a row that has none. -->
+              <!-- In the band rather than as a column of its own: a seventh track would be empty
+                   down its whole length for the many users with no play data at all. Absent when
+                   there is no record, so it costs nothing on a row that has none. -->
               {#if play}
                 <span class="badge mono plays" title={play.title}>
                   {#if play.count === null}
@@ -977,10 +985,9 @@
                   {/if}
                 </span>
               {/if}
+              <span class="badge mono charter">{stripRichText(chart.charter)}</span>
             </span>
-            <span class="meta">{metaLine(chart)}</span>
           </span>
-          <span class="charter">{stripRichText(chart.charter)}</span>
           <!-- One grid child: the each block stays inside this span so the row's children keep
                matching .row's tracks. -->
           <span class="diffs">
@@ -1009,11 +1016,6 @@
               ></span>
             {/if}
           </span>
-          <!-- Length is the one sortable field with nowhere else to be: the other five are the
-               title, the charter, and the artist, album and year on the line under the title. It
-               is also the first thing the row gives up when the column narrows, because it is the
-               only one of the six the chart page one click away also carries. -->
-          <span class="len mono">{msToTime(chart.songLength)}</span>
         </button>
         <!-- Puts the chart in the preview column without opening it. The column carries the
              highway, the cover and the health list, so this is how a row gets previewed
@@ -1327,34 +1329,56 @@
     overflow-y: auto;
     border-top: 1px solid var(--hairline);
   }
-  /* Six tracks: cover, song, charter, difficulty, health, length. Explore's row is nine, and the
-     three it has that this one does not are a checkbox, an index and a Download button. What the
-     two share is the four in the middle, in the same order, so a chart reads the same in both.
+  /* Four tracks: cover, song, difficulty, health. Explore's row is seven, and the three it has
+     that this one does not are a checkbox, an index and a Download button. What the two share is
+     the four, in the same order, so a chart reads the same in both.
 
-     `minmax(0, …)` on both text tracks rather than a bare `1fr` and a bare `130px`: a grid
-     track's automatic minimum is the widest thing in it, which is what scrolls a list sideways
-     under a long title. The old row avoided that with `min-width: 0` on `.song` alone and paid
-     the other price for it, measured before this rewrite: at a 1121px window, where this column
-     is 509px, the title box was 0px wide on all thirty rows and every one of them was an
-     ellipsis. Folding the row is what fixes that; see the two container queries below.
+     The charter and the length used to be tracks of their own at the far end of the row. They
+     are chips in a band under the subtitle now, which is where Explore puts them, and the two
+     tracks going is what pays for the rest of this row. A 40px cover set the row's height at
+     54px; with a band the text is 56px on its own, so the row is 71px and a 52px cover sits
+     inside it costing nothing. The band is the whole price and the cover rides along at zero.
+
+     What it costs, in the unit the user meets it in: seven whole rows in an 800px window rather
+     than eight at 960 and 1120, six rather than seven at 1280, seven rather than nine at 1600
+     and seven rather than ten at 1920. The row is one height now where it used to be three,
+     54px at the two widest and 63px at the rest, which is most of what the widest windows lost.
+
+     What it bought is wider than what the band cost tall. The song column, `VIEW=installed
+     scripts/measure-explore-row.mjs` at the six widths the shell supports, before and after:
+
+       960   386 to 378      1120  546 to 538      1121  282 to 270
+       1280  303 to 295      1600  431 to 615      1920  751 to 935
+
+     The first four are eight to twelve pixels of gap and gutter; the last two are the 184px the
+     two dropped tracks were holding. The title inside that column is the real move: it was
+     sharing its line with two chips and measured 46px at its tightest on a row carrying both,
+     and it is the whole column on every row now. No width ellipsises a title that did not
+     ellipsise before.
+
+     `minmax(0, 1fr)` on the song rather than a bare `1fr`: a grid track's automatic minimum is
+     the widest thing in it, which is what scrolls a list sideways under a long title. The
+     charter track that used to sit beside it needed the same treatment; there is no second text
+     track to protect now.
 
      124px of difficulty: 3 groups of 34px plus 2 gaps of 9px is 120px, and the four spare pixels
      are the margin for the subpixel width of a border-boxed circle, which is Explore's own
-     arithmetic at 210px for five. It was 136px when the three groups were letters, so the ring
-     form gave the song 12px back rather than costing it anything.
+     arithmetic at 210px for five.
 
-     Five groups here would want 210px, and `VIEW=installed scripts/measure-explore-row.mjs`
-     priced that at every width the shell supports: the song column goes 386 to 300 at a 960px
-     window, 546 to 460 at 1120, 303 to 217 at the default 1280, 431 to 345 at 1600 and 751 to
-     665 at 1920, which is 74px off the title at every one of them. At 1120 the subtitle crosses:
-     0 of 30 rows ellipsised at 546px, 30 of 30 at 460px. Explore pays none of that because its
-     row folds the difficulty onto a line of its own below 800px of column, and this row does not
-     fold until 559px; the 1121px window is the one width where five would have been free here,
-     and a row that draws five instruments at one width and three at another is a row that says
-     different things about the same chart. */
+     Three parts rather than Explore's five, and the band does not change that answer. Five
+     groups want 210px, which is 86px more, and it comes off the song at every width the
+     difficulty sits beside it. Measured on this row, with the band already in it: 378 to 292 at
+     960, 538 to 452 at 1120, 295 to 209 at 1280, 615 to 529 at 1600 and 935 to 849 at 1920. The
+     title crosses at 960, 0 of 30 rows ellipsised against 10 of 30, and 209px at the default
+     1280px window is a list of ellipses.
+
+     1121 is the one width where five would be free, because the difficulty is on a line of its
+     own there and the song keeps its 270px either way. That is an argument for five at 509px of
+     column and nowhere else, and a row that draws five instruments at one width and three at
+     another is a row that says different things about the same chart. */
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 130px) 124px 10px 46px;
+    grid-template-columns: 52px minmax(0, 1fr) 124px 10px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1383,9 +1407,10 @@
   /* Cover and placeholder share the box so a row's height and the column below it don't
      shift depending on whether art was cached. */
   .thumb {
-    width: 40px;
-    height: 40px;
-    border-radius: 5px;
+    width: 52px;
+    height: 52px;
+    /* --radius-sm rather than the 5px this was: 5px is not a step in the scale. */
+    border-radius: var(--radius-sm);
     object-fit: cover;
     background: var(--surface-2);
   }
@@ -1401,15 +1426,6 @@
   /* The row's three levels. They are separated on all three axes at once (size,
      weight and colour) because size alone at these steps (14 against 13) is not
      enough to tell a song from its artist at a glance. */
-  /* The title and, when there is one, the badge, on one line. The title gives way first: it
-     ellipsises, the badge does not shrink. Sized on the title so a badged row is exactly as
-     tall as its neighbours; the badge's box is kept under that height below. */
-  .title-line {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
   .title {
     font-size: var(--fs-body);
     font-weight: 600;
@@ -1419,41 +1435,64 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The band under the subtitle, drawn the way Explore's is, for the reason Explore's is drawn
+     that way: one line that does not wrap, because a band that takes two lines on the rows
+     carrying a long charter and one on the rest is a list of two row heights. The charter is
+     what gives, and an ellipsis on a name is what an ellipsis is for. `overflow: hidden` is the
+     belt: a row carrying both flags at the narrowest column has more band than it holds even
+     with the charter at nothing, and clipping that against the cell is better than painting it
+     over the difficulty beside it. */
+  .badges {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  /* The only chip in the band that gives way, and why it is this one: the length is four
+     characters on every row, and the two flags are fixed words, so the charter is the single
+     field here with no bound on it.
+
+     Three classes on purpose. `.badge.mono` below sets `flex-shrink: 0` and is declared after
+     this, so a two-class selector here ties with it and loses, and the charter would sit at its
+     natural width and push the band past its cell. Explore's own band gets away with two
+     because the rule it is racing there is a lone `.badge`. */
+  .badges .badge.charter {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* Micro-label, in the same mono caption the difficulty codes use, with a hairline box so it
-     reads as a chip rather than a stray word. --lh-flat plus 1px padding and border comes to
-     16px, under the title's 17.5px (14px at --lh-tight), so the line, and the row, never grow.
-     --accent-text rather than --text-3: it is the one thing in the list that asks for a look, and
-     that token is the readable accent (7.3:1 on --bg). Both classes in the selector because the
-     `.mono` rule below sets --text-3 and is declared later; at equal specificity it won, and the
-     badge rendered grey on screen while this comment promised violet. */
+     reads as a chip rather than a stray word. --lh-tight and no vertical padding comes to 17px,
+     which is Explore's chip to the pixel, so a chart met in both lists reads the same in both. */
   .badge.mono {
-    flex: none;
-    line-height: var(--lh-flat);
-    padding: 1px 5px;
+    flex-shrink: 0;
+    line-height: var(--lh-tight);
+    padding: 0 4px;
     border: 1px solid var(--hairline);
     border-radius: 3px;
-    color: var(--accent-text);
+    color: var(--text-3);
     white-space: nowrap;
   }
-  /* Quieter than the version badge above, and declared after it so that at equal specificity
-     this wins the colour. The version badge is asking for a decision; a play count is only
-     telling you something, and two accent chips on one line would make neither of them stand
-     out. Same box, so the row's height is unchanged either way. */
-  .badge.plays {
-    color: var(--text-3);
+  /* --accent-text rather than --text-3: the different-version flag is the one thing in this
+     list that asks for a look, and that token is the readable accent (7.3:1 on --bg). Three
+     classes in the selector because `.badge.mono` above and the `.mono` rule below both set
+     --text-3 and the second of them is declared later; at equal specificity it won once
+     already, and the badge rendered grey on screen while its comment promised violet.
+     The other three chips in the band stay quiet: the flag is asking for a decision and they
+     are only telling you something, and four accent chips on one line would make none of them
+     stand out. */
+  .badge.mono.version {
+    color: var(--accent-text);
   }
   /* Artist, album and genre on one line. Kept to one line and one size: the row is two lines
      tall and that is what holds it at its current height. */
   .meta {
     font-size: var(--fs-secondary);
     line-height: var(--lh-tight);
-    color: var(--text-2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .charter {
-    font-size: var(--fs-secondary);
     color: var(--text-2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1494,9 +1533,6 @@
   .dot.broken {
     border-color: var(--danger);
     background: var(--danger);
-  }
-  .len {
-    text-align: right;
   }
   .more {
     display: block;
@@ -1582,85 +1618,47 @@
     padding: 3px 5px;
     color: var(--text-3);
   }
-  /* What the row gives up when the column it lives in is narrow, and why this one.
-     The length is the only field here that is also on the chart Detail one click away, and it
-     is the only one that goes. Everything else is either the chart's identity or something the
-     filter bar can select on, and a filter on something the row does not show is a filter on
-     something the user cannot see.
+  /* The one width where the row has to give something up, and what it gives.
 
-     899px is Explore's breakpoint, kept rather than re-derived: the two lists sit in the same
-     column and folding at two different widths would make them look like two apps as the window
-     moves. Below it the row is two lines, the cover spans both, the charter drops under the
-     song, and the difficulty and the health mark stay as columns the eye can run down.
+     Above it the four tracks hold on one line: the charter and the length are chips inside the
+     song column now rather than tracks beside it, so the 899px fold this row used to make, and
+     the second line it made there, are both gone. Explore still folds at 799px because its row
+     carries three tracks this one does not.
+
+     559px of column is a 1121px window with the rail back in it, the narrowest this list is
+     ever asked to be, and it is not the smallest window. The row's own two buttons take 91px of
+     it before the grid sees any, so the difficulty goes under the song rather than beside it:
+     four tracks on one line would leave the song 136px, against 270px folded. The fold is what
+     makes the row 101px at this one width, where it is 70px everywhere else.
+
+     The health mark stays a column of its own rather than joining that line. It is the one
+     thing in the row that is absent on most charts, and a mark that moves depending on what is
+     beside it is a mark the eye has to look for rather than glance at.
 
      Every child placed by hand rather than two placed and the rest left to fall where they may,
      which is the trap Browse.svelte's own note records: auto-placement resolves an item with a
-     definite row separately from one with neither, so six children into four tracks has no
+     definite row separately from one with neither, so four children into three tracks has no
      reading that can be left to inference. */
-  @container results (max-width: 899px) {
+  @container results (max-width: 559px) {
     .row {
-      grid-template-columns: 44px minmax(0, 1fr) 124px 10px;
+      grid-template-columns: 52px minmax(0, 1fr) 10px;
       grid-template-rows: auto auto;
-      row-gap: 1px;
-    }
-    .row .len {
-      display: none;
+      row-gap: 4px;
     }
     .row .thumb {
       grid-area: 1 / 1 / 3 / 2;
-      width: 44px;
-      height: 44px;
+      /* The cover no longer spans a one-line row, so it is pinned to the top of its cell
+         rather than floating in the middle of one. */
+      align-self: start;
     }
     .row .song {
       grid-area: 1 / 2 / 2 / 3;
     }
-    .row .charter {
+    .row .diffs {
       grid-area: 2 / 2 / 3 / 3;
     }
-    .row .diffs {
+    .row .health {
       grid-area: 1 / 3 / 3 / 4;
-    }
-    .row .health {
-      grid-area: 1 / 4 / 3 / 5;
-    }
-  }
-  /* The narrowest this column ever gets, which is 509px at a 1121px window: the first width at
-     which the 374px rail appears and takes its share back from a column that had 882px one pixel
-     earlier. Four tracks do not fit in it once the row's two buttons have taken theirs, so two
-     lines become three and the difficulty moves under the charter.
-
-     The health mark stays a column of its own rather than joining that line. It is the one thing
-     in the row that is absent on most charts, and a mark that moves depending on what is beside
-     it is a mark the eye has to look for rather than glance at.
-
-     This is the one place the ring form costs anything. Everywhere else the difficulty sits
-     beside text that is taller than it is, so a group going from roughly 12px tall to 27px
-     changes no row's height; here it has a line to itself and the row went from 79px to 91px,
-     measured at a 1121px window. That is the whole of the price, and it is paid over the fifty
-     pixels of window width where this column is 559px or less. The alternative was drawing the
-     letters back at this one width, which would make a chart's row say the same thing two
-     different ways depending on how wide the window happens to be. */
-  @container results (max-width: 559px) {
-    .row {
-      grid-template-columns: 40px minmax(0, 1fr) 10px;
-      grid-template-rows: auto auto auto;
-    }
-    .row .thumb {
-      grid-area: 1 / 1 / 4 / 2;
-      width: 40px;
-      height: 40px;
-    }
-    .row .song {
-      grid-area: 1 / 2 / 2 / 3;
-    }
-    .row .charter {
-      grid-area: 2 / 2 / 3 / 3;
-    }
-    .row .diffs {
-      grid-area: 3 / 2 / 4 / 3;
-    }
-    .row .health {
-      grid-area: 1 / 3 / 4 / 4;
     }
   }
   .confirm {
