@@ -430,8 +430,13 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
   const view = process.env.VIEW || 'list'
+  // Exact text first, then the same word with something after it. The sidebar's nav items carry
+  // a count inside the button now, so 'Installed' is 'Installed 30' to `textContent` and an
+  // exact match waited forty seconds for a button that was on screen the whole time. The layout
+  // toggles below are still exact, and they match first.
   const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
+    `([...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')` +
+    ` || [...document.querySelectorAll('button')].find(b => /^${label}\\b/.test(b.textContent.trim())))`
 
   const nav = view === 'installed' ? 'Installed' : 'Explore'
   await waitFor(win, named(nav))
