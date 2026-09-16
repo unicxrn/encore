@@ -1,3 +1,24 @@
+<script lang="ts" module>
+  import { writable } from 'svelte/store'
+
+  /**
+   * Whether the list leaves out the charts already installed.
+   *
+   * Module-scoped for the reason `browseSearch` is: this view is remounted by every navigation,
+   * and a toggle held per instance would come back off every time the user looked at a chart and
+   * came back. It is not in the search store because it narrows nothing that was asked of Chorus:
+   * the answer is the same either way, and what changes is which of its rows are drawn.
+   *
+   * Not persisted either. It is the answer to "what is left for me here", which is a question
+   * about this visit, and a filter that silently outlives the session is a list that looks wrong
+   * the next time it is opened.
+   *
+   * Exported for the same reason `browseSearch` is reachable from outside: a singleton one test
+   * leaves set is the next test's first paint, so the suite has to be able to put it back.
+   */
+  export const hideOwned = writable(false)
+</script>
+
 <script lang="ts">
   import { tick } from 'svelte'
   import { get } from 'svelte/store'
@@ -365,6 +386,61 @@
   // would be a second place for it to be wrong. What the queue cannot know is
   // what an earlier session downloaded, which is exactly what `inLibraryIds`
   // answers, so that is the one thing left out here.
+  /**
+   * The groups as the list draws them, which is all of them until Hide owned is on.
+   *
+   * A group is a song and its alternate versions, and ownership is per chart, so hiding cannot
+   * work a group at a time: the case that matters is owning one version of a song and wanting
+   * the others. What is dropped is the owned charts, and the first version left standing becomes
+   * the one the row is drawn for. A group with nothing left disappears.
+   *
+   * `songId` is what the {#each} keys on and every chart in a group shares it, so promoting an
+   * alternate does not re-key the row; it re-draws it.
+   */
+  const shownGroups = $derived(
+    $hideOwned
+      ? $groups.flatMap((group) => {
+          const kept = [group.primary, ...group.others].filter((c) => !inLibraryIds.has(c.chartId))
+          return kept.length === 0 ? [] : [{ primary: kept[0], others: kept.slice(1) }]
+        })
+      : $groups
+  )
+
+  /** How many loaded charts Hide owned is keeping off the screen, for the line that says so. */
+  const hiddenCount = $derived(
+    $hideOwned ? $results.length - shownGroups.reduce((n, g) => n + 1 + g.others.length, 0) : 0
+  )
+
+  /**
+   * Every chart the user can currently point at: the shown primaries, and the alternates of the
+   * groups that are open. A collapsed group's alternates are not on screen, which is the same
+   * rule `deselectAlternates` enforces in the store.
+   */
+  const onScreen = $derived(
+    new Set(
+      shownGroups.flatMap((g) => [
+        g.primary.chartId,
+        ...(g.primary.songId !== null && $expanded.has(g.primary.songId)
+          ? g.others.map((c) => c.chartId)
+          : [])
+      ])
+    )
+  )
+
+  /**
+   * Hiding a chart takes its checkbox off the screen, so anything ticked among the hidden ones
+   * would leave the selection bar counting rows nobody can see and a bulk download fetching a
+   * chart the user cannot point at. The same rule collapsing a group already follows, arrived at
+   * from the other direction. Every chart this drops is one Encore had already refused to
+   * download, so nothing that would have been fetched is lost.
+   */
+  $effect(() => {
+    if (!$hideOwned) return
+    for (const chartId of $selected) {
+      if (!onScreen.has(chartId)) search.toggleSelected(chartId)
+    }
+  })
+
   const picked = $derived($results.filter((c) => $selected.has(c.chartId)))
   const toQueue = $derived(picked.filter((c) => !inLibraryIds.has(c.chartId)))
   const alreadyOwned = $derived(picked.length - toQueue.length)
@@ -420,30 +496,88 @@
   }
 
   /**
-   * The three parts a row draws pips for, and the only three.
+   * The five parts a row draws, and the only five.
    *
    * Chorus returns thirteen `diff_*` fields and the matrix can list ten instruments, but a row
-   * is read by scanning down a column and a column only exists if every row has it. Ten would
-   * be a wall; three fixed ones are three columns the eye can follow. Keys, vocals and the
-   * six-fret variants are in the chart Detail, where there is room to be complete.
+   * is read by scanning down a column and a column only exists if every row has it. Thirteen
+   * would be a wall. These five are the band Clone Hero is played in and the five the approved
+   * design draws: the six-fret variants and the co-op parts are controller and seating
+   * arrangements rather than instruments, and they stay in the chart page's matrix, which has a
+   * column per row and room to be complete.
    *
-   * The same three Installed shows, in the same order, so a chart looks the same in both lists.
+   * Installed still shows three. That is not this list disagreeing with it: Explore's row folds
+   * the difficulty onto a line of its own below 800px and Installed's does not, so the two have
+   * different room, and Installed is the list of charts you already chose rather than the one
+   * you are choosing from.
    */
   const ROW_PARTS: readonly { key: string; label: string }[] = [
     { key: 'guitar', label: 'Guitar' },
     { key: 'bass', label: 'Bass' },
-    { key: 'drums', label: 'Drums' }
+    { key: 'drums', label: 'Drums' },
+    { key: 'keys', label: 'Keys' },
+    { key: 'vocals', label: 'Vocals' }
   ]
 
   function tierOf(chart: ChartData, key: string): number | null {
     if (key === 'bass') return chart.diff_bass
     if (key === 'drums') return chart.diff_drums
+    if (key === 'keys') return chart.diff_keys
+    if (key === 'vocals') return chart.diff_vocals
     return chart.diff_guitar
   }
 
-  /** scan-chart's reading of which tracks the chart contains, empty when it never read it. */
+  /**
+   * scan-chart's reading of which tracks the chart contains, empty when it never read it.
+   *
+   * Vocals is appended rather than read out of the list, because it is never in the list: the
+   * scan counts playable note tracks and a lyric track is not one, which is why the chart page's
+   * matrix has no vocals row either. `hasVocals` is the same scan's answer to the same question
+   * for that one track, so a chart with lyrics reports vocals present and one without reports it
+   * absent, which is what the ring beside the pips is for.
+   */
   function partsOf(chart: ChartData): readonly string[] {
-    return chart.notesData?.instruments ?? []
+    const scanned = chart.notesData?.instruments ?? []
+    if (!chart.notesData?.hasVocals) return scanned
+    return scanned.includes('vocals') ? scanned : [...scanned, 'vocals']
+  }
+
+  /**
+   * Which difficulties the chart was written at, across every instrument it has.
+   *
+   * The union rather than one row per instrument: the chart page's matrix answers per part, and
+   * what a row has space for is the one question someone scanning a list asks, which is whether
+   * there is anything here below expert. Read off `noteCounts`, which is scan-chart's own count
+   * of notes on each track, so a difficulty declared in the metadata but empty of notes does not
+   * count as charted.
+   *
+   * Null when the chart was never scanned. A chart with no note data is not a chart with no
+   * difficulties, and a badge cannot say "unknown" in four characters.
+   */
+  const DIFF_LETTERS: readonly { key: string; letter: string; word: string }[] = [
+    { key: 'easy', letter: 'E', word: 'easy' },
+    { key: 'medium', letter: 'M', word: 'medium' },
+    { key: 'hard', letter: 'H', word: 'hard' },
+    { key: 'expert', letter: 'X', word: 'expert' }
+  ]
+
+  function spreadOf(chart: ChartData): { text: string; title: string } | null {
+    const counts = chart.notesData?.noteCounts ?? []
+    const present = DIFF_LETTERS.filter((d) =>
+      counts.some((c) => c.difficulty === d.key && c.count > 0)
+    )
+    if (present.length === 0) return null
+    const words = present.map((d) => d.word)
+    const listed =
+      words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+    return {
+      // The one-difficulty case named in words, because "X" alone is the thing a beginner most
+      // needs to be told and a single letter is the least legible way to tell them.
+      text:
+        present.length === 1
+          ? `${present[0].word.toUpperCase()} ONLY`
+          : present.map((d) => d.letter).join('/'),
+      title: `Charted at ${listed}.`
+    }
   }
 
   /**
@@ -542,6 +676,8 @@
   // requests anything, and during that window an unasked question looks exactly like one that
   // came back empty. `error` has its own card above the table and speaks for itself.
   const showEmpty = $derived($searched && !$loading && !$error && $results.length === 0)
+  /** Rows came back and Hide owned left none of them on screen; see the note beside the markup. */
+  const allHidden = $derived(!$error && $results.length > 0 && shownGroups.length === 0)
   const activeQuery = $derived($globalQuery.trim())
 </script>
 
@@ -555,9 +691,6 @@
         aria-label="Search charts"
         oninput={(e) => onQueryInput(e.currentTarget.value)}
       />
-      <span class="count">
-        {#if $loading}SEARCHING…{:else if $found}{$found.toLocaleString()} RESULTS{/if}
-      </span>
     </div>
     <!-- The box used to be disabled while filters were applied, with a paragraph here explaining
          the takeover. It is not any more: typing drops the filters instead (see `setQuery`), so
@@ -704,21 +837,50 @@
     {#if $advancedOpen}
       <AdvancedSearch {search} />
     {/if}
-    <!-- Only while there is a selection: an empty selection is the state this
-         list is in nearly all the time, and a bar that is always there would
-         charge every visit for an occasional action. -->
-    {#if $selected.size > 0}
-      <div class="selbar">
-        <span class="sel-count">{$selected.size} selected</span>
-        {#if alreadyOwned > 0}
-          <!-- Named rather than quietly dropped: a batch that downloads fewer
-               charts than were ticked has to say so, and re-fetching a chart
-               the user already owns is the alternative nobody asked for. -->
-          <span class="sel-note"
-            >{alreadyOwned} already in your library, so left out of the download</span
-          >
+    <!-- The bar over the list: how many charts came back, what is being left out of the drawing,
+         and what to do with the ones that are ticked. It is about the answer, where everything
+         above it is about the question.
+
+         There is no "direct downloads only" here, which the design has. Every one of the 66
+         fields a search result carries was dumped on 2026-09-16 and none of them distinguishes
+         one kind of download from another: Encore fetches every chart from the same
+         files.enchor.us address, by md5, so on this source the toggle would be on or off over
+         the same list. It is a RhythmVerse idea, where an entry can point at somebody else's
+         file host, and Encore does not query RhythmVerse. A control that cannot change the
+         answer is worse than a missing one. -->
+    <div class="rbar">
+      <!-- Not a live region: the list already has one, off screen at the end of it, and two that
+           announce the same number is one of them read out twice. -->
+      <span class="found">
+        {#if $loading && $results.length === 0}
+          Searching…
+        {:else if $found}
+          <b>{$found.toLocaleString()}</b> results
         {/if}
-        <div class="sel-actions">
+      </span>
+      <!-- A button with aria-pressed rather than a checkbox: it is not a field in a form that
+           gets submitted, it takes effect on the press, and the pressed state is the thing a
+           screen reader has to hear. -->
+      <button
+        class="cbx"
+        aria-pressed={$hideOwned}
+        onclick={() => hideOwned.update((on) => !on)}
+        title="Leaves out the charts whose song, artist and charter match one already installed."
+      >
+        <i aria-hidden="true"></i>Hide owned
+      </button>
+      {#if hiddenCount > 0}
+        <!-- Counted over the rows that are loaded, not over the answer: Chorus was not asked
+             about the library and its total does not know about it. Saying so is the difference
+             between a number and a claim nobody can check. -->
+        <span class="hidden-note">{hiddenCount} of the loaded charts hidden</span>
+      {/if}
+      <!-- Only while there is a selection: an empty selection is the state this
+           list is in nearly all the time, and a bar that is always there would
+           charge every visit for an occasional action. -->
+      {#if $selected.size > 0}
+        <div class="selbar">
+          <span class="sel-count">{$selected.size} selected</span>
           <button
             class="sel-btn primary"
             disabled={toQueue.length === 0 || queueing}
@@ -732,11 +894,20 @@
             onclick={() => search.clearSelected()}>Clear</button
           >
         </div>
-        {#if bulkError}
-          <span class="sel-error">{bulkError}</span>
-        {/if}
-      </div>
-    {/if}
+      {/if}
+      {#if alreadyOwned > 0}
+        <!-- Named rather than quietly dropped: a batch that downloads fewer charts than were
+             ticked has to say so, and re-fetching a chart the user already owns is the
+             alternative nobody asked for. On a line of its own under the bar, because it is a
+             sentence and the bar is a row of chips. -->
+        <span class="sel-note"
+          >{alreadyOwned} already in your library, so left out of the download</span
+        >
+      {/if}
+      {#if bulkError}
+        <span class="sel-error">{bulkError}</span>
+      {/if}
+    </div>
     <!-- One line for the whole list rather than one inside each row: a download that could not
          be queued has a sentence's worth of reason, and a row has no space for a sentence. It
          sits above the results because that is where the rest of the list's news is.
@@ -775,15 +946,45 @@
         <span class="badge mono" title={badge.title}>{badge.text}</span>
       {/each}
     {/snippet}
-    {#snippet pips(c: ChartData)}
+    <!-- `icon` is the row's, not the card's. A row draws the group as a ring with the pips under
+         it, five across, which is the shape the approved design has and the shape five instruments
+         need: five letters in a line read as a word. A card is 148px wide and has no line to give
+         a 19px ring, so it keeps the letters. Both draw the same five parts, so switching layout
+         changes the shape and not the subject. -->
+    {#snippet pips(c: ChartData, icon: boolean)}
       {#each ROW_PARTS as part (part.key)}
         <DiffPips
           instrument={part.key}
           label={part.label}
           instruments={partsOf(c)}
           tier={tierOf(c, part.key)}
+          {icon}
         />
       {/each}
+    {/snippet}
+    <!-- The band under the subtitle: what the chart is, rather than what it is called.
+         Length, the difficulties it was written at, the flags that survived the cut above, and
+         the charter.
+         Two of the design's six are missing and cannot be drawn. The chart format (a Rock Band
+         conversion against a native Clone Hero chart) and the download count are not in the
+         answer: all 66 fields of a search result were dumped on 2026-09-16 and neither is among
+         them, nor is a file size or a rating. Chart Manager has them because it also queries
+         RhythmVerse. Encore does not, so a badge for either would be empty on every row.
+         "In library" is not here either, and that one is a choice: the row already says it,
+         once, where the Download button would otherwise be, which is where the question it
+         answers gets asked. -->
+    {#snippet band(c: ChartData)}
+      {@const spread = spreadOf(c)}
+      <span class="badges">
+        {#if c.song_length != null && c.song_length >= 0}
+          <span class="badge mono length">{msToTime(c.song_length)}</span>
+        {/if}
+        {#if spread}
+          <span class="badge mono" title={spread.title}>{spread.text}</span>
+        {/if}
+        {@render badges(c)}
+        <span class="badge mono charter">{stripRichText(c.charter)}</span>
+      </span>
     {/snippet}
     <!-- Nothing at all for a clean chart, which is 60 charts in 100. A mark on every row is a
          mark that means nothing; this one only appears where there is something to say, so the
@@ -861,7 +1062,7 @@
         <!-- The pips and the badges are the same two the row draws, so a chart says the same
              thing in both layouts and switching between them is a change of shape, not of
              subject. They wrap, because a card is 148px wide and a row is not. -->
-        <span class="c-diffs">{@render pips(c)}</span>
+        <span class="c-diffs">{@render pips(c, false)}</span>
         <!-- No badges here, unlike the row. A card is 150px wide at the default window, and a
              badge beside the button either wraps the button onto a line of its own or is clipped
              by the card's edge; measured, the wrap made cards 21px taller than the ones with no
@@ -876,7 +1077,7 @@
     <div class="table selectable" bind:this={tableEl}>
       {#if $mode === 'grid'}
         <div class="grid">
-          {#each $groups as group (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
+          {#each shownGroups as group (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
             {@const chart = group.primary}
             {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
             {@render card(chart, group.others.length, isExpanded, false)}
@@ -893,7 +1094,7 @@
           {/each}
         </div>
       {:else}
-        {#each $groups as group, i (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
+        {#each shownGroups as group, i (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
           {@const chart = group.primary}
           {@const hasVersions = group.others.length > 0}
           {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
@@ -931,15 +1132,13 @@
                     aria-label="{group.others.length + 1} versions">+{group.others.length}</button
                   >
                 {/if}
-                {@render badges(chart)}
               </span>
               <span class="artist">{metaOf(chart)}</span>
+              {@render band(chart)}
             </span>
-            <span class="charter">{stripRichText(chart.charter)}</span>
-            <span class="diffs">{@render pips(chart)}</span>
+            <span class="diffs">{@render pips(chart, true)}</span>
             <span class="health">{@render health(chart)}</span>
             <span class="act">{@render action(chart)}</span>
-            <span class="len">{msToTime(chart.song_length)}</span>
           </div>
           {#if isExpanded}
             {#each group.others as alt (alt.chartId)}
@@ -966,15 +1165,14 @@
                       class="name"
                       aria-label={chartLabel(alt)}
                       onclick={() => selectChart(alt)}>{stripRichText(alt.name)}</button
-                    >{@render badges(alt)}</span
+                    ></span
                   >
                   <span class="artist">{metaOf(alt)}</span>
+                  {@render band(alt)}
                 </span>
-                <span class="charter">{stripRichText(alt.charter)}</span>
-                <span class="diffs">{@render pips(alt)}</span>
+                <span class="diffs">{@render pips(alt, true)}</span>
                 <span class="health">{@render health(alt)}</span>
                 <span class="act">{@render action(alt)}</span>
-                <span class="len">{msToTime(alt.song_length)}</span>
               </div>
             {/each}
           {/if}
@@ -1036,6 +1234,15 @@
             Chorus Encore returned no charts at all. It may be having trouble.
             <button class="retry" onclick={() => search.retry()}>Retry</button>
           {/if}
+        </p>
+      {/if}
+      <!-- Charts came back and every one of them is already installed. Without this the list is
+           blank with a result count over it, which reads as a bug rather than as an answer, and
+           the way out is not the search box but the toggle that emptied it. -->
+      {#if allHidden}
+        <p class="empty">
+          Every chart loaded here is already in your library. Turn off Hide owned to see them, or
+          load more.
         </p>
       {/if}
     </div>
@@ -1193,13 +1400,6 @@
     border-color: var(--accent);
     color: var(--text-1);
   }
-  .count {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-  }
   /* Error is a quiet card, not accent-coloured text: the accent budget is spent
      on primary actions and active states, not on status copy. */
   .error {
@@ -1266,19 +1466,21 @@
     overflow-y: auto;
     border-top: 1px solid var(--hairline);
   }
-  /* The wide row, which is one line of nine tracks: checkbox, index, cover, song, charter,
-     difficulty, health, action, length. Two of those tracks fold away below; see the container
-     query under `.len`.
+  /* The wide row, which is one line of seven tracks: checkbox, index, cover, song, difficulty,
+     health, action. The index folds away below 900px and the difficulty onto a line of its own
+     below 800px; see the two container queries at the end of this block.
 
-     `minmax(0, …)` on the two text tracks rather than a bare `1fr` and a bare `150px`: a grid
-     track's automatic minimum is the widest thing in it, so a chart with a long title pushes
-     the row wider than the box instead of ellipsising inside it, and the whole list then
-     scrolls sideways. This is the rule that keeps Explore from doing that. */
+     The charter and the length used to be tracks of their own. They are badges under the
+     subtitle now, which is where the approved design puts them, and dropping the two fixed
+     tracks is most of what paid for the difficulty column going from 136px to 210px.
+
+     `minmax(0, 1fr)` on the song rather than a bare `1fr`: a grid track's automatic minimum is
+     the widest thing in it, so a chart with a long title pushes the row wider than the box
+     instead of ellipsising inside it, and the whole list then scrolls sideways. This is the
+     rule that keeps Explore from doing that. */
   .row {
     display: grid;
-    grid-template-columns:
-      16px 26px 40px minmax(0, 1fr) minmax(0, 150px)
-      136px 10px 92px 46px;
+    grid-template-columns: 22px 26px 52px minmax(0, 1fr) 210px 10px 92px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1295,10 +1497,11 @@
   }
   /* Fixed rather than aspect-ratio: a square that takes its height from its width is a square
      that changes the row's height when the column does, and rows of two heights are the thing
-     the eye trips over when scanning a list. */
+     the eye trips over when scanning a list. 52px, which is the size in the approved design and
+     about what three lines of text beside it come to, so the cover no longer sets the height. */
   .cover {
-    width: 40px;
-    height: 40px;
+    width: 52px;
+    height: 52px;
     border-radius: 5px;
     object-fit: cover;
     display: block;
@@ -1341,7 +1544,8 @@
     z-index: var(--z-raised);
   }
   /* 16px, not the UA's 13: the tick has to be readable over album art, and 13px was the
-     smallest target in the app. */
+     smallest target in the app. The row's track is 22px, which is the design's, so the box is
+     centred in it rather than left against the edge of the list. */
   .pick {
     margin: 0;
     width: 16px;
@@ -1350,20 +1554,93 @@
     accent-color: var(--accent);
     flex-shrink: 0;
   }
-  /* Sits above the results, not in the filter row: it is about the rows the
-     user has picked, not about which rows are shown. */
+  .row .pick {
+    justify-self: center;
+  }
+  /* The bar over the list. One line of the things that are about the answer rather than about
+     the question: the count, what is being hidden, and what to do with what is ticked. It wraps
+     rather than clips, because two of its children are sentences that only appear sometimes. */
+  .rbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 13px;
+    padding: 8px 16px;
+    flex: none;
+    border-top: 1px solid var(--hairline);
+  }
+  .found {
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+  }
+  .found b {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-1);
+  }
+  .hidden-note {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
+  /* A tick box drawn rather than an <input>, because this is a button: the control is 14px of
+     mark with its word beside it, and the whole thing is the target. */
+  .cbx {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+    cursor: pointer;
+    transition: color var(--t-fast) var(--ease);
+  }
+  .cbx:hover,
+  .cbx:focus {
+    color: var(--text-1);
+  }
+  .cbx i {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid var(--border-2);
+    border-radius: 4px;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .cbx[aria-pressed='true'] {
+    color: var(--text-1);
+  }
+  .cbx[aria-pressed='true'] i {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  /* The tick itself: two borders of a box, rotated. Drawn rather than a glyph so it is the same
+     mark at the same weight whatever font the platform falls back to. */
+  .cbx[aria-pressed='true'] i::after {
+    content: '';
+    width: 6px;
+    height: 3px;
+    border-left: 1.8px solid #fff;
+    border-bottom: 1.8px solid #fff;
+    transform: rotate(-45deg) translate(1px, -1px);
+  }
+  /* Pushed to the far end of the bar, and lit, because it is the one thing in the row that is
+     an action rather than a reading. */
   .selbar {
     display: flex;
     align-items: center;
-    /* Wraps so the error, which is a sentence rather than a chip, drops to its
-       own line instead of squeezing the buttons off the end. */
-    flex-wrap: wrap;
-    gap: 10px;
-    margin: 0 16px 10px;
-    padding: 7px 12px;
+    gap: 8px;
+    margin-left: auto;
+    padding: 3px 4px 3px 11px;
     background: var(--accent-dim);
     border: 1px solid var(--accent);
-    border-radius: var(--radius);
+    border-radius: 9px;
   }
   .sel-count {
     font-family: var(--font-mono);
@@ -1371,22 +1648,19 @@
     letter-spacing: var(--ls-caps);
     color: var(--text-1);
   }
+  /* Both of these are sentences rather than chips, so they take the whole line under the bar
+     instead of squeezing the buttons off the end of it. */
   .sel-note {
+    flex-basis: 100%;
     font-size: var(--fs-secondary);
     color: var(--text-2);
   }
-  /* Full width, so it always lands under the row it explains. */
   .sel-error {
     flex-basis: 100%;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     line-height: var(--lh-prose);
     color: var(--text-2);
-  }
-  .sel-actions {
-    display: flex;
-    margin-left: auto;
-    gap: 8px;
   }
   .sel-btn {
     background: none;
@@ -1465,17 +1739,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* `nowrap`, and the same 6px between parts the row uses, which together draw 133px. A card is
-     at least 148px wide and loses 12 to its padding, so the three groups fit with 3px to spare
-     and the overflow rule is the belt rather than the plan: a wrap here would make one card
-     taller than the ones beside it, and a gallery lines its cards up by their edges.
+  /* Wraps, now that there are five groups and not three. The old rule was `nowrap`, to stop one
+     card standing taller than the ones beside it; what made that a risk was a badge that only
+     some charts carry. The difficulty groups are not that: every card draws five of them, so
+     every card wraps at the same point and the gallery still lines up.
 
      `margin-top: auto` on the foot pins the action to the bottom of every card, so a column of
      cards has its buttons on one line whatever length of title each one carries. */
   .c-diffs {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 5px 6px;
     overflow: hidden;
     margin-top: 4px;
   }
@@ -1567,12 +1841,42 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .charter {
-    font-size: var(--fs-secondary);
-    color: var(--text-2);
+  /* The band under the subtitle. One line, and the charter is what gives.
+
+     It wrapped first, which is what the design does, and that was measured at the narrowest
+     column the shell has: at a 1121px window the band is 266px and fourteen rows of twenty-five
+     took two lines, so the list ran 102px, 123px, 102px, 123px down the screen. Rows of two
+     heights are the thing the eye trips over, and here the cause is a charter's name, which is
+     not a reason for a row to be taller than the one above it.
+
+     So the band does not wrap and the charter shrinks into whatever the fixed badges leave it,
+     which is 369px at a 960px window and 156px at a 1121px one. An ellipsis on a name is what
+     an ellipsis is for. `overflow: hidden` is the belt: a row carrying all three of the rare
+     flags at the narrowest width has more badges than 266px holds even with the charter at
+     nothing, and clipping that against the cell is better than painting it over the column
+     beside it. */
+  .badges {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  /* A badge like the others now, rather than a column of its own, and the only one in the band
+     that gives way. `.badge` holds every other badge at its natural width, so this override is
+     what decides which of them ellipsises when the column is narrow: a charter's name, rather
+     than the length or the difficulties, because those two are the same four characters on
+     every row and a name is the one field here with no bound on it.
+
+     Specificity on purpose: `.badge` is declared after this and sets `flex-shrink: 0`, so the
+     two-class selector is what lets this one shrink. */
+  .badges .charter {
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
   /* Version chip: mono, quiet (text-3 + hairline), same family as lib-badge.
      A real <button> since the row stopped being one; appearance:none so the
@@ -1617,12 +1921,17 @@
     vertical-align: middle;
     line-height: var(--lh-tight);
   }
-  /* 6px between the three parts, which is half the 12px that separates a part's letter from
-     the next part's pips. The gap inside a group has to read as smaller than the gap between
-     groups or the eighteen bars read as one run. */
+  /* 9px between the five groups, against the 2px between the pips inside one and the 4px that
+     separates a group's ring from its own pips. The gap inside a group has to read as smaller
+     than the gap between groups or the thirty pips read as one run.
+
+     5 groups of 34px plus 4 gaps of 9px is 206px drawn in a 210px track. The four spare pixels
+     are the margin for the subpixel width of a border-boxed circle: `DiffPips` does not shrink,
+     by design, so a track one pixel short would paint the fifth guitar over the health mark
+     rather than squeezing it. */
   .diffs {
     display: flex;
-    gap: 6px;
+    gap: 9px;
     min-width: 0;
   }
   .health {
@@ -1698,95 +2007,55 @@
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
   }
-  .len {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    text-align: right;
-  }
-  /* What the row gives up when the column it lives in is narrow, and why these two.
-     The index is a position in a list the user is already looking at, and the length is the
-     one field here that is also on the chart Detail one click away. Everything else is either
-     the chart's identity or a reason to download it.
-
-     900px is where the nine tracks stop leaving the title a readable share, and it is a measured
-     number rather than a guessed one. At 788px, which is this column at a 1400px window, the
-     nine tracks left the song 160px and six of twenty-five titles hit their floor at 64px.
-     Below 900 the same row is two lines: the cover spans both, the charter drops under the
-     song, and the three columns at the end stay put, so the difficulty and the action are still
-     a column the eye can run down. That buys the title 502px at the same 1120px window where
-     the wide layout would have given it 254.
+  /* The first thing the row gives up when its column is narrow, and why it is this one: the
+     index is a position in a list the user is already looking at, and every other track is
+     either the chart's identity or a reason to download it. 900px is where the seven tracks
+     stop leaving the title a readable share.
 
      `scripts/measure-explore-row.mjs` reports all of this at every width the shell supports. */
   @container results (max-width: 899px) {
     .row {
-      grid-template-columns: 16px 44px minmax(0, 1fr) 136px 10px 92px;
-      grid-template-rows: auto auto;
-      row-gap: 1px;
+      grid-template-columns: 22px 52px minmax(0, 1fr) 210px 10px 92px;
     }
-    .row .num,
-    .row .len {
+    .row .num {
       display: none;
+    }
+  }
+  /* Where the difficulty stops fitting beside the song and takes a line of its own.
+
+     800px is the measured crossing, not a guessed one: with the six-track layout the song track
+     is the column width less 468px, so at 800 the song is 332px against a difficulty column of
+     210, and below that the thing the row is a list OF is narrower than the decoration beside
+     it. The two widths this actually catches are 722px, which is this column at the 960px window
+     minimum, and 668px at 1280px.
+
+     The narrowest it ever gets is 509px: a 1121px window, the first width at which the 374px
+     rail appears and takes its share back from a column that had 882px at 1120px. Four tracks
+     and two lines hold there with 281px of song, where six tracks on one line would have left
+     it 41px. The health mark goes under the button and the difficulty under the song, so the
+     row keeps saying all of it and says it down instead of across. */
+  @container results (max-width: 799px) {
+    .row {
+      grid-template-columns: 22px 52px minmax(0, 1fr) 92px;
+      grid-template-rows: auto auto;
+      row-gap: 4px;
     }
     /* Every child placed by hand rather than two of them placed and the rest left to fall
        where they may. Auto-placement runs in passes, and an item with a definite row and an
        automatic column is resolved in a different pass from one with neither, so the first
        version of this block put the song in a 92px track and the difficulty in a 40px one.
-       Nine children into six tracks has no reading that can be left to inference. */
+       Seven children into four tracks has no reading that can be left to inference. */
     .row .pick {
       grid-area: 1 / 1 / 3 / 2;
     }
     .row .cover {
       grid-area: 1 / 2 / 3 / 3;
-      width: 44px;
-      height: 44px;
     }
     .row .song {
       grid-area: 1 / 3 / 2 / 4;
     }
-    .row .charter {
-      grid-area: 2 / 3 / 3 / 4;
-    }
     .row .diffs {
-      grid-area: 1 / 4 / 3 / 5;
-    }
-    .row .health {
-      grid-area: 1 / 5 / 3 / 6;
-    }
-    .row .act {
-      grid-area: 1 / 6 / 3 / 7;
-    }
-  }
-  /* The narrowest the view column ever gets, which is 509px: a 1121px window, the first width
-     at which the 374px rail appears and takes its share back from a column that had 882px at
-     1120px. Six tracks do not fit in it. Two lines became three: the difficulty moves under the
-     charter and the health mark under the button, so the row keeps saying all of it and says it
-     down instead of across.
-
-     Measured, not guessed. With the six-track layout at this width the song column was 129px,
-     and after a version chip and two badges took their fixed share the title was left a 0px
-     box. `scripts/measure-explore-row.mjs` at SIZE=1121x800 is where that number comes from. */
-  @container results (max-width: 559px) {
-    .row {
-      grid-template-columns: 16px 40px minmax(0, 1fr) 92px;
-      grid-template-rows: auto auto auto;
-    }
-    .row .pick {
-      grid-area: 1 / 1 / 4 / 2;
-    }
-    .row .cover {
-      grid-area: 1 / 2 / 4 / 3;
-      width: 40px;
-      height: 40px;
-    }
-    .row .song {
-      grid-area: 1 / 3 / 2 / 4;
-    }
-    .row .charter {
       grid-area: 2 / 3 / 3 / 4;
-    }
-    .row .diffs {
-      grid-area: 3 / 3 / 4 / 4;
     }
     .row .act {
       grid-area: 1 / 4 / 2 / 5;
@@ -1794,7 +2063,27 @@
     /* On the difficulty's line rather than the button's: the two are what the row says about
        the chart itself, and the button is what the user does about it. */
     .row .health {
-      grid-area: 3 / 4 / 4 / 5;
+      grid-area: 2 / 4 / 3 / 5;
+    }
+    /* The cover no longer spans the whole row's height once the row is two lines tall, so it is
+       pinned to the top of its cell instead of floating in the middle of one. */
+    .row .cover,
+    .row .pick {
+      align-self: start;
+    }
+  }
+  /* The narrowest the column ever gets, 509px at a 1121px window, where the band has 266px and
+     the charter is what runs out of room. The length goes, and the 42px it was taking goes to
+     the name: measured at this width, keeping it left fourteen charters of twenty-five
+     ellipsised and the tightest at 36px.
+
+     The length rather than anything else in the band, and not grudgingly: it is the one field
+     here that is also in the rail this width exists to make room for, one click away and in
+     full. The row before this one hid it below 900px of column, so it is drawn over a wider
+     range now than it used to be, not a narrower one. */
+  @container results (max-width: 559px) {
+    .row .badges .length {
+      display: none;
     }
   }
   .more-row {

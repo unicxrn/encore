@@ -14,6 +14,13 @@ release.
 
 ### Added
 
+- A bar over the Explore results: how many charts the answer holds, a Hide owned toggle that
+  leaves out the charts already in your library, and, once anything is ticked, how many are ticked
+  and one button that queues all of them. Hide owned works a chart at a time rather than a song at
+  a time, so owning one version of a song still shows you the others, and it says how many of the
+  loaded charts it is leaving out rather than quietly showing a shorter list. Anything it hides
+  loses its tick, because a ticked row you cannot see is a download you did not ask for.
+
 - Issues opens with the state of your library instead of with a list. Two cards on Linux and
   three elsewhere count the charts that are broken, the charts scan-chart has something to say
   about the charting of, and on a machine where an mp4 background plays, the charts carrying one
@@ -59,6 +66,18 @@ release.
   stored when you leave the field, not on every keystroke.
 
 ### Changed
+
+- An Explore row says what a chart holds for five instruments rather than three: guitar, bass,
+  drums, keys and vocals, each drawn as its own instrument in a ring over the pips that count how
+  hard it was rated. The ring is lit for a part the chart has, so a part nobody rated still reads
+  as present, and a part that is not there still reads as missing. Ratings run past the six Clone
+  Hero's scale draws, and a chart rated higher fills every pip while the number read out is the
+  real one. Installed, Home and the chart page draw the difficulty exactly as they did.
+- The cover in an Explore row is 52px, and the charter and the length have left columns of their
+  own for a band of badges under the artist, alongside the difficulties the chart was written at.
+  At the one window width where the view column is narrowest, a 1121px window with the preview
+  column open, the length drops out of that band: it is in the preview column in full, and the
+  room it was taking goes to the charter's name.
 
 - The Issues view scrolls as one thing. The duplicate report used to sit in the half of the
   screen that does not scroll, so opening a report with twenty-five identical sets in it grew

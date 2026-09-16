@@ -23,7 +23,7 @@ vi.mock('../api/enchor', async (importOriginal) => ({
   searchCharts: (...args: unknown[]) => searchCharts(...args) as Promise<SearchResult>
 }))
 
-import Browse from './Browse.svelte'
+import Browse, { hideOwned } from './Browse.svelte'
 
 function chart(
   chartId: number,
@@ -146,6 +146,9 @@ function renderBrowse(
 
 afterEach(async () => {
   downloadAdd.mockReset()
+  // Module-scoped, like `browseSearch` below and for the same reason: it has to outlive the
+  // remount every navigation causes, which means it also outlives every test here.
+  hideOwned.set(false)
   // `settings` is another module-level writable this file writes to; left set,
   // a library folder from one test is what the next one's first paint reads.
   settings.set(defaultSettings())
@@ -1537,5 +1540,328 @@ describe('Explore filter header', () => {
     await pick('Filter by difficulty', 'expert')
     await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
     expect(lastParams().sort ?? null).toBeNull()
+  })
+})
+
+/**
+ * The row as the approved design has it: five instruments as rings over their pips, and a band
+ * of badges under the subtitle carrying what used to be columns.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says how wide any of it is, which
+ * of the two folded layouts is in force, or whether the band wraps. `scripts/measure-explore-
+ * row.mjs` answers all of that in a real engine. These pin what is drawn and what it claims.
+ */
+describe('Explore rows as the design draws them', () => {
+  const FULL_BAND: ChartData[] = [
+    {
+      ...chart(51, null, 'BandCharter'),
+      name: 'Full Band',
+      song_length: 196_000,
+      diff_guitar: 4,
+      diff_bass: 2,
+      diff_drums: 5,
+      diff_keys: 3,
+      diff_vocals: 1,
+      notesData: {
+        instruments: ['guitar', 'bass', 'drums', 'keys'],
+        hasVocals: true,
+        noteCounts: [
+          { instrument: 'guitar', difficulty: 'easy', count: 120 },
+          { instrument: 'guitar', difficulty: 'hard', count: 700 },
+          { instrument: 'drums', difficulty: 'expert', count: 900 },
+          // A declared difficulty with no notes on it is not a difficulty the chart was
+          // written at, which is why the count and not the row is what counts.
+          { instrument: 'bass', difficulty: 'medium', count: 0 }
+        ]
+      }
+    }
+  ]
+
+  const EXPERT_ONLY: ChartData[] = [
+    {
+      ...chart(52, null, 'ExpertCharter'),
+      name: 'Expert Only',
+      song_length: null,
+      notesData: {
+        instruments: ['guitar'],
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 1274 }]
+      }
+    }
+  ]
+
+  const UNSCANNED: ChartData[] = [
+    { ...chart(53, null, 'UnscannedCharter'), name: 'Never Scanned', notesData: null }
+  ]
+
+  async function renderRows(data: ChartData[], term: string): Promise<void> {
+    searchCharts.mockResolvedValue({ found: data.length, out_of: data.length, page: 1, data })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse()
+    await screen.findByText(data[0].name)
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws all five instruments, including the two the row used to leave out', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Guitar: difficulty 4 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Bass: difficulty 2 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Drums: difficulty 5 of 6')).toBeTruthy()
+    // The two that were only on the chart page before.
+    expect(screen.getByLabelText('Keys: difficulty 3 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+    expect(document.querySelectorAll('.row .diffs .part')).toHaveLength(5)
+  })
+
+  it('draws the row as icons and the same five on a card as letters', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(document.querySelectorAll('.row .diffs .ring')).toHaveLength(5)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
+    await screen.findByText('Full Band')
+    // A card is 148px wide and has no line to give a 19px ring, so it keeps the letter form.
+    // Five groups either way: switching layout changes the shape, not the subject.
+    expect(document.querySelectorAll('.card .c-diffs .part')).toHaveLength(5)
+    expect(document.querySelectorAll('.card .c-diffs .ring')).toHaveLength(0)
+    browseSearch.setMode('list')
+  })
+
+  it('reads vocals off the lyric flag, because the scan never lists it as a track', async () => {
+    // `notesData.instruments` counts playable note tracks and vocals is not one, so a row that
+    // trusted the list alone would tell every singer in the catalog that nothing is charted for
+    // them. The fixture above leaves vocals out of `instruments` and sets `hasVocals`.
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+  })
+
+  it('says vocals are not charted when the scan found no lyrics', async () => {
+    // The other half of the rule above: the flag is read, not assumed, so a chart with no
+    // lyrics does not get a lit ring for a part nobody sang.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByLabelText('Vocals: not charted')).toBeTruthy()
+  })
+
+  it('puts the length, the spread and the charter in one band under the subtitle', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect(band).toBeTruthy()
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '3:16',
+      'E/H/X',
+      'BandCharter'
+    ])
+    // They were tracks of their own before, and the width they cost is what paid for the
+    // difficulty column. Nothing outside the band still draws them.
+    expect(document.querySelector('.row > .charter')).toBeNull()
+    expect(document.querySelector('.row .len')).toBeNull()
+  })
+
+  it('names a chart written at one difficulty in a word rather than a letter', async () => {
+    // "X" is the thing a beginner most needs to be told, and one letter is the least legible
+    // way to tell them.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByText('EXPERT ONLY')).toBeTruthy()
+    // No length badge: `song_length` is null on this fixture, and msToTime's placeholder in a
+    // badge would be a badge that says nothing.
+    expect(screen.queryByText('—')).toBeNull()
+  })
+
+  it('claims no spread at all for a chart nobody scanned', async () => {
+    // A chart with no note data is not a chart with no difficulties, and a badge cannot say
+    // "unknown" in four characters.
+    await renderRows(UNSCANNED, 'never-scanned')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '4:10',
+      'UnscannedCharter'
+    ])
+  })
+})
+
+/**
+ * The bar over the list: the count, the one toggle that survived contact with the API, and the
+ * selection bar that only appears when something is ticked.
+ *
+ * Each block below asks its own question of the store, for the reason the markup block above
+ * gives: `browseSearch` is module-scoped and ignores a term it has already answered, so rows
+ * reach the screen only behind a term nothing else in this file asks for.
+ */
+describe('Explore results bar', () => {
+  // Three versions of one song, so the hidden count has both a dropped chart and a shown
+  // alternate to get right: counting groups rather than charts would report two, not one.
+  const OWNED_TRIO: ChartData[] = [
+    chart(61, 60, 'BarCharterA'),
+    chart(62, 60, 'BarCharterB'),
+    chart(63, 60, 'BarCharterC')
+  ]
+  const PRIMARY = /^Everlong .*BarCharterA/
+  const ALTERNATE = /^Everlong .*BarCharterB/
+  const PICK_PRIMARY = /^Select .*BarCharterA/
+  const PICK_ALTERNATE = /^Select .*BarCharterB/
+
+  async function show(
+    inLibrary: boolean | ((key: MetaKey) => boolean) = false,
+    term = 'results-bar'
+  ): Promise<HTMLElement> {
+    searchCharts.mockResolvedValue({ found: 3, out_of: 3, page: 1, data: OWNED_TRIO })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    const { container } = renderBrowse(() => {}, { inLibrary })
+    await screen.findByRole('button', { name: PRIMARY })
+    return container.querySelector('.rbar') as HTMLElement
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  const reads = (bar: HTMLElement, sel: string): string =>
+    (bar.querySelector(sel) as HTMLElement | null)?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+
+  it('says how many charts the answer holds, over the list rather than beside the box', async () => {
+    const bar = await show()
+    expect(reads(bar, '.found')).toBe('3 results')
+  })
+
+  it('offers no direct-downloads toggle, because no field in the answer could set one', async () => {
+    // All 66 fields of a search result were dumped on 2026-09-16. Not one of them separates a
+    // direct download from an indirect one: Encore fetches every chart from files.enchor.us by
+    // md5, so the control would be on or off over the same list. The design has it because
+    // Chart Manager also queries RhythmVerse, where an entry can point at somebody else's host.
+    const bar = await show()
+    expect(bar.querySelector('.cbx')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /direct download/i })).toBeNull()
+  })
+
+  it('leaves out the charts already installed, and says how many it left out', async () => {
+    const bar = await show((k) => k.charter === 'BarCharterA', 'results-bar-owned')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: PRIMARY })).toBeNull())
+    // The alternate is still there: the case this exists for is owning one version of a song and
+    // wanting to see the others, so hiding works a chart at a time and not a group at a time.
+    expect(screen.getByRole('button', { name: ALTERNATE })).toBeTruthy()
+    // Counted over the loaded rows, not over the answer: Chorus was never asked about the
+    // library, and its total is what it is whichever way this toggle is set.
+    expect(reads(bar, '.hidden-note')).toBe('1 of the loaded charts hidden')
+    expect(reads(bar, '.found')).toBe('3 results')
+  })
+
+  it('says so rather than showing a blank list when hiding leaves nothing', async () => {
+    // A count over an empty list reads as a bug, and the way out is the toggle rather than the
+    // search box, so the sentence has to name the toggle.
+    await show(true, 'results-bar-all-owned')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    expect(
+      await screen.findByText(/Every chart loaded here is already in your library/)
+    ).toBeTruthy()
+  })
+
+  it('drops a hidden chart from the selection, so the bar counts what can be pointed at', async () => {
+    // The same rule collapsing a group follows, reached from the other side: a tick with no
+    // checkbox left to show it is a count nobody can account for. Every chart this drops is one
+    // the bulk download had already refused to fetch, so nothing queueable is lost.
+    await show((k) => k.charter === 'BarCharterA', 'results-bar-selection')
+    await fireEvent.click(await screen.findByLabelText('3 versions'))
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK_PRIMARY }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK_ALTERNATE }))
+    expect(screen.getByText('2 selected')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    await waitFor(() => expect(screen.getByText('1 selected')).toBeTruthy())
+  })
+})
+
+/**
+ * What becomes of a selection when the list moves under it. Three things move it: a page appended
+ * by scrolling, a filter change and an order change. The rule is that a selection survives rows
+ * arriving and goes when rows are replaced, because a chartId only means something against the
+ * rows it was ticked on.
+ */
+describe('Explore selection against a list that moves', () => {
+  const PICK = /^Select .*MoveCharterA/
+
+  async function show(term: string): Promise<void> {
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse()
+    await screen.findByRole('checkbox', { name: PICK })
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK }))
+    expect(screen.getByText('1 selected')).toBeTruthy()
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('keeps a selection when scrolling appends a page', async () => {
+    // The ticked rows are all still on screen, so dropping the selection would punish the user
+    // for asking for a second page. The button at the end of the list makes the same call the
+    // scroll sentinel does.
+    let served = 0
+    searchCharts.mockImplementation(() => {
+      served += 1
+      return Promise.resolve({
+        found: 4,
+        out_of: 4,
+        page: served,
+        data: [
+          chart(served * 2 + 69, 70 + served, 'MoveCharterA'),
+          chart(served * 2 + 70, 80 + served, 'MoveCharterB')
+        ]
+      })
+    })
+    await show('selection-append')
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+
+    expect(screen.getByText('1 selected')).toBeTruthy()
+  })
+
+  it('drops a selection when an order change replaces the rows', async () => {
+    // A different order is a different page one: the chartIds a tick names may not be among the
+    // rows that come back, and a bulk download would then fetch charts nobody can see. The same
+    // rule a filter change and a new search term already follow.
+    searchCharts.mockResolvedValue({
+      found: 2,
+      out_of: 2,
+      page: 1,
+      data: [chart(91, null, 'MoveCharterA'), chart(92, null, 'MoveCharterB')]
+    })
+    await show('selection-sort')
+
+    await fireEvent.change(screen.getByLabelText('Order results'), {
+      target: { value: 'name:asc' }
+    })
+
+    await waitFor(() => expect(screen.queryByText('1 selected')).toBeNull())
+  })
+
+  it('drops a selection when a filter change replaces the rows', async () => {
+    searchCharts.mockResolvedValue({
+      found: 2,
+      out_of: 2,
+      page: 1,
+      data: [chart(93, null, 'MoveCharterA'), chart(94, null, 'MoveCharterB')]
+    })
+    await show('selection-filter')
+
+    await fireEvent.change(screen.getByLabelText('Filter by difficulty'), {
+      target: { value: 'expert' }
+    })
+
+    await waitFor(() => expect(screen.queryByText('1 selected')).toBeNull())
   })
 })
