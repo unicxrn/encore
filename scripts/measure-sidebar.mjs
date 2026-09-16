@@ -40,9 +40,12 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
-// The sidebar is a fixed track, so width should change nothing. 960 is the window minimum and
-// 1121 is where the rail appears; both are here to show that the column does not move.
-const SIZES = (process.env.SIZES || '960x800,1121x800,1920x1080')
+// The sidebar is a fixed track, so width should change nothing and the four widths are here to
+// show that the column does not move. HEIGHT is the axis that does change something, because the
+// scroller is inside the column now: 600 is the window minimum (src/main/index.ts), and it is the
+// case where the nav has least room left after the brand, the tiles and the footer have taken
+// theirs. The count of rows visible at each is printed by `room` below.
+const SIZES = (process.env.SIZES || '960x600,960x800,1280x800,1920x1080')
   .split(',')
   .map((s) => s.trim().split('x').map(Number))
 
@@ -304,6 +307,152 @@ const CHEVRON = `(() => {
   }
 })()`
 
+/**
+ * Every block above and below the nav, and whether any of its text is cut off.
+ *
+ * The nav rows have had a sweep since the figures went in; the five blocks around them had
+ * nothing, which is how three source segments reached a build ellipsised to "Chorus Enc...",
+ * "RhythmVe..." and "B...". Same three questions per line of text as the nav rows get: the box
+ * layout gave it, the width the string actually needs in the face it is set in, and whether the
+ * element is scrolling its own content, which is what an ellipsis is.
+ *
+ * `cut` is the one that decides. A line with `white-space: nowrap` reports `scrollWidth` past
+ * `clientWidth` when it is ellipsised; a line that is allowed to wrap reports neither, so `needs`
+ * being wider than the box is expected there and is reported as `wraps` rather than as a fault.
+ */
+const BLOCKS = `(() => {
+  const nav = document.querySelector('nav.sidebar')
+  const box = (el) => {
+    const b = el.getBoundingClientRect()
+    return {
+      left: Math.round(b.left),
+      width: Math.round(b.width * 100) / 100,
+      height: Math.round(b.height * 100) / 100
+    }
+  }
+  const canvas = document.createElement('canvas')
+  const pen = canvas.getContext('2d')
+  const textWidth = (el) => {
+    const s = getComputedStyle(el)
+    pen.font = s.fontStyle + ' ' + s.fontWeight + ' ' + s.fontSize + ' ' + s.fontFamily
+    const text = el.textContent.trim()
+    const tracking = parseFloat(s.letterSpacing)
+    const extra = Number.isFinite(tracking) ? tracking * text.length : 0
+    return Math.round((pen.measureText(text).width + extra) * 100) / 100
+  }
+  const line = (what, el) => {
+    if (el === null) return null
+    const s = getComputedStyle(el)
+    // How many lines it actually occupies, which is the question a width comparison cannot
+    // answer: a shrink-to-fit inline box reports its own content width, so \`needs\` and \`width\`
+    // agree to within a rounding error whether the string fits on one line or on three.
+    const leading = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.2
+    const frame =
+      parseFloat(s.paddingTop) +
+      parseFloat(s.paddingBottom) +
+      parseFloat(s.borderTopWidth) +
+      parseFloat(s.borderBottomWidth)
+    return {
+      what,
+      says: el.textContent.trim(),
+      ...box(el),
+      needs: textWidth(el),
+      cut: Math.max(0, el.scrollWidth - el.clientWidth),
+      lines: Math.max(1, Math.round((el.getBoundingClientRect().height - frame) / leading))
+    }
+  }
+  const one = (sel) => nav.querySelector(sel)
+  const all = (sel) => [...nav.querySelectorAll(sel)]
+
+  const lines = []
+  lines.push(line('brand wordmark', one('.brand .wordmark')))
+  lines.push(line('brand sub', one('.brand .brand-sub')))
+  all('.game').forEach((g, i) => {
+    lines.push(line('game ' + i + ' label', g.querySelector('.game-label')))
+    lines.push(line('game ' + i + ' note', g.querySelector('.game-note')))
+  })
+  all('.quick-btn').forEach((q, i) => {
+    lines.push(line('quick ' + i + ' label', q.querySelector('.quick-text b')))
+    lines.push(line('quick ' + i + ' note', q.querySelector('.quick-note')))
+  })
+  lines.push(line('source label', one('.group-label')))
+  all('.seg').forEach((seg, i) => lines.push(line('source ' + i, seg.querySelector('.seg-label'))))
+  lines.push(line('source note', one('.source-note')))
+  all('.section-header').forEach((h, i) => lines.push(line('section ' + i, h)))
+  lines.push(line('update line', one('.status-card .status-line')))
+  lines.push(line('sidecar line', one('.status-card .status-line.sub')))
+  all('.settings-link').forEach((b, i) => lines.push(line('link ' + i, b)))
+  lines.push(line('version', one('.version')))
+
+  const blocks = [
+    ['brand', '.brand'],
+    ['games', '.games'],
+    ['quick', '.quick'],
+    ['navwrap', '.navwrap'],
+    ['source well', '.source'],
+    ['footer', '.foot'],
+    ['status card', '.status-card']
+  ].map(([what, sel]) => ({ what, ...box(one(sel)) }))
+
+  const tiles = [
+    ['mark tile', '.mark-tile'],
+    ['game tile', '.game'],
+    ['quick row', '.quick-btn'],
+    ['quick icon', '.quick-icon'],
+    ['source row', '.seg'],
+    ['nav row', '.item']
+  ].map(([what, sel]) => ({ what, ...box(one(sel)) }))
+
+  return { lines: lines.filter(Boolean), blocks, tiles, column: box(nav) }
+})()`
+
+/**
+ * What the nav has room for once the chrome around it has taken its share.
+ *
+ * The scroller is `.navwrap` and not the column, so the brand, the two tiles, the two quick
+ * actions and the footer card are always on screen and the list is what gives way. `visible` is
+ * the number that matters at a short window: how many nav rows are WHOLLY inside the scroller's
+ * viewport before anyone scrolls, counted against the box rather than estimated from row heights.
+ */
+const ROOM = `(() => {
+  const nav = document.querySelector('nav.sidebar')
+  const wrap = nav.querySelector('.navwrap')
+  // Both, because which of the two is the scroller depends on the column's height (see the
+  // media query in Sidebar.svelte). Counted against whichever box is actually clipping.
+  nav.scrollTop = 0
+  wrap.scrollTop = 0
+  const navBox = nav.getBoundingClientRect()
+  const wrapBox = wrap.getBoundingClientRect()
+  const port = {
+    top: Math.max(navBox.top, wrapBox.top),
+    bottom: Math.min(navBox.bottom, wrapBox.bottom),
+    height: Math.min(navBox.bottom, wrapBox.bottom) - Math.max(navBox.top, wrapBox.top)
+  }
+  const rows = [...wrap.querySelectorAll('.section .item')]
+  const inside = rows.filter((r) => {
+    const b = r.getBoundingClientRect()
+    return b.top >= port.top - 0.5 && b.bottom <= port.bottom + 0.5
+  })
+  const chrome = ['.brand', '.games', '.quick', '.foot'].map((sel) => {
+    const el = nav.querySelector(sel)
+    const s = getComputedStyle(el)
+    return Math.round((el.getBoundingClientRect().height + parseFloat(s.marginTop) + parseFloat(s.marginBottom)) * 10) / 10
+  })
+  return {
+    column: Math.round(nav.getBoundingClientRect().height),
+    chrome,
+    chromeTotal: Math.round(chrome.reduce((a, b) => a + b, 0) * 10) / 10,
+    port: Math.round(port.height * 10) / 10,
+    content: Math.round(wrap.scrollHeight * 10) / 10,
+    scrolls: wrap.scrollHeight > wrap.clientHeight + 0.5 || nav.scrollHeight > nav.clientHeight + 0.5,
+    rows: rows.length,
+    visible: inside.length,
+    lastVisible: inside.length === 0 ? null : inside[inside.length - 1].querySelector('.label').textContent.trim(),
+    columnScrolls: nav.scrollHeight > nav.clientHeight + 0.5,
+    columnContent: Math.round(nav.scrollHeight * 10) / 10
+  }
+})()`
+
 const DOWNLOADS_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Downloads')`
 
 // Eleven rows: the ten views, of which the first nine carry Mod+1 to Mod+9, plus Downloads,
@@ -328,6 +477,45 @@ function report(label, shape) {
         }  figure ${fig}  ${r.rowSideways === 0 ? '' : 'ROW SCROLLS'}`
     )
   }
+}
+
+/** Every block around the nav, its box, and every line of text it holds. */
+function blocks(shape) {
+  console.log('  blocks')
+  for (const b of shape.blocks) {
+    console.log(
+      `    ${b.what.padEnd(13)} ${String(b.width).padStart(6)} x ${String(b.height).padStart(6)}`
+    )
+  }
+  console.log('  tiles')
+  for (const t of shape.tiles) {
+    console.log(
+      `    ${t.what.padEnd(13)} ${String(t.width).padStart(6)} x ${String(t.height).padStart(6)}`
+    )
+  }
+  console.log('  text')
+  for (const l of shape.lines) {
+    const verdict =
+      l.cut > 0 ? `CUT OFF BY ${l.cut}px` : l.lines > 1 ? `${l.lines} lines` : 'one line, whole'
+    console.log(
+      `    ${l.what.padEnd(16)} box ${String(l.width).padStart(6)}px, needs ${String(l.needs).padStart(6)}px  ${verdict.padEnd(16)} "${l.says}"`
+    )
+  }
+}
+
+/** The nav's share of the column once the four fixed blocks have taken theirs. */
+function room(r) {
+  console.log(
+    `  room          column ${r.column}px, chrome ${r.chromeTotal}px ` +
+      `(brand ${r.chrome[0]}, games ${r.chrome[1]}, quick ${r.chrome[2]}, foot ${r.chrome[3]})`
+  )
+  console.log(
+    `                nav port ${r.port}px holding ${r.content}px, ` +
+      `${r.visible} of ${r.rows} rows whole without scrolling` +
+      (r.lastVisible === null ? '' : `, last is ${r.lastVisible}`) +
+      `  ${r.scrolls ? 'scrolls' : 'fits'}  ${r.columnScrolls ? 'column is the scroller' : 'navwrap is the scroller'}` +
+      `  column content ${r.columnContent}px`
+  )
 }
 
 /** What every label has left beside a figure of each width, whether it carries one or not. */
@@ -373,6 +561,8 @@ app.whenReady().then(async () => {
 
     console.log(`window ${width}x${height}`)
     report('resting', await evalIn(win, SHAPE))
+    blocks(await evalIn(win, BLOCKS))
+    room(await evalIn(win, ROOM))
 
     // The pill is published by the Issues view, not by the bridge, so it takes a visit. Back to
     // Home afterwards, because what is being measured is the sidebar on an ordinary screen.
