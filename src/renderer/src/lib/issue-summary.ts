@@ -23,32 +23,26 @@ export interface IssueSummary {
   labels: string[]
 }
 
-interface Counted {
+/** One issue, reduced to the two fields the severity model reads. */
+export interface Counted {
   code: string
   description: string
 }
 
 /**
- * Flatten a result's three issue arrays into the pair the row draws.
+ * Fold a chart's issues into the pair a row draws.
+ *
+ * Takes the flattened list rather than a result object, because the two views that draw this
+ * mark hold their issues in different shapes: Explore has Chorus Encore's three arrays on the
+ * search result, and Installed has the rows Encore's own issue scan wrote. One severity fold
+ * for both, so the same problem cannot read as breakage in one list and a note in the other.
  *
  * `portability` is folded into `quality` rather than given a third state. It exists because
  * `badVideo` means different things on different machines, which is a judgement the Issues view
  * makes room for and a dot in a list row has no way to express. Counting it as breakage would
  * mark charts that play here as broken, so it lands on the quieter side.
  */
-export function issueSummary(chart: ChartData, platform: string): IssueSummary {
-  const found: Counted[] = [
-    ...(chart.folderIssues ?? []).map((i) => ({ code: i.folderIssue, description: i.description })),
-    ...(chart.metadataIssues ?? []).map((i) => ({
-      code: i.metadataIssue,
-      description: i.description
-    })),
-    ...(chart.notesData?.chartIssues ?? []).map((i) => ({
-      code: i.noteIssue,
-      description: i.description
-    }))
-  ]
-
+export function summarizeIssues(found: readonly Counted[], platform: string): IssueSummary {
   let blocking = 0
   let quality = 0
   const blockingLabels: string[] = []
@@ -76,14 +70,44 @@ export function issueSummary(chart: ChartData, platform: string): IssueSummary {
 }
 
 /**
+ * The same fold over a Chorus Encore search result, whose issues arrive as three arrays under
+ * three different key names.
+ */
+export function issueSummary(chart: ChartData, platform: string): IssueSummary {
+  return summarizeIssues(
+    [
+      ...(chart.folderIssues ?? []).map((i) => ({
+        code: i.folderIssue,
+        description: i.description
+      })),
+      ...(chart.metadataIssues ?? []).map((i) => ({
+        code: i.metadataIssue,
+        description: i.description
+      })),
+      ...(chart.notesData?.chartIssues ?? []).map((i) => ({
+        code: i.noteIssue,
+        description: i.description
+      }))
+    ],
+    platform
+  )
+}
+
+/**
  * The sentence the indicator carries, or null for a clean chart.
  *
  * Null rather than "no problems found" because the row draws nothing at all when a chart is
  * clean. Measured against api.enchor.us on 2026-09-15: 60 charts in a hundred have no issue
  * of any kind, and a mark on those 60 would be a mark the eye has to skip past on most rows
  * to find the ones that mean something.
+ *
+ * `finder` opens the sentence, and it is a parameter rather than the word "Chorus" spelled into
+ * it because the two lists that draw this mark learned it from different places. Explore is
+ * repeating what Chorus Encore sent with the search result; Installed is repeating what Encore's
+ * own issue scan found on this disk. A hover that named the wrong one would be telling the user
+ * a remote service had looked at their local files.
  */
-export function issueTitle(summary: IssueSummary): string | null {
+export function issueTitle(summary: IssueSummary, finder: string): string | null {
   if (summary.worst === null) return null
   const counts: string[] = []
   if (summary.blocking > 0) {
@@ -94,7 +118,7 @@ export function issueTitle(summary: IssueSummary): string | null {
   }
   const head =
     summary.worst === 'blocking'
-      ? `Chorus found ${counts.join(' and ')} in this chart.`
-      : `Chorus found ${counts.join(' and ')}. The chart plays.`
+      ? `${finder} found ${counts.join(' and ')} in this chart.`
+      : `${finder} found ${counts.join(' and ')}. The chart plays.`
   return `${head} ${summary.labels.join(', ')}.`
 }

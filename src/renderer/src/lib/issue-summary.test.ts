@@ -32,7 +32,7 @@ describe('issueSummary', () => {
     // 60 of the 100 charts sampled from api.enchor.us on 2026-09-15 are in this state, so it
     // is the common case and not the edge one.
     expect(issueSummary(chart(), LINUX).worst).toBeNull()
-    expect(issueTitle(issueSummary(chart(), LINUX))).toBeNull()
+    expect(issueTitle(issueSummary(chart(), LINUX), 'Chorus')).toBeNull()
   })
 
   it('counts a missing audio file as breakage', () => {
@@ -139,14 +139,16 @@ describe('issueTitle', () => {
       issueSummary(
         chart({ folderIssues: [{ folderIssue: 'albumArtSize', description: 'x' }] }),
         LINUX
-      )
+      ),
+      'Chorus'
     )
     expect(title).toContain('The chart plays.')
   })
 
   it('does not say that when something is broken', () => {
     const title = issueTitle(
-      issueSummary(chart({ folderIssues: [{ folderIssue: 'noChart', description: 'x' }] }), LINUX)
+      issueSummary(chart({ folderIssues: [{ folderIssue: 'noChart', description: 'x' }] }), LINUX),
+      'Chorus'
     )
     expect(title).not.toContain('The chart plays.')
     expect(title).toContain('1 problem')
