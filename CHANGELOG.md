@@ -14,6 +14,19 @@ release.
 
 ### Added
 
+- Issues opens with the state of your library instead of with a list. Two cards on Linux and
+  three elsewhere count the charts that are broken, the charts scan-chart has something to say
+  about the charting of, and on a machine where an mp4 background plays, the charts carrying one
+  that would not play on Linux. Each counts across the whole report rather than across whatever
+  is on screen, and each is the control that puts its own rows in the list below. One chart can
+  be counted by two of them, and the line under the cards says so rather than leaving the numbers
+  to be added up wrongly.
+- The two findings Encore will not repair now say why on the row, because a missing button is
+  otherwise read as an oversight. It will not delete a chart file, since which one Clone Hero
+  reads is what it matches charts by and removing the wrong one costs that chart its multiplayer
+  and its play history. It cannot fill in a difficulty rating either, and neither can Chorus: a
+  chart matched there by hash is the same upload and carries the same blank.
+
 - A third column, to the right of whatever you are looking at, holding the chart you last opened:
   its cover, name, artist and charter, a note highway you can play it in, the instrument and
   difficulty that highway uses, what that instrument and difficulty are made of, and what the
@@ -43,6 +56,25 @@ release.
 
 ### Changed
 
+- The Issues view scrolls as one thing. The duplicate report used to sit in the half of the
+  screen that does not scroll, so opening a report with twenty-five identical sets in it grew
+  that half and squeezed the issue list underneath to nothing, with no way to scroll the report
+  out of the way. The cards, the duplicate report and the rows now share one scroller and push
+  each other down the page, and the category chips stick to the top of it so the control for the
+  list is still there once the cards have scrolled past.
+- The duplicate report is one of those cards rather than a panel wedged above them, and reads as
+  one: a heading, the one-line answer, and Show. What it says about the three kinds of duplicate
+  has not moved. The same chart installed twice is the only one that offers to remove a copy, the
+  same song at two versions is listed and not judged, and the same song by two charters still
+  opens by saying nothing is wrong.
+- A video Clone Hero cannot play on Linux is one card on the machines where that is a note rather
+  than a fault, where it used to be a filter chip and a separate panel counting the same charts
+  twice. Its wording is unchanged: what the conversion buys, what it costs, and that nothing is
+  wrong with those charts as they are.
+- The repair card and the undo card open rather than arriving open, and the count each of them
+  leads with is on screen either way. Drawn open, every card together put the first chart 926px
+  down a 629px scroller at a 1280x800 window, which is a screen of summary with the report itself
+  below the fold.
 - Clicking a result in Explore fills that column instead of opening the chart page. The list,
   the filters, the order and your place in it all stay where they are, so comparing three
   versions of a song costs three clicks rather than three round trips through a page. The chart

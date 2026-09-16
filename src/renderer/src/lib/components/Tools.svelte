@@ -19,6 +19,7 @@
     type IssueSeverity
   } from '../../../../shared/issue-labels'
   import { takeFocus, wrapTab } from '../focus-trap'
+  import { countBySeverity, unrepairableNote, type SeverityCount } from '../issue-cards'
   import { assetJobs } from '../stores/assets'
   import { encore } from '../stores/bridge'
   import Duplicates from './Duplicates.svelte'
@@ -34,6 +35,11 @@
     detail: string | null
     /** What Encore can do about this row, or null, which is the answer for most of them. */
     fix: RowFix | null
+    /**
+     * Why there is no button, for the two findings where that was decided rather than skipped.
+     * Null for every other row, which is most of them and which draws nothing extra.
+     */
+    decision: string | null
   }
 
   /**
@@ -79,13 +85,54 @@
   let hasLoaded = $state(false)
   let scanError = $state<string | null>(null)
   let groupFilter = $state<IssueGroupId[]>([])
-  // Charting-craft notes are off by default: on a real library they outnumber the actionable
-  // findings by around a hundred to one, and they are the reason the list read as noise.
-  let showQuality = $state(false)
-  // Off by default for a different reason: these are not faults on this machine, so they do not
-  // belong in a list of what is wrong with the library. The repair summary above the list is
-  // where the conversion stays reachable, and it is drawn whether this is on or off.
-  let showPortability = $state(false)
+
+  /**
+   * Which health cards are showing their rows, which is what filters the list.
+   *
+   * One flag per card rather than one selected card, because they have to combine: exporting the
+   * whole report means having every row on screen, and a chart that is both broken and full of
+   * charting notes is read with both cards on. It is the same three-way state the two dashed
+   * chips used to carry, moved onto the cards that count the rows they govern.
+   *
+   * Broken is on and the other two are off, which are the same defaults as before and for the
+   * same two reasons. Charting-craft notes outnumber the actionable findings by around a hundred
+   * to one on a real library, and they are why the list read as noise. Portability rows are not
+   * faults on this machine at all, so they do not belong in a list of what is wrong.
+   */
+  type CardId = 'broken' | 'notes' | 'portability'
+  let shown = $state<Record<CardId, boolean>>({
+    broken: true,
+    notes: false,
+    portability: false
+  })
+  /** Which card governs a row, so the filter and the counts cannot drift apart. */
+  const CARD_OF: Record<IssueSeverity, CardId> = {
+    blocking: 'broken',
+    quality: 'notes',
+    portability: 'portability'
+  }
+
+  /**
+   * Whether the repair card is showing its four actions, and why it starts closed.
+   *
+   * Measured rather than guessed. With every card drawn open, `scripts/measure-issue-cards.mjs`
+   * put the first chart 926px down a 629px scroller at the default 1280x800 window: a screen of
+   * summary with the report itself entirely below the fold. The repair card is the one that can
+   * carry four rows, so it is the one that folds, and its heading keeps the count on screen, which
+   * is the part that had to be seen. The conversion card can only ever hold one action
+   * (`badVideo`) and the undo card only exists after a repair, so neither folds.
+   */
+  let openRepairs = $state(false)
+
+  /**
+   * Whether the undo card is showing its entries, on the same measurement and a sharper case.
+   *
+   * A backup list survives the session, so this card is on screen every visit once a user has
+   * repaired anything, and drawn open it was 119px of the 629px a default window leaves. Undo is
+   * not something anyone reads on the way past; it is something they go to once, and the heading
+   * says how many there are to go to.
+   */
+  let openUndo = $state(false)
 
   // Inline CSV export state. rowCount is set only when a kind filter was
   // active at export time, so the SAVED line can show how many rows went out.
@@ -177,6 +224,7 @@
         group,
         severity,
         detail: row.description.trim() === meaning.trim() ? null : row.description,
+        decision: unrepairableNote(row.code, row.description),
         // Row-level, not code-level: `extraValue` and `invalidIni` are only fixable when the
         // description is wording scan-chart actually wrote (the fix deletes what it parses out of
         // it), and one action covers both `invalidIni` and `multipleIniFiles`. Asking
@@ -188,18 +236,17 @@
 
   // Severity is applied before everything else, so the chip counts and the totals line
   // always describe the list actually on screen.
-  const severityRows = $derived(
-    explainedRows.filter(
-      (r) =>
-        r.severity === 'blocking' ||
-        (r.severity === 'quality' && showQuality) ||
-        (r.severity === 'portability' && showPortability)
-    )
-  )
-  const qualityCount = $derived(explainedRows.filter((r) => r.severity === 'quality').length)
-  const portabilityCount = $derived(
-    explainedRows.filter((r) => r.severity === 'portability').length
-  )
+  const severityRows = $derived(explainedRows.filter((r) => shown[CARD_OF[r.severity]]))
+
+  /**
+   * What each card counts, over every row of the report rather than over the visible ones.
+   *
+   * A card whose number moved when you pressed the card beside it would be a card nobody could
+   * read the library off, which is the whole of what the strip is for.
+   */
+  const counts = $derived(countBySeverity(explainedRows))
+  const qualityCount = $derived(counts.quality.findings)
+  const portabilityCount = $derived(counts.portability.findings)
 
   // Only categories that actually turned something up become chips: an empty
   // "Missing files" filter is noise.
@@ -285,23 +332,26 @@
    * `explainedRows` (every row of the report, before severity, before category chips, before
    * anything) and its Show button reaches those rows directly.
    */
+  /** One action, the rows it covers and the charts they sit in. Named so a snippet can take one. */
+  interface FixGroup {
+    actionCode: FixActionCode
+    title: string
+    /**
+     * The severity of the rows in this group, which is the same for all of them: an action
+     * covers one or two codes, and the only code whose severity moves with the platform is
+     * `badVideo`, whose action covers nothing else. It is what separates a repair from a
+     * conversion of something that is not broken here.
+     */
+    severity: IssueSeverity
+    rows: ExplainedRow[]
+    chartPaths: string[]
+  }
+
   const fixGroups = $derived.by(() => {
     // Plain arrays rather than a Map keyed by code: there are four actions at most, so `find` is
     // cheaper than it looks, and a Map mutated inside a derived is the kind of thing
     // svelte/prefer-svelte-reactivity exists to catch.
-    const groups: {
-      actionCode: FixActionCode
-      title: string
-      /**
-       * The severity of the rows in this group, which is the same for all of them: an action
-       * covers one or two codes, and the only code whose severity moves with the platform is
-       * `badVideo`, whose action covers nothing else. It is what separates a repair from a
-       * conversion of something that is not broken here.
-       */
-      severity: IssueSeverity
-      rows: ExplainedRow[]
-      chartPaths: string[]
-    }[] = []
+    const groups: FixGroup[] = []
     for (const row of explainedRows) {
       const fix = row.fix
       if (fix === null) continue
@@ -811,8 +861,9 @@
     const filtered =
       groupFilter.length > 0 ||
       fixFocus !== null ||
-      (!showQuality && qualityCount > 0) ||
-      (!showPortability && portabilityCount > 0)
+      (!shown.broken && counts.blocking.findings > 0) ||
+      (!shown.notes && qualityCount > 0) ||
+      (!shown.portability && portabilityCount > 0)
     try {
       const path = await encore().saveTextFile({ defaultName: 'encore-issues.csv', content })
       csvState =
@@ -881,18 +932,11 @@
     {/if}
   </div>
 
-  <p class="intro">
-    Checks every chart in your library for problems: missing audio or album art, chart files Clone
-    Hero cannot play, and song.ini values it rejects or shows wrong. Results are grouped by what
-    went wrong, so you know which charts to fix or download again.
-  </p>
-
-  <!-- Above the issue report and outside it, because it answers a different question from a
-       different source: the issue scan walks the filesystem on a button press, and this reads the
-       catalogue on mount. It is one line until it is opened, so the view still leads with the
-       scan. -->
-  <Duplicates />
-
+  <!-- ── what is happening right now ─────────────────────────────────────────
+       Outside the scrolling body on purpose. Every line in this block is transient, so it costs
+       no height at rest, and the two that carry a Cancel have to stay reachable from wherever the
+       user has scrolled to. A progress line that scrolls away during the 3.4 s it describes is a
+       progress line nobody sees. -->
   {#if progressLine}
     <p class="progress mono">{progressLine}</p>
   {/if}
@@ -922,157 +966,6 @@
     </p>
   {/if}
 
-  <!-- ── what Encore can repair ──────────────────────────────────────────────
-       Above the filters, and counted across every row regardless of them. Two of the four fixes
-       live on codes the quality toggle hides, so a summary drawn from the visible rows would be
-       silent about 54 of the 61 repairable charts in a real library. (Distinct charts over the
-       219-chart reference library, not "62 of 71", which added per-code chart counts together
-       and double-counts every chart carrying more than one code.) -->
-  {#if repairGroups.length > 0 && fixable !== null}
-    <div class="fixable">
-      <div class="fx-head">
-        <h2 class="fx-title">
-          Encore can fix {fixableChartCount} of these chart{fixableChartCount === 1 ? '' : 's'}
-        </h2>
-        {#if hiddenFixableCount > 0}
-          <p class="fx-note">
-            {hiddenFixableCount} of them {hiddenFixableCount === 1 ? 'is' : 'are'} hidden by the current
-            filters. Show puts {hiddenFixableCount === 1 ? 'it' : 'them'} on screen.
-          </p>
-        {/if}
-      </div>
-      {#each repairGroups as group (group.actionCode)}
-        {@const blocked = fixBlockedReason(group.actionCode)}
-        <div class="fx-row">
-          <span class="fx-label">{group.title}</span>
-          <span class="fx-count mono">
-            {group.chartPaths.length} CHART{group.chartPaths.length === 1 ? '' : 'S'}
-            {#if group.rows.length !== group.chartPaths.length}
-              · {group.rows.length} FIXES
-            {/if}
-          </span>
-          <!-- Labelled with what it will show: four of these sit in a column, and "Show" on its
-               own is the same name four times over to anyone not reading the row it is in. -->
-          <button
-            class="hairline"
-            class:on={fixFocus === group.actionCode}
-            aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
-            onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
-          >
-            {fixFocus === group.actionCode ? 'Showing' : 'Show'}
-          </button>
-          {#if blocked === null}
-            <button
-              class="btn-primary fx-fix"
-              disabled={fixRunning}
-              aria-label={`Fix all ${group.chartPaths.length}: ${group.title}`}
-              onclick={() => confirmGroup(group.actionCode)}
-            >
-              Fix all {group.chartPaths.length}
-            </button>
-          {/if}
-        </div>
-        {#if blocked !== null}
-          <!-- The reason, then the answer to it, on the spot. Sending the user to Settings to work
-               out what "badVideo" needs is how a tool loses someone. -->
-          <p class="fx-blocked">
-            {blocked}
-            {#if group.actionCode === 'badVideo'}
-              <button
-                class="hairline"
-                disabled={ffmpegInstalling}
-                onclick={() => void installFfmpeg()}
-              >
-                {#if !ffmpegInstalling}
-                  Install ffmpeg
-                {:else if ffmpegJob?.percent != null}
-                  Installing… {ffmpegJob.percent}%
-                {:else}
-                  Installing…
-                {/if}
-              </button>
-            {/if}
-          </p>
-        {/if}
-      {/each}
-    </div>
-  {/if}
-
-  <!-- ── what Encore can convert, which is not the same as what it can repair ────────────────
-       Only ever drawn off Linux, because `portability` is only ever reached off Linux. The
-       heading counts charts and says what is true of them rather than calling them broken, and
-       the sentence under it says what the conversion buys and what it costs, because the answer
-       to "why would I re-encode a video that works" has to be on screen beside the button. -->
-  {#if portabilityGroups.length > 0 && fixable !== null}
-    <div class="fixable portable">
-      <div class="fx-head">
-        <h2 class="fx-title">
-          {portabilityChartCount} chart{portabilityChartCount === 1 ? '' : 's'}
-          {portabilityChartCount === 1 ? 'has' : 'have'} a video Clone Hero cannot play on Linux
-        </h2>
-        {#if conversionPurpose}
-          <p class="fx-note">{conversionPurpose}</p>
-        {/if}
-      </div>
-      {#each portabilityGroups as group (group.actionCode)}
-        {@const blocked = fixBlockedReason(group.actionCode)}
-        <div class="fx-row">
-          <span class="fx-label">{group.title}</span>
-          <span class="fx-count mono">
-            {group.chartPaths.length} CHART{group.chartPaths.length === 1 ? '' : 'S'}
-            {#if group.rows.length !== group.chartPaths.length}
-              · {group.rows.length} VIDEOS
-            {/if}
-          </span>
-          <button
-            class="hairline"
-            class:on={fixFocus === group.actionCode}
-            aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
-            onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
-          >
-            {fixFocus === group.actionCode ? 'Showing' : 'Show'}
-          </button>
-          {#if blocked === null}
-            <!-- "Convert", never "Fix": there is nothing here to fix on this machine. -->
-            <button
-              class="btn-primary fx-fix"
-              disabled={fixRunning}
-              aria-label={`Convert all ${group.chartPaths.length}: ${group.title}`}
-              onclick={() => confirmGroup(group.actionCode)}
-            >
-              Convert all {group.chartPaths.length}
-            </button>
-          {/if}
-        </div>
-        {#if blocked !== null}
-          <p class="fx-blocked">
-            {blocked}
-            <button
-              class="hairline"
-              disabled={ffmpegInstalling}
-              onclick={() => void installFfmpeg()}
-            >
-              {#if !ffmpegInstalling}
-                Install ffmpeg
-              {:else if ffmpegJob?.percent != null}
-                Installing… {ffmpegJob.percent}%
-              {:else}
-                Installing…
-              {/if}
-            </button>
-          </p>
-        {/if}
-      {/each}
-    </div>
-  {/if}
-
-  <!-- Outside both summaries: the install button is in whichever of them is on screen, and on a
-       machine with no repairs at all the conversion block is the only one there is. -->
-  {#if ffmpegError}
-    <p class="fx-blocked mono">ERROR: {ffmpegError}</p>
-  {/if}
-
-  <!-- ── a run in flight, and what it left behind ───────────────────────────── -->
   {#if fixRunning}
     <div class="fix-progress">
       <div class="fp-line">
@@ -1106,237 +999,400 @@
     <p class="progress mono">+ {fixFailures.length - 5} MORE FAILED</p>
   {/if}
 
-  <!-- ── undo ────────────────────────────────────────────────────────────────
-       Directly under the run's result, because that is the moment the user decides whether they
-       wanted it. Nothing is drawn when there is nothing to undo. -->
-  {#if backups.length > 0}
-    <div class="undo">
-      <div class="fx-head">
-        <h2 class="fx-title">
-          {backups.length} fix{backups.length === 1 ? '' : 'es'} can be undone
-        </h2>
-        <p class="fx-note">
-          Encore kept what each fix replaced, so any of them can be put back exactly as it was. The
-          copies stay until you clear them in Settings.
-        </p>
-      </div>
-      {#each visibleBackups as backup (backup.id)}
-        <div class="ub-row">
-          <div class="ub-text">
-            <span class="ub-chart">{fallbackChartName(backup.chartPath)}</span>
-            <span class="ub-what">{backup.describe}</span>
-          </div>
-          <span class="ub-size mono">{formatBytes(backup.sizeBytes)}</span>
-          <button
-            class="hairline"
-            disabled={undoingId !== null || fixRunning}
-            aria-label={`Undo: ${backup.describe} in ${backup.chartPath}`}
-            onclick={() => void undoBackup(backup)}
-          >
-            {#if undoingId !== backup.id}
-              Undo
-            {:else}
-              {undoPhase ?? 'Undoing'}…
-            {/if}
-          </button>
+  <!-- Outside both offer cards: the install button is in whichever of them is on screen, and on a
+       machine with no repairs at all the conversion card is the only one there is. -->
+  {#if ffmpegError}
+    <p class="fx-blocked mono">ERROR: {ffmpegError}</p>
+  {/if}
+
+  <!-- ── everything that scrolls ─────────────────────────────────────────────
+       One scroller for the cards, the duplicate report and the rows together, rather than a
+       fixed head and a scrolling list. The old split had the duplicate panel in the fixed half,
+       so opening a report with twenty-five identical sets in it grew that half and squeezed the
+       issue list to nothing. Now the two push each other down the page instead. -->
+  <div class="body">
+    <!-- The purpose line, until there is a report. Once there is one the cards say what the view
+         found, which is a better answer to "what is this screen" than a paragraph about it. -->
+    {#if !hasLoaded}
+      <p class="intro">
+        Checks every chart in your library for problems: missing audio or album art, chart files
+        Clone Hero cannot play, and song.ini values it rejects or shows wrong. What it finds is
+        sorted into what is broken, what is worth a look, and what Encore can repair for you.
+      </p>
+    {/if}
+
+    <div class="cards">
+      <!-- ── the state of the library, before a single row ────────────────────
+           One grid for every card in this view. Two state cards on Linux and three everywhere
+           else, then the offers, then the duplicate report: each one counts something across the
+           whole report rather than across the visible rows, and each is the control for what it
+           counts. The state cards replace two dashed chips that sat among the category filters
+           and read as one more filter, which is what kept ~24,000 charting notes and the handful
+           of genuinely broken charts looking like the same kind of thing.
+
+           They share a grid rather than stacking because height is the scarce thing here. Every
+           card in a column of its own put the first chart 926px down a 629px scroller at a
+           default 1280x800 window, which is a screen of summary with the report below the fold.
+           `scripts/measure-issue-cards.mjs` is where that number comes from and where it is
+           checked again. -->
+      {#if rows.length > 0}
+        <div class="strip">
+          {@render stateCard(
+            'broken',
+            counts.blocking,
+            'Broken',
+            counts.blocking.charts === 0
+              ? 'Nothing in your library is broken.'
+              : 'Clone Hero cannot play these, or will show them wrong.'
+          )}
+          {@render stateCard(
+            'notes',
+            counts.quality,
+            'Charting notes',
+            counts.quality.charts === 0
+              ? 'Nothing was found about how these charts were made.'
+              : 'These play. It is scan-chart on how they were charted, not on whether they work.'
+          )}
         </div>
-        {#if undoErrors[backup.id]}
-          <!-- The refusal is the feature, not an error to shrug at: "this chart has changed since
-               the repair" is Encore declining to overwrite something the user did after it. -->
-          <p class="ub-error">{undoErrors[backup.id]}</p>
-        {/if}
-      {/each}
-      {#if backups.length > UNDO_VISIBLE}
-        <button class="hairline ub-more" onclick={() => (showAllBackups = !showAllBackups)}>
-          {showAllBackups ? 'Show fewer' : `Show all ${backups.length}`}
-        </button>
+      {/if}
+
+      <!-- ── what Encore can repair ──────────────────────────────────────────
+           Counted across every row regardless of which cards are showing. Two of the four fixes
+           live on codes the charting-notes card hides, so a summary drawn from the visible rows
+           would be silent about 54 of the 61 repairable charts in a real library. (Distinct
+           charts over the 219-chart reference library, not "62 of 71", which added per-code chart
+           counts together and double-counts every chart carrying more than one code.) -->
+      {#if repairGroups.length > 0 && fixable !== null}
+        <section class="card offer" class:open={openRepairs}>
+          <div class="fx-head">
+            <div class="o-line">
+              <h2 class="fx-title">
+                Encore can fix {fixableChartCount} of these chart{fixableChartCount === 1
+                  ? ''
+                  : 's'}
+              </h2>
+              <button
+                class="hairline"
+                class:on={openRepairs}
+                aria-expanded={openRepairs}
+                onclick={() => (openRepairs = !openRepairs)}
+              >
+                {openRepairs ? 'Hide' : 'Show the repairs'}
+              </button>
+            </div>
+            <p class="fx-note">
+              {#if hiddenFixableCount > 0}
+                {hiddenFixableCount} of them {hiddenFixableCount === 1 ? 'is' : 'are'} hidden by the cards
+                above, and the repairs reach {hiddenFixableCount === 1 ? 'it' : 'them'} anyway.
+              {:else}
+                Each one is a single press, and Encore checks the chart's identity afterwards.
+              {/if}
+            </p>
+          </div>
+          {#if openRepairs}
+            {#each repairGroups as group (group.actionCode)}
+              {@render fixRow(group, 'Fix', 'FIXES')}
+            {/each}
+          {/if}
+        </section>
+      {/if}
+
+      <!-- ── what Encore can convert, which is not the same as what it can repair ────────────
+           Only ever drawn off Linux, because `portability` is only ever reached off Linux. The
+           heading counts charts and says what is true of them rather than calling them broken,
+           and the sentence under it says what the conversion buys and what it costs, because the
+           answer to "why would I re-encode a video that works" has to be on screen beside the
+           button. -->
+      {#if portabilityGroups.length > 0}
+        <section class="card offer portable">
+          <div class="fx-head">
+            <div class="o-line">
+              <h2 class="fx-title">
+                {portabilityChartCount} chart{portabilityChartCount === 1 ? '' : 's'}
+                {portabilityChartCount === 1 ? 'has' : 'have'} a video Clone Hero cannot play on Linux
+              </h2>
+              <!-- The card's own severity toggle, and the only one these rows have.
+                   
+                   It used to be a state card in the strip AND this card, two boxes counting the
+                   same three charts, which cost 122px on exactly the platform that can least
+                   spare it: Windows is where this card exists at all, and where the strip is
+                   already carrying a third of the screen. One card, one control, and the rows it
+                   shows are the rows it converts. -->
+              <button
+                class="hairline"
+                class:on={shown.portability}
+                aria-pressed={shown.portability}
+                aria-label={`${shown.portability ? 'Showing' : 'Show'}: Plays here, not everywhere`}
+                onclick={() => (shown.portability = !shown.portability)}
+              >
+                {shown.portability ? 'Showing' : 'Show them'}
+              </button>
+            </div>
+            {#if conversionPurpose}
+              <p class="fx-note">{conversionPurpose}</p>
+            {/if}
+          </div>
+          <!-- The offer itself only once main has said the conversion can run. The heading and
+               the rows above stay either way: they are about the charts, not about ffmpeg. -->
+          {#if fixable !== null}
+            {#each portabilityGroups as group (group.actionCode)}
+              {@render fixRow(group, 'Convert', 'VIDEOS', false)}
+            {/each}
+          {/if}
+        </section>
+      {/if}
+
+      <!-- ── undo ──────────────────────────────────────────────────────────────
+           Beside the card that offered the repair, because it is that card's counterpart: one is
+           what Encore can do to the library, the other is what it can take back. Nothing is drawn
+           when there is nothing to undo, which is the normal state. -->
+      {#if backups.length > 0}
+        <section class="card offer" class:open={openUndo}>
+          <div class="fx-head">
+            <div class="o-line">
+              <h2 class="fx-title">
+                {backups.length} fix{backups.length === 1 ? '' : 'es'} can be undone
+              </h2>
+              <button
+                class="hairline"
+                class:on={openUndo}
+                aria-expanded={openUndo}
+                onclick={() => (openUndo = !openUndo)}
+              >
+                {openUndo ? 'Hide' : 'Show what can be put back'}
+              </button>
+            </div>
+            {#if openUndo}
+              <p class="fx-note">
+                Each one goes back exactly as it was. The copies stay until you clear them in
+                Settings.
+              </p>
+            {/if}
+          </div>
+          {#each openUndo ? visibleBackups : [] as backup (backup.id)}
+            <div class="ub-row">
+              <div class="ub-text">
+                <span class="ub-chart">{fallbackChartName(backup.chartPath)}</span>
+                <span class="ub-what">{backup.describe}</span>
+              </div>
+              <span class="ub-size mono">{formatBytes(backup.sizeBytes)}</span>
+              <button
+                class="hairline"
+                disabled={undoingId !== null || fixRunning}
+                aria-label={`Undo: ${backup.describe} in ${backup.chartPath}`}
+                onclick={() => void undoBackup(backup)}
+              >
+                {#if undoingId !== backup.id}
+                  Undo
+                {:else}
+                  {undoPhase ?? 'Undoing'}…
+                {/if}
+              </button>
+            </div>
+            {#if undoErrors[backup.id]}
+              <!-- The refusal is the feature, not an error to shrug at: "this chart has changed
+                   since the repair" is Encore declining to overwrite something the user did after
+                   it. -->
+              <p class="ub-error">{undoErrors[backup.id]}</p>
+            {/if}
+          {/each}
+          {#if openUndo && backups.length > UNDO_VISIBLE}
+            <button class="hairline ub-more" onclick={() => (showAllBackups = !showAllBackups)}>
+              {showAllBackups ? 'Show fewer' : `Show all ${backups.length}`}
+            </button>
+          {/if}
+        </section>
+      {/if}
+      <!-- One of the cards rather than a panel above them: it answers a different question from a
+           different source, and a user reading down the state of their library meets "is anything
+           installed twice" beside "what can Encore fix" rather than instead of it. Closed it is a
+           card like the rest; opened it takes the row to itself. -->
+      <Duplicates />
+
+      <!-- The two findings that look repairable and are not, said under the offers rather than
+           inside them: a user who wonders why a row has no button reads it here, and the row
+           itself carries the whole reason. One line, because the cards above it are already as
+           much of this screen as the rows below can afford. -->
+      {#if rows.length > 0}
+        <p class="fx-refusal">
+          A chart can be counted by more than one card. Two findings are left alone on purpose, and
+          each of those rows says why.
+        </p>
       {/if}
     </div>
-  {/if}
 
-  {#if rows.length > 0}
-    {#if fixFocus !== null}
-      <!-- The chips are replaced rather than kept, because while a fix is focused they are not
-           what is filtering the list and leaving them lit would say otherwise. -->
-      <div class="chips">
-        <span class="chips-label mono">SHOWING</span>
-        <span class="focus-name"
-          >{fixGroups.find((g) => g.actionCode === fixFocus)?.title ?? 'fixable issues'}</span
-        >
-        <button class="chip" onclick={() => (fixFocus = null)}>Show everything</button>
-      </div>
-    {:else}
-      <div class="chips">
-        <span class="chips-label mono">SHOW</span>
-        {#each groupChips as chip (chip.id)}
-          <button
-            class="chip"
-            class:on={groupFilter.includes(chip.id)}
-            aria-pressed={groupFilter.includes(chip.id)}
-            title={chip.blurb}
-            onclick={() => toggleGroup(chip.id)}
-          >
-            {chip.label}
-            <span class="chip-count mono">{chip.count}</span>
-          </button>
-        {/each}
-        {#if qualityCount > 0}
-          <button
-            class="chip quality-toggle"
-            class:on={showQuality}
-            aria-pressed={showQuality}
-            title="Charting-craft notes from scan-chart: short sustains, notes placed close together, difficulties that duplicate Expert. The chart still plays."
-            onclick={() => (showQuality = !showQuality)}
-          >
-            Charting quality notes
-            <span class="chip-count mono">{qualityCount}</span>
-          </button>
+    {#if rows.length > 0}
+      <!-- Sticky, because it is the control for the list under it and the cards above it are tall
+           enough to push it off the top. -->
+      <div class="filters">
+        {#if fixFocus !== null}
+          <!-- The chips are replaced rather than kept, because while a fix is focused they are not
+               what is filtering the list and leaving them lit would say otherwise. -->
+          <div class="chips">
+            <span class="chips-label mono">SHOWING</span>
+            <span class="focus-name"
+              >{fixGroups.find((g) => g.actionCode === fixFocus)?.title ?? 'fixable issues'}</span
+            >
+            <button class="chip" onclick={() => (fixFocus = null)}>Show everything</button>
+          </div>
+        {:else}
+          <div class="chips">
+            <span class="chips-label mono">SHOW</span>
+            {#each groupChips as chip (chip.id)}
+              <button
+                class="chip"
+                class:on={groupFilter.includes(chip.id)}
+                aria-pressed={groupFilter.includes(chip.id)}
+                title={chip.blurb}
+                onclick={() => toggleGroup(chip.id)}
+              >
+                {chip.label}
+                <span class="chip-count mono">{chip.count}</span>
+              </button>
+            {/each}
+          </div>
         {/if}
-        <!-- Never drawn on Linux: nothing is graded portability there. Off by default because
-             these charts are not faulty on this machine, and the totals line beside this chip
-             counts faults. -->
-        {#if portabilityCount > 0}
-          <button
-            class="chip quality-toggle"
-            class:on={showPortability}
-            aria-pressed={showPortability}
-            title="Charts carrying a file that another platform Clone Hero runs on cannot use. Encore does not count these as faults here."
-            onclick={() => (showPortability = !showPortability)}
-          >
-            Plays here, not everywhere
-            <span class="chip-count mono">{portabilityCount}</span>
-          </button>
-        {/if}
+
+        <p class="totals mono">
+          {issueCount} ISSUE{issueCount === 1 ? '' : 'S'} IN {chartCount} CHART{chartCount === 1
+            ? ''
+            : 'S'}
+        </p>
       </div>
     {/if}
 
-    <p class="totals mono">
-      {issueCount} ISSUE{issueCount === 1 ? '' : 'S'} IN {chartCount} CHART{chartCount === 1
-        ? ''
-        : 'S'}
-    </p>
-  {/if}
-
-  <div class="results">
-    {#if rows.length === 0 && hasLoaded && !scanning}
-      <p class="empty">No problems found. Every chart in your library checked out.</p>
-    {:else if !hasLoaded && !scanning}
-      <p class="empty">No report yet. Scan library for issues checks every chart you have.</p>
-      <!-- `fixFocus === null` matters: a focused fix is showing rows the severity toggle is
-           hiding, so `severityRows` can be empty while the list below it is full. -->
-    {:else if severityRows.length === 0 && fixFocus === null && !scanning}
-      <p class="empty">
-        Nothing is broken.
-        {#if qualityCount > 0}
-          The {qualityCount} finding{qualityCount === 1 ? '' : 's'} above {qualityCount === 1
-            ? 'is a'
-            : 'are'} charting quality note{qualityCount === 1 ? '' : 's'}.
-        {/if}
-        {#if portabilityCount > 0}
-          {portabilityCount} chart{portabilityCount === 1 ? '' : 's'}
-          {portabilityCount === 1 ? 'carries' : 'carry'} a video Clone Hero cannot play on Linux, which
-          Encore does not count as a fault here.
-        {/if}
-        Turn them on above to read them.
-      </p>
-    {:else if sections.length > 0}
-      {#each sections as section (section.id)}
-        <section class="group">
-          <div class="g-head">
-            <h2 class="g-title">{section.label}</h2>
-            <span class="g-count mono">{section.count}</span>
-          </div>
-          <p class="g-blurb">{section.blurb}</p>
-          {#each section.charts as [chartPath, chartRows] (chartPath)}
-            {@const chartFixes = chartRows.filter(
-              (r) => r.fix !== null && fixReady(r.fix.actionCode)
-            )}
-            <div class="chart-group">
-              <div class="chart-header">
-                <span class="chart-path mono">{chartPath}</span>
-                <!-- Offered only when EVERY row here is repairable, and only when there is more
-                     than one. A single row already has its own button, and "Fix all 1" is a
-                     control that says less than the thing beside it. -->
-                {#if chartFixes.length === chartRows.length && chartFixes.length > 1}
-                  <button
-                    class="hairline chart-fix"
-                    disabled={fixRunning}
-                    aria-label={`Fix all ${chartFixes.length} in ${chartPath}`}
-                    onclick={() => confirmChart(chartFixes)}
-                  >
-                    Fix all {chartFixes.length}
-                  </button>
-                {/if}
-                <span class="chart-count mono">{chartRows.length}</span>
-              </div>
-              <!-- Keyed by index: a chart can legitimately report the same code with the
-                   same description more than once (several notes at one timestamp), and a
-                   duplicate key is a hard runtime error that blanks the whole list. -->
-              {#each chartRows.slice(0, ROWS_PER_CHART) as row, i (i)}
-                <div class="issue-row">
-                  <div class="i-head">
-                    <span class="i-label">{row.label}</span>
-                    <!-- Raw code stays on screen, secondary: greppable and matches the CSV. -->
-                    <span class="i-code mono">{row.code}</span>
-                    <!-- A row with no action renders exactly as it did before this milestone: no
-                         disabled button, no tooltip implying we could help if only you asked.
-                         Most of a real report is these, and its worth is that it is honest. -->
-                    {#if row.fix !== null && fixReady(row.fix.actionCode)}
-                      {@const verb = row.severity === 'portability' ? 'Convert' : 'Fix'}
-                      <button
-                        class="hairline i-fix"
-                        disabled={fixRunning}
-                        title={row.fix.describe}
-                        aria-label={`${verb} ${row.label} in ${chartPath}`}
-                        onclick={() => confirmRow(row)}
-                      >
-                        {verb}
-                      </button>
+    <div class="results">
+      {#if rows.length === 0 && hasLoaded && !scanning}
+        <p class="empty">No problems found. Every chart in your library checked out.</p>
+      {:else if !hasLoaded && !scanning}
+        <p class="empty">No report yet. Scan library for issues checks every chart you have.</p>
+        <!-- `fixFocus === null` matters: a focused fix is showing rows the cards are hiding, so
+             `severityRows` can be empty while the list below it is full. -->
+      {:else if severityRows.length === 0 && fixFocus === null && !scanning}
+        <p class="empty">
+          {#if counts.blocking.findings > 0}
+            Every card above is turned off, so the list is empty. Turn one back on to read its
+            findings.
+          {:else}
+            Nothing is broken.
+            {#if qualityCount > 0}
+              The {qualityCount} finding{qualityCount === 1 ? '' : 's'} above {qualityCount === 1
+                ? 'is a'
+                : 'are'} charting quality note{qualityCount === 1 ? '' : 's'}.
+            {/if}
+            {#if portabilityCount > 0}
+              {portabilityCount} chart{portabilityCount === 1 ? '' : 's'}
+              {portabilityCount === 1 ? 'carries' : 'carry'} a video Clone Hero cannot play on Linux,
+              which Encore does not count as a fault here.
+            {/if}
+            Turn a card on above to read them.
+          {/if}
+        </p>
+      {:else if sections.length > 0}
+        {#each sections as section (section.id)}
+          <section class="group">
+            <div class="g-head">
+              <h2 class="g-title">{section.label}</h2>
+              <span class="g-count mono">{section.count}</span>
+            </div>
+            <p class="g-blurb">{section.blurb}</p>
+            {#each section.charts as [chartPath, chartRows] (chartPath)}
+              {@const chartFixes = chartRows.filter(
+                (r) => r.fix !== null && fixReady(r.fix.actionCode)
+              )}
+              <div class="chart-group">
+                <div class="chart-header">
+                  <span class="chart-path mono">{chartPath}</span>
+                  <!-- Offered only when EVERY row here is repairable, and only when there is more
+                       than one. A single row already has its own button, and "Fix all 1" is a
+                       control that says less than the thing beside it. -->
+                  {#if chartFixes.length === chartRows.length && chartFixes.length > 1}
+                    <button
+                      class="hairline chart-fix"
+                      disabled={fixRunning}
+                      aria-label={`Fix all ${chartFixes.length} in ${chartPath}`}
+                      onclick={() => confirmChart(chartFixes)}
+                    >
+                      Fix all {chartFixes.length}
+                    </button>
+                  {/if}
+                  <span class="chart-count mono">{chartRows.length}</span>
+                </div>
+                <!-- Keyed by index: a chart can legitimately report the same code with the
+                     same description more than once (several notes at one timestamp), and a
+                     duplicate key is a hard runtime error that blanks the whole list. -->
+                {#each chartRows.slice(0, ROWS_PER_CHART) as row, i (i)}
+                  <div class="issue-row">
+                    <div class="i-head">
+                      <span class="i-label">{row.label}</span>
+                      <!-- Raw code stays on screen, secondary: greppable and matches the CSV. -->
+                      <span class="i-code mono">{row.code}</span>
+                      <!-- A row with no action renders exactly as it did before this milestone: no
+                           disabled button, no tooltip implying we could help if only you asked.
+                           Most of a real report is these, and its worth is that it is honest. -->
+                      {#if row.fix !== null && fixReady(row.fix.actionCode)}
+                        {@const verb = row.severity === 'portability' ? 'Convert' : 'Fix'}
+                        <button
+                          class="hairline i-fix"
+                          disabled={fixRunning}
+                          title={row.fix.describe}
+                          aria-label={`${verb} ${row.label} in ${chartPath}`}
+                          onclick={() => confirmRow(row)}
+                        >
+                          {verb}
+                        </button>
+                      {/if}
+                    </div>
+                    <p class="i-meaning">{row.meaning}</p>
+                    {#if row.detail}
+                      <p class="i-detail">{row.detail}</p>
+                    {/if}
+                    <!-- The two rows Encore was asked to repair and refused. Drawn as a decision
+                         rather than as an error: no red, no icon, and the sentence says what
+                         repairing it would cost rather than that something went wrong. -->
+                    {#if row.decision}
+                      <p class="i-decision">{row.decision}</p>
+                    {/if}
+                    {#if row.fix !== null}
+                      {@const blocked = fixBlockedReason(row.fix.actionCode)}
+                      {#if blocked !== null}
+                        <p class="i-blocked">
+                          {blocked}
+                          {#if row.fix.actionCode === 'badVideo'}
+                            <button
+                              class="hairline"
+                              disabled={ffmpegInstalling}
+                              onclick={() => void installFfmpeg()}
+                            >
+                              {ffmpegInstalling ? 'Installing…' : 'Install ffmpeg'}
+                            </button>
+                          {/if}
+                        </p>
+                      {/if}
                     {/if}
                   </div>
-                  <p class="i-meaning">{row.meaning}</p>
-                  {#if row.detail}
-                    <p class="i-detail">{row.detail}</p>
-                  {/if}
-                  {#if row.fix !== null}
-                    {@const blocked = fixBlockedReason(row.fix.actionCode)}
-                    {#if blocked !== null}
-                      <p class="i-blocked">
-                        {blocked}
-                        {#if row.fix.actionCode === 'badVideo'}
-                          <button
-                            class="hairline"
-                            disabled={ffmpegInstalling}
-                            onclick={() => void installFfmpeg()}
-                          >
-                            {ffmpegInstalling ? 'Installing…' : 'Install ffmpeg'}
-                          </button>
-                        {/if}
-                      </p>
-                    {/if}
-                  {/if}
-                </div>
-              {/each}
-              {#if chartRows.length > ROWS_PER_CHART}
-                <p class="more mono">
-                  + {chartRows.length - ROWS_PER_CHART} MORE IN THIS CHART. EXPORT CSV TO SEE THEM ALL
-                </p>
-              {/if}
-            </div>
-          {/each}
-        </section>
-      {/each}
-    {:else if fixFocus !== null && !scanning}
-      <!-- Reached by fixing every row of a focused group, which is a success and should not read
-           as an empty filter. -->
-      <p class="empty">
-        Nothing left to fix here.
-        <button class="linkish" onclick={() => (fixFocus = null)}>Show everything</button>
-      </p>
-    {:else if rows.length > 0 && !scanning}
-      <!-- Rows exist but the active category chips filter them all out. -->
-      <p class="empty mono">NO ISSUES MATCH THE SELECTED FILTERS</p>
-    {/if}
+                {/each}
+                {#if chartRows.length > ROWS_PER_CHART}
+                  <p class="more mono">
+                    + {chartRows.length - ROWS_PER_CHART} MORE IN THIS CHART. EXPORT CSV TO SEE THEM ALL
+                  </p>
+                {/if}
+              </div>
+            {/each}
+          </section>
+        {/each}
+      {:else if fixFocus !== null && !scanning}
+        <!-- Reached by fixing every row of a focused group, which is a success and should not read
+             as an empty filter. -->
+        <p class="empty">
+          Nothing left to fix here.
+          <button class="linkish" onclick={() => (fixFocus = null)}>Show everything</button>
+        </p>
+      {:else if rows.length > 0 && !scanning}
+        <!-- Rows exist but the active category chips filter them all out. -->
+        <p class="empty mono">NO ISSUES MATCH THE SELECTED FILTERS</p>
+      {/if}
+    </div>
   </div>
 
   <!-- ── confirmation ────────────────────────────────────────────────────────
@@ -1408,6 +1464,93 @@
   {/if}
 </div>
 
+<!-- One card of the strip: how many charts, what that means, and the control that puts those rows
+     in the list. No control at zero, because there is nothing to put there and a card reading
+     "0 CHARTS / Broken" is the best news this screen has. -->
+{#snippet stateCard(id: CardId, count: SeverityCount, title: string, say: string)}
+  <section class="card state" class:on={shown[id]}>
+    <h2 class="s-title"><span class="s-n">{count.charts}</span> {title}</h2>
+    <p class="s-say">{say}</p>
+    <div class="s-foot">
+      <span class="s-findings mono">
+        {count.charts === 1 ? 'CHART' : 'CHARTS'} · {count.findings} FINDING{count.findings === 1
+          ? ''
+          : 'S'}
+      </span>
+      {#if count.findings > 0}
+        <button
+          class="hairline"
+          class:on={shown[id]}
+          aria-pressed={shown[id]}
+          aria-label={`${shown[id] ? 'Showing' : 'Show'}: ${title}`}
+          onclick={() => (shown[id] = !shown[id])}
+        >
+          {shown[id] ? 'Showing' : 'Show them'}
+        </button>
+      {/if}
+    </div>
+  </section>
+{/snippet}
+
+<!-- One action of an offer card. `verb` is what separates a repair from a conversion of something
+     that is not broken here, and it is the caller's to pass rather than this snippet's to infer:
+     the two cards exist precisely because that distinction is not a property of the row. -->
+{#snippet fixRow(group: FixGroup, verb: 'Fix' | 'Convert', unit: string, focusable = true)}
+  {@const blocked = fixBlockedReason(group.actionCode)}
+  <div class="fx-row">
+    <span class="fx-label">{group.title}</span>
+    <span class="fx-count mono">
+      {group.chartPaths.length} CHART{group.chartPaths.length === 1 ? '' : 'S'}
+      {#if group.rows.length !== group.chartPaths.length}
+        · {group.rows.length}
+        {unit}
+      {/if}
+    </span>
+    <!-- Labelled with what it will show: four of these can sit in a column, and "Show" on its own
+         is the same name four times over to anyone not reading the row it is in. The conversion
+         card passes `false`: its rows are the whole of one severity, so the card's own toggle is
+         what shows them and a second control here would be the same job under a second name. -->
+    {#if focusable}
+      <button
+        class="hairline"
+        class:on={fixFocus === group.actionCode}
+        aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
+        onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
+      >
+        {fixFocus === group.actionCode ? 'Showing' : 'Show'}
+      </button>
+    {/if}
+    {#if blocked === null}
+      <button
+        class="btn-primary fx-fix"
+        disabled={fixRunning}
+        aria-label={`${verb} all ${group.chartPaths.length}: ${group.title}`}
+        onclick={() => confirmGroup(group.actionCode)}
+      >
+        {verb} all {group.chartPaths.length}
+      </button>
+    {/if}
+  </div>
+  {#if blocked !== null}
+    <!-- The reason, then the answer to it, on the spot. Sending the user to Settings to work out
+         what "badVideo" needs is how a tool loses someone. -->
+    <p class="fx-blocked">
+      {blocked}
+      {#if group.actionCode === 'badVideo'}
+        <button class="hairline" disabled={ffmpegInstalling} onclick={() => void installFfmpeg()}>
+          {#if !ffmpegInstalling}
+            Install ffmpeg
+          {:else if ffmpegJob?.percent != null}
+            Installing… {ffmpegJob.percent}%
+          {:else}
+            Installing…
+          {/if}
+        </button>
+      {/if}
+    </p>
+  {/if}
+{/snippet}
+
 <svelte:window
   onkeydown={(event) => {
     if (event.key === 'Escape' && confirming !== null) confirming = null
@@ -1415,36 +1558,37 @@
 />
 
 <style>
-  .quality-toggle {
-    /* Set apart from the category chips: this one changes what counts as a problem,
-       the others only filter what is already on screen. */
-    margin-left: 6px;
-    border-style: dashed;
-  }
-  .more {
-    padding: 6px 12px 10px;
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    letter-spacing: var(--ls-caps);
-  }
+  /* ── the frame ────────────────────────────────────────────────────────────
+     A fixed toolbar with the transient status lines under it, then one scroller for everything
+     else. The split used to fall after the duplicate panel, which put a report that can run to
+     twenty-five expanded sets in the part that does not scroll: it grew, `.results` was the only
+     flexible track left, and the issue list was squeezed to nothing by a panel about something
+     else. Cards, duplicates and rows now share one scroller and push each other down instead. */
   .tools {
     display: flex;
     flex-direction: column;
     height: 100%;
     min-height: 0;
   }
+  .body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
   .toolbar {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 12px 16px 10px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--hairline);
     flex-shrink: 0;
   }
   .hairline {
-    background: var(--surface-1);
+    background: var(--ground-4);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-size: var(--fs-secondary);
     padding: 4px 11px;
@@ -1453,20 +1597,27 @@
     flex-shrink: 0;
     transition:
       color var(--t-fast) var(--ease),
-      border-color var(--t-fast) var(--ease);
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
   }
   .hairline:hover:not(:disabled) {
     color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
+    background: var(--ground-5);
   }
   .hairline:disabled {
     opacity: 0.4;
     cursor: default;
   }
+  .hairline.on {
+    color: var(--text-1);
+    border-color: var(--border-2);
+    background: var(--ground-5);
+  }
   /* Primary action of this view. */
   .btn-primary {
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--accent-grad);
     color: #fff;
     font-weight: 600;
@@ -1484,9 +1635,9 @@
     opacity: 0.5;
     cursor: default;
   }
-  /* Purpose line, which reads before any scan, so the view explains itself cold. */
+  /* Purpose line, which reads before the first scan and is replaced by the cards afterwards. */
   .intro {
-    padding: 10px 16px 4px;
+    padding: 14px 16px 4px;
     margin: 0;
     max-width: 78ch;
     font-size: var(--fs-secondary);
@@ -1504,208 +1655,213 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .chips {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px 6px;
-    flex-shrink: 0;
-  }
-  .chips-label {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: 999px;
-    font-size: var(--fs-secondary);
-    font-family: var(--font-ui);
-    color: var(--text-2);
-    padding: 4px 11px;
-    cursor: pointer;
-    transition:
-      color var(--t-fast) var(--ease),
-      border-color var(--t-fast) var(--ease),
-      background var(--t-fast) var(--ease);
-  }
-  .chip:hover {
-    color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .chip.on {
-    color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.25);
-    background: var(--surface-2);
-  }
-  .chip-count {
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-  }
-  .totals {
-    padding: 4px 16px 8px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    letter-spacing: var(--ls-caps);
-    flex-shrink: 0;
-  }
-  .results {
-    flex: 1;
-    overflow-y: auto;
-    min-height: 0;
-    padding: 8px 16px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .empty {
-    padding: 16px 0;
-    color: var(--text-3);
-    font-size: var(--fs-secondary);
-  }
-  /* Category section: plain-language heading, then the charts it affects. */
-  .group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 8px;
-  }
-  .group:first-child {
-    margin-top: 0;
-  }
-  .g-head {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .g-title {
-    margin: 0;
-    font-size: var(--fs-body);
-    font-weight: 600;
-    color: var(--text-1);
-  }
-  .g-count {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-  }
-  .g-blurb {
-    margin: -4px 0 0;
-    font-size: var(--fs-secondary);
-    color: var(--text-2);
-  }
-  /* One card per chart: header strip + its issue rows. */
-  .chart-group {
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .chart-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 7px 12px;
-    background: var(--surface-2);
-  }
-  .chart-path {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-    min-width: 0;
-    margin-right: 8px;
-  }
-  .chart-count {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    flex-shrink: 0;
-  }
-  .issue-row {
-    padding: 8px 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.035);
-  }
-  .i-head {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-  /* The human label leads; the code trails it as quiet, copyable provenance. */
-  .i-label {
-    font-size: var(--fs-body);
-    font-weight: 500;
-    color: var(--text-1);
-  }
-  .i-code {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .i-meaning {
-    margin: 3px 0 0;
-    font-size: var(--fs-secondary);
-    color: var(--text-2);
-    line-height: var(--lh-snug);
-  }
-  /* scan-chart's own wording, which carries the specifics (file name, instrument, difficulty). */
-  .i-detail {
-    margin: 3px 0 0;
-    font-size: var(--fs-secondary);
-    color: var(--text-3);
-    line-height: var(--lh-snug);
-    overflow-wrap: anywhere;
-  }
   .mono {
     font-family: var(--font-mono);
   }
 
-  /* ── what Encore can repair ───────────────────────────────────────────────
-     A card rather than another chip row: it is the one part of this view that offers to change
-     something, and it has to read as an offer rather than as one more filter. */
-  .fixable {
-    margin: 8px 16px 2px;
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    padding: 10px 12px 11px;
+  /* ── the cards ────────────────────────────────────────────────────────────
+     Everything above the rows is one of these: two or three counting the state of the library,
+     then the offers, then what can be taken back. They share a shell so that the difference
+     between them is the wording rather than the drawing, which is the point of putting the state
+     of a library on screen before any of its rows. */
+  /* One grid for every card. `auto-fit` with a floor rather than a column count: the view column
+     is 668px at a default window, 882px at 1120 and 509px at 1121 with the preview rail up, so
+     what fits across is a different number at each of them and none of those numbers belongs in
+     this file. `minmax(0, 1fr)` is the half that stops a long word widening a track past its
+     share and scrolling the view sideways. */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(244px, 1fr));
+    align-items: start;
+    gap: 8px;
+    padding: 12px 16px 0;
     flex-shrink: 0;
   }
-  /* The conversion panel shares the repair panel's shell, and is set back from it on purpose:
-     same kind of offer, lower stakes. Nothing in this file can verify that under jsdom; it is a
-     desktop-QA claim. What the tests do pin is that the two panels are separate elements with
-     separate wording, which is what stops a working chart being counted as a broken one. */
+  .card {
+    background: var(--ground-3);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    box-shadow: var(--elev-1);
+  }
+  .state {
+    display: flex;
+    flex-direction: column;
+    padding: 11px 13px 10px;
+    min-width: 0;
+  }
+  /* The lit state is a border and a ground step, not a colour: which card is showing its rows is
+     a fact about the list below, and a card that turned red when it was pressed would be saying
+     something about the charts instead. */
+  .state.on {
+    border-color: var(--border-2);
+    background: var(--ground-4);
+  }
+  /* The count leads the title on one line rather than sitting above it. Two lines of heading per
+     card cost 30px each, and with five cards in the column that was 150px of the 629px a default
+     window leaves for everything, which came straight out of the rows. */
+  .s-title {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: var(--fs-emphasis);
+    line-height: var(--lh-tight);
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .s-n {
+    font-size: var(--fs-heading);
+    line-height: var(--lh-display);
+    font-weight: 700;
+    letter-spacing: var(--ls-tight);
+    color: var(--text-1);
+  }
+  .s-say {
+    margin: 5px 0 0;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-snug);
+    color: var(--text-2);
+  }
+  /* Pushed to the bottom so the buttons of three cards line up however long their sentences run.
+     Grid rows are equal height already; this is what makes the row inside them agree. */
+  .s-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-top: auto;
+    padding-top: 9px;
+  }
+  .s-foot button {
+    margin-left: auto;
+  }
+  .s-findings {
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── an offer: what Encore can do, and what it can take back ─────────────── */
+  .offer {
+    padding: 11px 13px 11px;
+    min-width: 0;
+  }
+  /* The state cards share a row; every other card takes one to itself.
+     
+     Measured, not assumed. Letting the offers pair off with each other looked like free height
+     and was not: the duplicate card's summary is three clauses long, and in a 306px cell at a
+     default window it wrapped to 295px tall, which is more than the two it saved. A band that is
+     wide is two lines; the same words in half the width are nine. */
+  .strip,
+  .offer,
+  .fx-refusal,
+  .cards > :global(.dupes) {
+    grid-column: 1 / -1;
+  }
+  /* The state cards in a grid of their own, so `auto-fit` has only them to fit and collapses the
+     track it does not need. Sharing the outer grid put them in three tracks at an 882px view
+     because the full-width cards below kept the third one from being empty, which left each state
+     card 272px wide at a window 200px wider than one where they were 306px, and clipped
+     "CHARTS · 60 FINDINGS" in the foot. */
+  /* 220px rather than 244: at the 509px the view column narrows to with the preview rail up, 244
+     leaves room for one track and the two cards stack, which cost 115px of a 629px scroller at
+     the width that has the least of it. 220 fits two, and the foot below wraps rather than
+     clipping when a card gets that narrow. */
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+  }
+  .cards > :global(.dupes) {
+    min-width: 0;
+  }
+  /* The heading and its disclosure on one line, so a closed offer card is two lines tall. */
+  .o-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  /* The conversion card is set back from the repair card on purpose: same kind of offer, lower
+     stakes, and nothing here is broken. jsdom can verify none of that; what the tests pin is that
+     the two are separate elements with separate wording, which is what stops a working chart
+     being counted as a broken one. */
   .portable .fx-title {
     color: var(--text-2);
   }
-  /* The undo panel is the fixable panel's counterpart and shares its shell deliberately: one is
-     what Encore can do to the library, the other is what it can take back. */
-  .undo {
-    margin: 8px 16px 2px;
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    padding: 10px 12px 11px;
+  .fx-head {
+    margin-bottom: 6px;
+  }
+  .fx-title {
+    margin: 0;
+    font-size: var(--fs-emphasis);
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .fx-note {
+    margin: 4px 0 0;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-snug);
+    color: var(--text-2);
+    max-width: 74ch;
+  }
+  .fx-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid var(--hairline);
+  }
+  .fx-label {
+    font-size: var(--fs-body);
+    font-weight: 500;
+    color: var(--text-1);
+    flex: 1;
+    min-width: 0;
+  }
+  .fx-count {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    letter-spacing: var(--ls-caps);
+    white-space: nowrap;
     flex-shrink: 0;
+  }
+  .fx-fix {
+    font-size: var(--fs-secondary);
+    padding: 4px 11px;
+  }
+  .fx-blocked {
+    margin: 0 0 4px;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    color: var(--text-2);
+    max-width: 74ch;
+  }
+  .fx-blocked button {
+    margin-left: 6px;
+    vertical-align: baseline;
+  }
+  /* The refusals, under the cards rather than in one of them: they are the answer to a question
+     asked at a row. Quiet, and with no border or ground of its own, because a decision is not a
+     warning and this is not a fifth card. */
+  .fx-refusal {
+    margin: 2px 2px 0;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-snug);
+    color: var(--text-3);
+    max-width: 82ch;
   }
   .ub-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 5px 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.035);
+    padding: 6px 0;
+    border-top: 1px solid var(--hairline);
   }
   .ub-text {
     flex: 1;
@@ -1742,68 +1898,11 @@
   .ub-more {
     margin-top: 8px;
   }
-  .fx-head {
-    margin-bottom: 6px;
-  }
-  .fx-title {
-    margin: 0;
-    font-size: var(--fs-secondary);
-    font-weight: 600;
-    color: var(--text-1);
-  }
-  .fx-note {
-    margin: 3px 0 0;
-    font-size: var(--fs-secondary);
-    line-height: var(--lh-snug);
-    color: var(--text-2);
-    max-width: 70ch;
-  }
-  .fx-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.035);
-  }
-  .fx-label {
-    font-size: var(--fs-body);
-    font-weight: 500;
-    color: var(--text-1);
-    flex: 1;
-    min-width: 0;
-  }
-  .fx-count {
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    letter-spacing: var(--ls-caps);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .fx-fix {
-    font-size: var(--fs-secondary);
-    padding: 4px 11px;
-  }
-  .hairline.on {
-    color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.25);
-    background: var(--surface-2);
-  }
-  .fx-blocked {
-    margin: 0 0 4px;
-    font-size: var(--fs-secondary);
-    line-height: var(--lh-prose);
-    color: var(--text-2);
-    max-width: 74ch;
-  }
-  .fx-blocked button {
-    margin-left: 6px;
-    vertical-align: baseline;
-  }
 
   /* ── a run in flight ──────────────────────────────────────────────────── */
   .fix-progress {
-    margin: 6px 16px 0;
-    background: var(--surface-1);
+    margin: 8px 16px 0;
+    background: var(--ground-3);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
     padding: 8px 12px 10px;
@@ -1841,7 +1940,7 @@
     margin-top: 7px;
     height: 3px;
     border-radius: 2px;
-    background: var(--surface-2);
+    background: var(--ground-0);
     overflow: hidden;
   }
   .fp-fill {
@@ -1853,10 +1952,98 @@
     white-space: normal;
     line-height: var(--lh-snug);
   }
+
+  /* ── the category filter, which sticks to the top of the list it filters ───
+     The cards above it are tall enough to scroll off, and the chips are the control for the rows
+     under them, so they travel with the rows rather than with the cards. The ground is opaque
+     because the rows pass underneath it. */
+  .filters {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-raised);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hairline);
+    padding: 8px 0 7px;
+    margin-top: 10px;
+    flex-shrink: 0;
+  }
+  .chips {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 0 16px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .chips-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--ground-4);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-size: var(--fs-secondary);
+    font-family: var(--font-ui);
+    color: var(--text-2);
+    padding: 4px 11px;
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+  .chip:hover {
+    color: var(--text-1);
+    border-color: var(--border-2);
+  }
+  .chip.on {
+    color: var(--text-1);
+    border-color: var(--border-2);
+    background: var(--ground-5);
+  }
+  .chip-count {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
   .focus-name {
     font-size: var(--fs-body);
     font-weight: 600;
     color: var(--text-1);
+  }
+  .totals {
+    margin: 0;
+    padding: 0 16px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    letter-spacing: var(--ls-caps);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* ── the rows ─────────────────────────────────────────────────────────── */
+  .results {
+    padding: 8px 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .empty {
+    padding: 14px 0;
+    color: var(--text-3);
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    max-width: 74ch;
   }
   .linkish {
     background: none;
@@ -1867,6 +2054,124 @@
     font-size: var(--fs-secondary);
     text-decoration: underline;
     cursor: pointer;
+  }
+  /* Category section: plain-language heading, then the charts it affects. */
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .group:first-child {
+    margin-top: 0;
+  }
+  .g-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .g-title {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .g-count {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+  }
+  .g-blurb {
+    margin: -4px 0 0;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-snug);
+    color: var(--text-2);
+  }
+  /* One card per chart: header strip + its issue rows. */
+  .chart-group {
+    background: var(--ground-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 12px;
+    background: var(--ground-3);
+  }
+  .chart-path {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+    margin-right: 8px;
+  }
+  .chart-count {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    flex-shrink: 0;
+  }
+  .issue-row {
+    padding: 8px 12px;
+    border-top: 1px solid var(--hairline);
+  }
+  .i-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  /* The human label leads; the code trails it as quiet, copyable provenance. */
+  .i-label {
+    font-size: var(--fs-body);
+    font-weight: 500;
+    color: var(--text-1);
+  }
+  .i-code {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-3);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .i-meaning {
+    margin: 3px 0 0;
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+    line-height: var(--lh-snug);
+  }
+  /* scan-chart's own wording, which carries the specifics (file name, instrument, difficulty). */
+  .i-detail {
+    margin: 3px 0 0;
+    font-size: var(--fs-secondary);
+    color: var(--text-3);
+    line-height: var(--lh-snug);
+    overflow-wrap: anywhere;
+  }
+  /* A decision, drawn as one: the accent rule marks it as Encore speaking rather than scan-chart,
+     and nothing about it is warning-coloured, because nothing went wrong. */
+  .i-decision {
+    margin: 6px 0 0;
+    padding-left: 9px;
+    border-left: 2px solid var(--accent-dim);
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-snug);
+    color: var(--text-2);
+    max-width: 78ch;
+  }
+  .more {
+    padding: 6px 12px 10px;
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    letter-spacing: var(--ls-caps);
   }
 
   /* ── per-row and per-chart actions ────────────────────────────────────── */
@@ -1925,7 +2230,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: var(--surface-1);
+    background: var(--ground-3);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
     padding: 16px 18px 14px;
