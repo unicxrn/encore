@@ -9,6 +9,13 @@ import { ENCORE_TMP_DIR, ENCHOR_FILES_URL } from '../shared/constants'
 import { IPC } from '../shared/ipc-contract'
 import { resolveChartFolderName } from '../shared/naming'
 import { favouriteKey, isFavouritable } from '../shared/favourites'
+import {
+  canJoinASetlist,
+  isValidSetlistName,
+  setlistEntryKey,
+  setlistName,
+  SETLIST_NAME_MAX
+} from '../shared/setlists'
 import type { ChartRecord } from '../shared/schemas'
 import { isUnderLibrary } from './assets/library-guard'
 import { sweepOrphanArt } from './catalog/art-cache'
@@ -22,7 +29,16 @@ import { withCopySizes } from './catalog/chart-size'
 import { removeChart } from './catalog/remove-chart'
 import { listFavourites, setFavourite } from './catalog/favourites'
 import {
+  createSetlist,
+  deleteSetlist,
+  listSetlists,
+  moveSetlistEntry,
+  renameSetlist,
+  setSetlistEntry
+} from './catalog/setlists'
+import {
   chartFacets,
+  chartsByMeta,
   chartsExistByMeta,
   countCharts,
   getChartByPath,
@@ -228,6 +244,46 @@ function sweepArtCache(db: CatalogDb, artDir: string, summary: ScanSummary): voi
   } catch (err) {
     console.error('Album art sweep failed:', err)
   }
+}
+
+/**
+ * A setlist name as it will be stored, or a refusal the user can read.
+ *
+ * Collapsing before measuring is the whole of it: a name pasted with a trailing run of spaces is
+ * a name the user meant, and refusing it for a length it does not have once written down would be
+ * the app arguing with its own display. The boundary schema caps the raw string at twice this so
+ * nothing unbounded reaches here; this is the rule a person is actually held to.
+ */
+function requireSetlistName(raw: string): string {
+  const name = setlistName(raw)
+  if (!isValidSetlistName(name)) {
+    throw new Error(
+      name.length === 0
+        ? 'A setlist needs a name.'
+        : `A setlist name can be at most ${SETLIST_NAME_MAX} characters.`
+    )
+  }
+  return name
+}
+
+/**
+ * The three fields an entry names a chart by, normalised, or a refusal.
+ *
+ * Refused for exactly the case the heart refuses and with the same way out, because it is the same
+ * problem: a chart with no name of its own is drawn from its folder name, which is a display
+ * fallback rather than an identity, and an entry holding onto one would move when the folder was
+ * renamed. See shared/setlists.ts.
+ */
+function requireSetlistEntry(req: {
+  name?: string | null
+  artist?: string | null
+  charter?: string | null
+}): ReturnType<typeof setlistEntryKey> {
+  const key = setlistEntryKey(req)
+  if (!canJoinASetlist(key)) {
+    throw new Error('A chart with no name of its own cannot go in a setlist.')
+  }
+  return key
 }
 
 function wireIpc(): {
@@ -549,6 +605,25 @@ function wireIpc(): {
         throw new Error('A chart with no name of its own cannot be favourited.')
       }
       return setFavourite(db, key, req.favourite)
+    },
+    listSetlists: () => listSetlists(db),
+    // Normalised and checked here, for the same reason the heart's key is: this is the one place
+    // that decides what gets stored, so a name typed with a stray double space and the same name
+    // typed cleanly cannot become two setlists. The length is checked AFTER collapsing, which is
+    // why the boundary schema's cap is looser than this one.
+    createSetlist: (req) => createSetlist(db, requireSetlistName(req.name)),
+    renameSetlist: (req) => renameSetlist(db, req.id, requireSetlistName(req.name)),
+    deleteSetlist: (req) => deleteSetlist(db, req.id),
+    // The entry key goes through the same function a favourite's does, so a chart put in a setlist
+    // from Explore and the same chart put in one from Installed are one row. A chart that names
+    // nothing is refused rather than stored, exactly as the heart refuses it.
+    setSetlistEntry: (req) => setSetlistEntry(db, req.id, requireSetlistEntry(req), req.member),
+    moveSetlistEntry: (req) => moveSetlistEntry(db, req.id, requireSetlistEntry(req), req.delta),
+    // The join happens here rather than in the renderer because it is a query over the catalog,
+    // and because the setlist's own order is what the answer has to be aligned to.
+    setlistCharts: (req) => {
+      const list = listSetlists(db).find((l) => l.id === req.id)
+      return list === undefined ? [] : chartsByMeta(db, list.entries)
     },
     // Sizes are added on top of the query rather than inside it, and only for the tier that
     // offers a removal: the report itself never touches the filesystem. See chart-size.ts.

@@ -14,6 +14,7 @@ import {
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
 import type { Favourite } from '../shared/favourites'
+import { SETLIST_NAME_MAX, type Setlist } from '../shared/setlists'
 import { EDITABLE_INI_KEYS } from '../shared/metadata-fields'
 import type {
   ChartMetadataRead,
@@ -65,6 +66,34 @@ export interface IpcDeps {
    * an error to report to anybody.
    */
   setFavourite: (req: FavouriteWriteRequest) => Favourite[]
+  /** Every setlist, entries included, oldest first. See shared/setlists.ts on what they key on. */
+  listSetlists: () => Setlist[]
+  /**
+   * The six writes, each answering with the list as it now stands.
+   *
+   * Six channels rather than one verb-and-payload, because each does one thing and a single
+   * channel taking an action name is a switch the zod boundary cannot narrow. Names arrive as the
+   * user typed them and are normalised in main (`setlistName`), so a setlist called "Friday  night"
+   * and one called "Friday night" cannot both exist; entry keys arrive as the chart's own three
+   * fields and are normalised the same way a heart's are.
+   *
+   * All of them refuse a setlist that no longer exists rather than writing rows nothing names,
+   * except `deleteSetlist`, where deleting what is already gone is the outcome the caller wanted.
+   */
+  createSetlist: (req: SetlistNameRequest) => Setlist[]
+  renameSetlist: (req: SetlistRenameRequest) => Setlist[]
+  deleteSetlist: (req: SetlistIdRequest) => Setlist[]
+  setSetlistEntry: (req: SetlistEntryWriteRequest) => Setlist[]
+  moveSetlistEntry: (req: SetlistMoveRequest) => Setlist[]
+  /**
+   * The library's row for each of one setlist's entries, in that setlist's order.
+   *
+   * Null where nothing on disk matches, which is an ordinary state rather than an error: a setlist
+   * may hold a chart from Chorus the user has not downloaded, or one they have since removed. The
+   * answer is aligned to the entries by index, so a setlist that changed under the request draws
+   * as many rows as it has and no more.
+   */
+  setlistCharts: (req: SetlistIdRequest) => (ChartRecord | null)[]
   /** Distinct values for the Installed view's filter pickers. Takes no arguments by design:
    * the lists describe the whole catalog, so narrowing them by the filter currently applied
    * would take options away as soon as they were used. */
@@ -353,6 +382,51 @@ const FavouriteWriteSchema = z.object({
   favourite: z.boolean()
 })
 export type FavouriteWriteRequest = z.infer<typeof FavouriteWriteSchema>
+/**
+ * A setlist, as the renderer is allowed to name it.
+ *
+ * `name` is capped at twice `SETLIST_NAME_MAX` rather than at it. The cap here is the boundary
+ * refusing text no interface could have produced; the length the user is actually held to is
+ * `isValidSetlistName`, applied in main/index.ts AFTER `setlistName` has collapsed the whitespace,
+ * because a name pasted with trailing spaces is a name the user meant and not an attack. An id is
+ * a string main generated, and nothing here reads it as anything else, so it is capped and left
+ * alone rather than parsed as a UUID: a stricter shape would only mean a future id format could
+ * not be stored.
+ */
+const SETLIST_ID = z.string().min(1).max(64)
+const SETLIST_TEXT = z.string().max(SETLIST_NAME_MAX * 2)
+const SetlistNameSchema = z.object({ name: SETLIST_TEXT })
+export type SetlistNameRequest = z.infer<typeof SetlistNameSchema>
+const SetlistIdSchema = z.object({ id: SETLIST_ID })
+export type SetlistIdRequest = z.infer<typeof SetlistIdSchema>
+const SetlistRenameSchema = z.object({ id: SETLIST_ID, name: SETLIST_TEXT })
+export type SetlistRenameRequest = z.infer<typeof SetlistRenameSchema>
+/**
+ * A chart going into a setlist or coming out of one.
+ *
+ * The three fields and their 400-character cap are `FavouriteWriteSchema`'s, for the same reason:
+ * this is a channel that writes text of the renderer's choosing into the catalog, and a chart's
+ * three names are nowhere near that long. `member` is the direction, and is required for the same
+ * reason `favourite` is: a write that does not say which way is a bug on the calling side, and
+ * guessing it would be the boundary inventing an intention.
+ */
+const SetlistEntryWriteSchema = z.object({
+  id: SETLIST_ID,
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  member: z.boolean()
+})
+export type SetlistEntryWriteRequest = z.infer<typeof SetlistEntryWriteSchema>
+/** A move of one place. The literal union is the whole validation: there is no move by three. */
+const SetlistMoveSchema = z.object({
+  id: SETLIST_ID,
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  delta: z.union([z.literal(-1), z.literal(1)])
+})
+export type SetlistMoveRequest = z.infer<typeof SetlistMoveSchema>
 const ChartTypeSchema = z.enum(['folder', 'sng'])
 const ChartReadFilesSchema = z.object({
   path: z.string(),
@@ -491,6 +565,19 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   // nothing to narrow it by.
   ipcMain.handle(IPC.favouritesList, () => deps.listFavourites())
   ipcMain.handle(IPC.favouritesSet, (_e, raw) => deps.setFavourite(FavouriteWriteSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsList, () => deps.listSetlists())
+  ipcMain.handle(IPC.setlistsCreate, (_e, raw) => deps.createSetlist(SetlistNameSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsRename, (_e, raw) =>
+    deps.renameSetlist(SetlistRenameSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsDelete, (_e, raw) => deps.deleteSetlist(SetlistIdSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsSetEntry, (_e, raw) =>
+    deps.setSetlistEntry(SetlistEntryWriteSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsMoveEntry, (_e, raw) =>
+    deps.moveSetlistEntry(SetlistMoveSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsCharts, (_e, raw) => deps.setlistCharts(SetlistIdSchema.parse(raw)))
   // No payload: the report describes the whole catalog. There is nothing here for the renderer
   // to name and so nothing to validate.
   ipcMain.handle(IPC.catalogDuplicates, () => deps.duplicateCharts())
