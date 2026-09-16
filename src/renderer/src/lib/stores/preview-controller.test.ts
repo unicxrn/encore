@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { artUrl } from '../../../../shared/art'
 
 // The player wrapper lazily imports 'chart-preview' (extends HTMLElement at
-// import time and crashes in node). Mock the three loader helpers it pulls out
-// of the module. The wrapper drives the package's "pre-processed data" path so
-// it can keep the parsed chart, rather than the one-call loadFromUrl.
+// import time and crashes in node). Mock the four helpers it pulls out of the
+// module. The wrapper drives the package's "pre-processed data" path so it can
+// keep the parsed chart, rather than the one-call loadFromUrl, and asks the
+// package which kind of highway it is about to draw so it can paint Encore's
+// lane over it. `textures: null` below is what makes that a no-op here: the
+// skin is best effort and there is nothing to skin. See preview/lane-skin.ts.
 const fetchSngFile = vi.fn(async () => new Uint8Array([1, 2, 3]))
 const extractSngFile = vi.fn(async () => [{ fileName: 'notes.chart', data: new Uint8Array() }])
 const prepareChartData = vi.fn(async () => preparedChart)
 vi.mock('chart-preview', () => ({
   fetchSngFile: (...args: unknown[]) => fetchSngFile(...(args as [])),
   extractSngFile: (...args: unknown[]) => extractSngFile(...(args as [])),
-  prepareChartData: (...args: unknown[]) => prepareChartData(...(args as []))
+  prepareChartData: (...args: unknown[]) => prepareChartData(...(args as [])),
+  getInstrumentType: (instrument: string) => (instrument === 'drums' ? 2 : 1)
 }))
 
 /** Stands in for `prepareChartData`'s result: two sections, four notes, 100 s long. */

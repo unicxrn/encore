@@ -7,9 +7,9 @@
  * approved design's own perspective, read off its canvas script, so the still lane and the live
  * one are the same shape of lane rather than two ideas about what a highway looks like.
  *
- * Geometry only, and in a fixed viewBox: an SVG scales itself, so nothing here has to know how
- * wide the rail is, and a pure function of no arguments is a thing a node test can check to the
- * pixel. The component beside it owns every colour.
+ * Geometry in a fixed viewBox, plus the one set of colours that is not Encore's: an SVG scales
+ * itself, so nothing here has to know how wide the rail is, and a pure function of no arguments
+ * is a thing a node test can check to the pixel. Every other colour belongs to the component.
  */
 
 /** The user-unit box the geometry is drawn in. 16:9, which is the aspect both frames use. */
@@ -28,6 +28,23 @@ export const HIGHWAY_HEIGHT = 180
  * and keys all load as.
  */
 export const HIGHWAY_FRETS = 5
+
+/**
+ * Clone Hero's five frets, in the order `chart-preview` names its five-fret lanes: green, red,
+ * yellow, blue, orange.
+ *
+ * Values rather than custom properties, and here rather than in tokens.css, because they name the
+ * buttons on a controller and not anything in Encore's palette. The red in particular is the
+ * guitar's second fret and not --danger: drawn from that token it would be the app's error colour
+ * saying something it does not mean, and it would move the day the error colour is retuned.
+ * tokens.css is the one source for the scale, and the way to keep that true is to declare a colour
+ * that is not in the scale as what it is instead of inventing a token for it.
+ *
+ * Here rather than in the component because the still lane is no longer the only thing that paints
+ * them: `preview/lane-skin.ts` draws the same five onto the strike line the playing preview
+ * renders, and two lists would be two sets of frets the first time one of them was retuned.
+ */
+export const HIGHWAY_FRET_COLOURS = ['#4ade80', '#f87171', '#facc15', '#60a5fa', '#fb923c']
 
 /**
  * How fast the lane runs away from the viewer.
