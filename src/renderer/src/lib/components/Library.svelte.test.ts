@@ -475,8 +475,41 @@ describe('Library: the row grid', () => {
     expect((await rowTitled('YYZ')).children).toHaveLength(tracks)
     expect((await rowTitled('Limelight')).children).toHaveLength(tracks)
     const badged = await rowTitled('Xanadu')
-    expect(badged.querySelector('.badge')).not.toBeNull()
+    expect(badged.querySelector('.badge.version')).not.toBeNull()
     expect(badged.children).toHaveLength(tracks)
+  })
+
+  /**
+   * Where each chip lives, which is the whole of what this row's rewrite changed.
+   *
+   * The length and the charter were tracks at the far end of the row and the two flags were on
+   * the title's line; all four are chips in one band under the subtitle now, and the title has
+   * its line to itself. jsdom applies no CSS, so this says nothing about how any of it looks. It
+   * says the title is alone and the band holds the four, which is what would drift back.
+   */
+  it('puts every chip in the band under the subtitle, and leaves the title its line', async () => {
+    renderLibrary(
+      [chart({ path: '/library/Rush - YYZ', name: 'YYZ' })],
+      [alternate('/library/Rush - YYZ')]
+    )
+    const row = await rowTitled('YYZ')
+
+    const title = row.querySelector('.song > .title')
+    if (title === null) throw new Error('no title directly under the song column')
+    expect(title.querySelector('.badge')).toBeNull()
+
+    const band = row.querySelector('.song > .badges')
+    if (band === null) throw new Error('no band under the subtitle')
+    // Read off the band's own children rather than swept from the row: a chip drawn anywhere
+    // else in the row is exactly the arrangement this replaced, and a sweep would pass on it.
+    expect(
+      [...band.children].map((el) =>
+        el.className
+          .split(' ')
+          .filter((name) => !name.startsWith('svelte-'))
+          .join(' ')
+      )
+    ).toEqual(['badge mono length', 'badge mono version', 'badge mono charter'])
   })
 })
 
@@ -599,9 +632,15 @@ describe('Library: the health mark', () => {
  * every verdict of the session, and `updatesLast` hands them back without a Chorus request.
  */
 describe('Library: the version badge', () => {
-  /** The badge is a bare `<span>` inside the song column; the class is the only handle. */
+  /**
+   * The badge is a bare `<span>` in the band under the subtitle; the class is the only handle.
+   *
+   * `.badge.version` and not `.badge`: every row carries a length chip and a charter chip in
+   * that band now, so the first `.badge` in a row is the length on a chart with no verdict at
+   * all, and this helper would report "4:33" where it means "nothing".
+   */
   function badgeOf(row: HTMLElement): string | null {
-    return row.querySelector('.badge')?.textContent?.replace(/\s+/g, ' ').trim() ?? null
+    return row.querySelector('.badge.version')?.textContent?.replace(/\s+/g, ' ').trim() ?? null
   }
 
   it('marks a chart with a cached alternate, and nothing else', async () => {
@@ -649,16 +688,38 @@ describe('Library: the version badge', () => {
     expect(text).not.toMatch(/newer|out of date|outdated|update/i)
   })
 
-  it('keeps its accent colour against the .mono rule it shares the element with', () => {
-    // Found on screen, not in jsdom: `.badge` and `.mono` sit on the same span, and the `.mono`
-    // rule, declared later, set --text-3 over the badge's --accent-text at equal specificity.
-    // The badge rendered grey while its own comment promised the accent. Pinned on the raw
-    // stylesheet, the only place a test can see a rule jsdom never applies: the colour has to
-    // come from a selector that outranks a lone class.
-    const rule = /^\s*\.badge\.mono\s*\{([^}]*)\}/m.exec(librarySource)
-    if (!rule) throw new Error('no `.badge.mono {…}` rule in Library.svelte')
+  it('keeps its accent colour against the two rules it shares the element with', () => {
+    // Found on screen, not in jsdom: `.badge`, `.mono` and this flag's own class sit on one
+    // span, and the `.mono` rule, declared later, set --text-3 over the badge's --accent-text at
+    // equal specificity. The badge rendered grey while its own comment promised the accent.
+    // Pinned on the raw stylesheet, the only place a test can see a rule jsdom never applies:
+    // the colour has to come from a selector that outranks both of the others.
+    //
+    // `.badge.mono` sets --text-3 for the band's other three chips now, so the accent has to
+    // come from a third class and not from the chip rule, and neither a lone `.badge` nor a
+    // lone `.mono` may set it back.
+    const rule = /^\s*\.badge\.mono\.version\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!rule) throw new Error('no `.badge.mono.version {…}` rule in Library.svelte')
     expect(rule[1]).toMatch(/color:\s*var\(--accent-text\)/)
     expect(/^\s*\.badge\s*\{/m.test(librarySource)).toBe(false)
+    const chip = /^\s*\.badge\.mono\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!chip) throw new Error('no `.badge.mono {…}` rule in Library.svelte')
+    expect(chip[1]).toMatch(/color:\s*var\(--text-3\)/)
+  })
+
+  it('lets the charter chip shrink, against the rule that holds every other chip open', () => {
+    // jsdom applies no CSS, so this is the stylesheet again, and the number behind it came off
+    // `VIEW=installed scripts/measure-explore-row.mjs` with a 68-character charter in the stub:
+    // at a two-class selector the charter took its natural width and the band ran past its cell
+    // with 0 of 30 rows ellipsised, clipped by `overflow: hidden` and no mark to say so; at
+    // three it shrinks and 30 of 30 ellipsise inside a band that stays one line.
+    //
+    // The cause is order, not shape: `.badge.mono` sets `flex-shrink: 0` and is declared after
+    // this rule, so a two-class selector ties with it and loses.
+    const rule = /^\s*\.badges \.badge\.charter\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!rule) throw new Error('no `.badges .badge.charter {…}` rule in Library.svelte')
+    expect(rule[1]).toMatch(/flex:\s*0 1 auto/)
+    expect(rule[1]).toMatch(/text-overflow:\s*ellipsis/)
   })
 
   it('shows no badge when the replay itself fails, rather than failing the list', async () => {
@@ -1160,8 +1221,15 @@ describe('Library: play counts', () => {
     charts: rows.filter((r) => checksums.includes(r.checksum))
   })
 
+  /**
+   * The play chips in a row, and only those.
+   *
+   * `.badge.plays` and not `.badge`: the band under the subtitle holds a length chip and a
+   * charter chip on every row, so a bare `.badge` sweep reports those two on a chart with no
+   * play record and this file's "leaves an unplayed one bare" would never fail.
+   */
   function badgesOf(row: HTMLElement): string[] {
-    return [...row.querySelectorAll('.badge')].map((b) =>
+    return [...row.querySelectorAll('.badge.plays')].map((b) =>
       (b.textContent ?? '').replace(/\s+/g, ' ').trim()
     )
   }

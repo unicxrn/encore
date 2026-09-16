@@ -329,6 +329,16 @@ const HOME = `(() => {
     heroSideways: hero ? hero.scrollWidth - hero.clientWidth : null,
     rows: rows.length,
     rowHeights: heights,
+    // How much of a section the window actually shows, counted from the first row's top to the
+    // bottom of the box. A taller row buys presence and is paid for in rows on screen, and that
+    // price is only readable as a count: 55px against 71px is a number nobody feels, and seven
+    // rows against five is the same fact in the unit the user meets it in.
+    rowsVisible: firstRow
+      ? Math.floor(
+          (viewBox.bottom - firstRow.getBoundingClientRect().top) /
+            firstRow.getBoundingClientRect().height
+        )
+      : null,
     firstRowBottom: firstRow ? round(firstRow.getBoundingClientRect().bottom - viewBox.top) : null,
     lastRowBottom: rows.length
       ? round(rows[rows.length - 1].getBoundingClientRect().bottom - viewBox.top)
@@ -487,6 +497,7 @@ app.whenReady().then(async () => {
   console.log(`  hero          ${shape.heroHeight}px tall, sideways ${shape.heroSideways}px`)
   console.log(`  hero says     "${shape.heroText}"`)
   console.log(`  rows          ${shape.rows}, heights ${JSON.stringify(shape.rowHeights)}`)
+  console.log(`  rows visible  ${shape.rowsVisible} whole rows below the first row's top`)
   console.log(
     `  first row     bottom at ${shape.firstRowBottom}px of a ${shape.viewHeight}px box  ${
       shape.firstRowBottom !== null && shape.firstRowBottom <= shape.viewHeight
