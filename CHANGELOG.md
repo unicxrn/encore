@@ -94,12 +94,23 @@ release.
   hard it was rated. The ring is lit for a part the chart has, so a part nobody rated still reads
   as present, and a part that is not there still reads as missing. Ratings run past the six Clone
   Hero's scale draws, and a chart rated higher fills every pip while the number read out is the
-  real one. Installed, Home and the chart page draw the difficulty exactly as they did.
+  real one. The chart page draws the difficulty as it did, in a grid with a row per instrument.
 - The cover in an Explore row is 52px, and the charter and the length have left columns of their
   own for a band of badges under the artist, alongside the difficulties the chart was written at.
   At the one window width where the view column is narrowest, a 1121px window with the preview
   column open, the length drops out of that band: it is in the preview column in full, and the
   room it was taking goes to the charter's name.
+- Installed and Home draw the difficulty the way an Explore row does: an instrument in a ring
+  over the pips that rate it, in place of a letter with its bars beside it. Both keep three
+  instruments, guitar, bass and drums, where Explore shows five. An Explore row can move the
+  difficulty onto a line of its own when its column is narrow and these two cannot, so five here
+  would come off the chart's name at every window width, measured at 74px of it, and on Home that
+  is the name of one of the six charts the page exists to show you. The ring is the narrower
+  drawing of the two, so both rows give their names 12px back instead. Their covers stay 40px
+  rather than growing to the 52px of an Explore row, whose row is taller because it carries a
+  band of badges: at 52px a Home row grows by a fifth and pushes the section under it that much
+  further down. Everything the two views do is unchanged, and what the column says about a
+  chart, that an instrument is rated, charted but unrated, or not there, is unchanged with it.
 
 - The Issues view scrolls as one thing. The duplicate report used to sit in the half of the
   screen that does not scroll, so opening a report with twenty-five identical sets in it grew

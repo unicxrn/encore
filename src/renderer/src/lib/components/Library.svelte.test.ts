@@ -204,6 +204,37 @@ describe('Library: the difficulty column', () => {
       'Guitar: difficulty 20, past the top of the scale'
     )
   })
+
+  /**
+   * Which of the component's two drawings the row asks for.
+   *
+   * jsdom applies no CSS, so nothing here can see a ring. What it can see is which form was
+   * rendered, and that is the whole of what changed: `.ring` exists only in the icon form and
+   * `.letter` only in the other, so either one being present names the form. What the column
+   * SAYS is pinned by the four tests above, which are untouched by this and stayed green
+   * through it.
+   */
+  it('draws each part as a glyph in a ring rather than as a letter', async () => {
+    renderLibrary([
+      chart({
+        path: '/library/Rush - Tom Sawyer',
+        name: 'Tom Sawyer',
+        instruments: ['guitar', 'bass', 'drums'],
+        diffGuitar: 4,
+        diffBass: 3,
+        diffDrums: 5
+      })
+    ])
+    const row = await rowTitled('Tom Sawyer')
+
+    expect(row.querySelectorAll('.diffs .part')).toHaveLength(3)
+    expect(row.querySelectorAll('.diffs .ring')).toHaveLength(3)
+    expect(row.querySelectorAll('.diffs .letter')).toHaveLength(0)
+    // A ring with no path is a ring with no instrument in it.
+    for (const ring of row.querySelectorAll('.diffs .ring')) {
+      expect(ring.querySelector('svg path')?.getAttribute('d')).toBeTruthy()
+    }
+  })
 })
 
 describe('Library: the chart title', () => {

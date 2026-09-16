@@ -418,3 +418,63 @@ describe('Home: the mark on a Chorus row says Chorus found it', () => {
     expect(mark).toBeTruthy()
   })
 })
+
+/**
+ * The row's difficulty display, which is Explore's.
+ *
+ * jsdom applies no CSS, so nothing here can see a ring. What it can see is which of the two
+ * drawings the component was asked for, and that is the whole of what changed: `.ring` exists
+ * only in the icon form and `.letter` only in the other, so the two are exclusive and either
+ * one being present names the form. The column still says the same three things about a chart,
+ * which the accessible names below are what pin.
+ */
+describe('Home: the difficulty column', () => {
+  const parts = (): string[] =>
+    [...document.querySelectorAll('.row .diffs .part')].map((part) =>
+      (part.getAttribute('aria-label') ?? '').trim()
+    )
+
+  it('draws each part as a glyph in a ring rather than as a letter', async () => {
+    latest.set({ charts: [remote()], loading: false, error: null, total: 1 })
+    renderHome(stocked([], 0))
+    await screen.findByText('Everlong')
+
+    expect(document.querySelectorAll('.row .diffs .part')).toHaveLength(3)
+    expect(document.querySelectorAll('.row .diffs .ring')).toHaveLength(3)
+    expect(document.querySelectorAll('.row .diffs .letter')).toHaveLength(0)
+    // A ring with no path is a ring with no instrument in it.
+    for (const ring of document.querySelectorAll('.row .diffs .ring')) {
+      expect(ring.querySelector('svg path')?.getAttribute('d')).toBeTruthy()
+    }
+  })
+
+  /**
+   * What the column says, which the change to how it is drawn must not have touched. The three
+   * states are the component's, and a row is where they are actually reached from: `diff_guitar`
+   * rated, `diff_bass` absent from a chart that has no bass track, and a drum track the charter
+   * never rated.
+   */
+  it("still tells the three states apart, in Explore's order", async () => {
+    latest.set({
+      charts: [
+        remote({
+          diff_guitar: 4,
+          diff_bass: null,
+          diff_drums: null,
+          notesData: { instruments: ['guitar', 'drums'] }
+        } as Partial<ChartData>)
+      ],
+      loading: false,
+      error: null,
+      total: 1
+    })
+    renderHome(stocked([], 0))
+    await screen.findByText('Everlong')
+
+    expect(parts()).toEqual([
+      'Guitar: difficulty 4 of 6',
+      'Bass: not charted',
+      'Drums: charted, no difficulty rating'
+    ])
+  })
+})

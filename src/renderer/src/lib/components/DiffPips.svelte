@@ -19,13 +19,16 @@
     tier: number | null | undefined
     /**
      * Draw the instrument as a glyph in a ring with its pips underneath, instead of as a letter
-     * with its pips beside it. Opt-in, and off by default, because the letter form is what three
-     * of the four callers want: Installed and Home put the group on one line of a row that has
-     * no vertical room to spare, and the chart page's matrix already spells the instrument out
-     * in a column of its own, where a glyph would say the same thing twice.
+     * with its pips beside it.
      *
-     * Explore is the one that takes it. It shows five instruments where the others show three,
-     * and five letters in a row read as a word rather than as five columns.
+     * Every list row takes it: Explore's, Installed's and Home's. Letters in a line read as a
+     * word rather than as one mark per instrument, and the ring is also the narrower of the
+     * two, a group being 34px here against roughly 40px as a letter, so the two rows that
+     * switched to it gave their titles 12px back rather than paying anything.
+     *
+     * Off by default for the one caller that cannot take it, which is Explore's grid card: it is
+     * 148px wide and has no line to give a 19px ring, so it keeps the letters and draws the same
+     * instruments. Switching layout changes the shape and not the subject.
      */
     icon?: boolean
   } = $props()
