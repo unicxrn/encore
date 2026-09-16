@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import type { Writable } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -476,5 +478,145 @@ describe('Home: the difficulty column', () => {
       'Bass: not charted',
       'Drums: charted, no difficulty rating'
     ])
+  })
+})
+
+/**
+ * The row's shape, which is now Explore's shape: a cover, the song with a band of chips under
+ * its subtitle, the difficulty and a mark. The charter and the length used to be tracks at the
+ * far end of the row and are chips in that band, and the whole of what the change bought is that
+ * the two tracks went. jsdom applies no CSS, so none of this is about how it looks; what is
+ * pinned is where each fact lives in the row, which is what would drift back.
+ */
+describe('Home: the row', () => {
+  /** A record carrying the two fields the band draws, which `chart` leaves out. */
+  const sung = (path: string, name: string): ChartRecord =>
+    ChartRecordSchema.parse({
+      path,
+      name,
+      chartType: 'folder',
+      folderHash: path,
+      modifiedTime: 0,
+      charter: 'CharterA',
+      songLength: 250_000
+    })
+
+  const rowOf = (name: string): HTMLElement => {
+    const row = screen.getByRole('button', { name: new RegExp(`^${name}`) }).closest('.row')
+    if (row === null) throw new Error(`no row around ${name}`)
+    return row as HTMLElement
+  }
+
+  /**
+   * The `.row` rule's declared track count, read out of the component source, the way
+   * Library.svelte.test.ts reads its own. jsdom applies no CSS, so `getComputedStyle` cannot
+   * answer this and a constant written here would only restate one half of the pair. A child
+   * added to the markup without a track added to the grid falls silently onto a second line.
+   */
+  function declaredRowTracks(): number {
+    const source = readFileSync(join(__dirname, 'Home.svelte'), 'utf8')
+    const rule = /^\s*\.row\s*\{([^}]*)\}/m.exec(source)
+    if (!rule) throw new Error('no `.row {…}` rule in Home.svelte')
+    const declaration = /grid-template-columns:\s*([^;]+);/.exec(rule[1])
+    if (!declaration) throw new Error('`.row` declares no grid-template-columns')
+    const collapsed = declaration[1]
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/minmax\([^()]*\)/g, 'm')
+    if (/[(),]/.test(collapsed)) throw new Error(`cannot count tracks in \`${collapsed}\``)
+    return collapsed.split(' ').length
+  }
+
+  it('gives a row exactly as many element children as .row declares grid tracks', async () => {
+    renderHome(stocked([chart('/library/Rush - YYZ', 'YYZ')], 1))
+    await screen.findByText('YYZ')
+    expect(rowOf('YYZ').children).toHaveLength(declaredRowTracks())
+  })
+
+  it('carries the charter and the length as chips in the band, not as tracks', async () => {
+    renderHome(stocked([sung('/library/Rush - YYZ', 'YYZ')], 1))
+    await screen.findByText('YYZ')
+
+    const band = rowOf('YYZ').querySelector('.song .badges')
+    if (band === null) throw new Error('no band under the subtitle')
+    // The band's own children, not a sweep of the row: a charter drawn anywhere else in the row
+    // is exactly the arrangement this replaced, and a sweep would pass on it.
+    // Svelte's own scoping class is dropped: it changes whenever the stylesheet does, and this
+    // is about which chips the band holds and in what order.
+    expect(
+      [...band.children].map((el) =>
+        el.className
+          .split(' ')
+          .filter((name) => !name.startsWith('svelte-'))
+          .join(' ')
+      )
+    ).toEqual(['badge mono length', 'badge mono charter'])
+  })
+
+  it('draws no length chip for a chart whose song.ini never said', async () => {
+    // `msToTime` answers with a dash, and a bordered box around a dash is a box saying nothing.
+    renderHome(stocked([chart('/library/Rush - YYZ', 'YYZ')], 1))
+    await screen.findByText('YYZ')
+    expect(rowOf('YYZ').querySelector('.badges .length')).toBeNull()
+
+    latest.set({
+      charts: [remote({ song_length: 250_000 })],
+      loading: false,
+      error: null,
+      total: 1
+    })
+    await screen.findByText('Everlong')
+    expect(rowOf('Everlong').querySelector('.badges .length')?.textContent).toBe('4:10')
+  })
+})
+
+/**
+ * One row, drawn three times.
+ *
+ * Explore, Installed and Home are three files with three copies of the same row rule, and the
+ * thing that goes wrong is one of them being edited and the other two not: the covers were 52px,
+ * 40px and 40px for exactly that reason. jsdom applies no CSS and there is no shared stylesheet
+ * to read, so the source is the only place a test can see this at all. It says nothing about how
+ * any of it looks; it says the three numbers are still one number.
+ */
+describe('the three lists draw one row', () => {
+  const FILES = ['Browse.svelte', 'Library.svelte', 'Home.svelte']
+  const source = (file: string): string => readFileSync(join(__dirname, file), 'utf8')
+
+  /** The row's cover rule, by the name each file gives it. Library calls its square a thumb. */
+  const COVERS: [string, string][] = [
+    ['Browse.svelte', '\\.cover'],
+    ['Library.svelte', '\\.thumb'],
+    ['Home.svelte', '\\.cover']
+  ]
+  const declaration = (text: string, rule: string, prop: string): string => {
+    const found = new RegExp(`\\n {2}${rule} \\{([^}]*)\\}`).exec(text)
+    if (!found) throw new Error(`no \`${rule}\` rule`)
+    const value = new RegExp(`${prop}:\\s*([^;]+);`).exec(found[1])
+    if (!value) throw new Error(`\`${rule}\` declares no ${prop}`)
+    return value[1].trim()
+  }
+
+  it('draws the cover at one size, and off the radius scale rather than a number', () => {
+    const sizes = COVERS.map(([file, rule]) => declaration(source(file), rule, 'width'))
+    expect(new Set(sizes)).toEqual(new Set(['52px']))
+    for (const [file, rule] of COVERS) {
+      // A literal here is a fourth corner radius nobody chose; --radius-sm is the step the rest
+      // of the app rounds small boxes to. The grid card's art is not this square and is not
+      // covered: it is 148px of cover art rather than a 52px mark in a list row.
+      expect(declaration(source(file), rule, 'border-radius'), file).toBe('var(--radius-sm)')
+    }
+  })
+
+  it('gives the band under the subtitle the same box in every row', () => {
+    for (const file of FILES) {
+      const rule = /\n {2}\.badges \{([^}]*)\}/.exec(source(file))
+      if (!rule) throw new Error(`no \`.badges\` rule in ${file}`)
+      // nowrap is the claim: a band that wraps on the rows carrying a long charter and not on
+      // the rest is a list of two row heights, which is the thing the eye stumbles down.
+      expect(rule[1], `${file} lets its band wrap`).toMatch(/flex-wrap:\s*nowrap/)
+      expect(rule[1], `${file} sets its band a different gap`).toMatch(/gap:\s*6px/)
+      expect(rule[1], `${file} sets its band a different offset`).toMatch(/margin-top:\s*5px/)
+    }
   })
 })

@@ -170,7 +170,15 @@
     /** Artist, album and year on one line, with the separators of the empty fields dropped. */
     meta: string
     charter: string
-    length: string
+    /**
+     * The song's running time, or null where the chart does not say.
+     *
+     * A string rather than the number, because the row draws it and nothing here sorts on it.
+     * Null rather than `msToTime`'s dash: the length is a chip in the band now, and a bordered
+     * box holding a placeholder is a box saying nothing at all. Explore's band guards the same
+     * field the same way.
+     */
+    length: string | null
     instruments: readonly string[]
     tiers: Record<string, number | null>
     /**
@@ -185,6 +193,10 @@
     /** Breakage rather than a charting note, which is the difference the dot's shape carries. */
     broken: boolean
   }
+
+  /** `msToTime` with its placeholder read back as the absence it stands for; see `Row.length`. */
+  const lengthOf = (ms: number | null | undefined): string | null =>
+    ms == null || ms < 0 ? null : msToTime(ms)
 
   const joined = (parts: (string | number | null | undefined)[]): string =>
     parts
@@ -203,7 +215,7 @@
         name: stripRichText(chart.name),
         meta: joined([chart.artist, chart.album, chart.year]),
         charter: stripRichText(chart.charter),
-        length: msToTime(chart.song_length),
+        length: lengthOf(chart.song_length),
         instruments: chart.notesData?.instruments ?? [],
         tiers: {
           guitar: chart.diff_guitar,
@@ -225,7 +237,7 @@
       name: stripRichText(record.name) || fallbackChartName(record.path),
       meta: joined([record.artist, record.album, record.year]),
       charter: stripRichText(record.charter),
-      length: msToTime(record.songLength),
+      length: lengthOf(record.songLength),
       instruments: record.instruments,
       tiers: {
         guitar: record.diffGuitar,
@@ -365,8 +377,19 @@
         >
       </span>
       <span class="meta">{row.meta}</span>
+      <!-- The band under the subtitle, which is Explore's: length, then the charter. Both used
+           to be tracks at the far end of the row, which is where a column of grey text goes to
+           be read last; as chips they are next to the name they belong to and the row has an
+           edge in it below the title. What it costs and what it bought is written beside `.row`. -->
+      <span class="badges">
+        {#if row.length}
+          <span class="badge mono length">{row.length}</span>
+        {/if}
+        {#if row.charter}
+          <span class="badge mono charter">{row.charter}</span>
+        {/if}
+      </span>
     </span>
-    <span class="charter">{row.charter}</span>
     <span class="diffs">
       {#each ROW_PARTS as part (part.key)}
         <DiffPips
@@ -391,7 +414,6 @@
         ></span>
       {/if}
     </span>
-    <span class="len mono">{row.length}</span>
   </div>
 {/snippet}
 
@@ -765,39 +787,53 @@
     max-width: 60ch;
   }
 
-  /* Explore's row, at Explore's proportions: a 40px cover in a 55px row, the name over its
-     metadata, the charter, the three parts as pips, and a mark only where there is something to
-     say. Home carries no checkbox, no index and no per-row action, so its grid is Explore's
-     with those tracks taken out: the action a row leads to is the rail's, beside the chart it
-     is showing, which is the arrangement Explore settled on.
+  /* Explore's row, at Explore's proportions, and now at its size as well: a 52px cover in a
+     71px row, the name over its metadata, a band of chips under that, the three parts as rings
+     and a mark only where there is something to say. Home carries no checkbox, no index and no
+     per-row action, so its grid is Explore's with those tracks taken out: the action a row
+     leads to is the rail's, beside the chart it is showing, which is the arrangement Explore
+     settled on.
 
-     The cover stays 40px against Explore's 52px, and that is the row height talking rather than
-     a disagreement about covers. Explore's row is 71px because it carries a badge band under the
-     subtitle, so a 52px square sits in it with room either side. This row is two lines and 55px,
-     and `MODE=full scripts/measure-home.mjs` at 52px puts it at 67px: six rows a section, so the
-     artists strip moves from 551px to 623px and "In your library" from 713px to 785px at the
-     default 1280px window, on a page that already runs 410px past its box. The cover is the box
-     the row is built around and the two rows are different shapes; the difficulty display is the
-     information, and that is the part that now matches.
+     The charter and the length used to be tracks of their own at the far end of the row. They
+     are chips in a band under the subtitle now, which is where Explore puts them, and dropping
+     the two tracks is what pays for the rest. A row is 55px and a 40px cover is what sets that
+     height; with a band under the subtitle the text is 56px on its own, so the row is 71px and
+     a 52px cover sits inside it costing nothing. The band is the whole price: 16px a row,
+     measured at every width the shell supports, and the cover rides along at zero.
 
-     124px of difficulty: 3 groups of 34px plus 2 gaps of 9px is 120px, and the four spare pixels
-     are Explore's own margin at 210px for five. It was 136px when the three groups were letters,
-     so the ring form gave the title 12px back: measured at 1280, 261px to 273px, and at 960 the
-     name goes from 4 of 12 rows ellipsised to 2 of 12.
+     What it costs, in the unit the user meets it in: six whole rows below the first row's top
+     in an 800px window rather than seven, five rather than six at 1121. The page stops fitting
+     that window and scrolls 26px, 78px at 1121. Six rows a section, so a section is 96px taller.
 
-     Five groups would want 210px, and this row never folds the difficulty onto a line of its own,
-     so all 74px of the difference comes off the title at every width: 327 to 241 at 960, 487 to
-     401 at 1120, 254 to 168 at the 1121px window the rail appears at, 273 to 187 at 1280, 497 to
-     411 at 1600 and 817 to 731 at 1920. The subtitle crosses at 1120 and at 1600, 6 of 12 rows
-     ellipsised against 12 of 12. A 168px title on the page whose whole job is to show you six
-     charts is the measurement that settled it. */
+     What it bought is wider than what the band cost tall. The title box, `MODE=full
+     scripts/measure-home.mjs` at the six widths the shell supports, before and after:
+
+       960   342 to 435      1120  502 to 595      1121  269 to 222
+       1280  288 to 381      1600  512 to 701      1920  832 to 1021
+
+     1121 is the one that shrank, and it is the width where the row gained the most: the charter
+     and the health mark were both folded away there and neither is now, so 47px of title bought
+     back a field that tells two versions of a song apart. The charter's own box went from a
+     110px track ellipsised on 6 of 6 rows at 960, 1120 and 1280 to a chip that ellipsises on
+     none of them.
+
+     Three parts rather than Explore's five, and the band does not change that answer. 124px of
+     difficulty is 3 groups of 34px plus 2 gaps of 9px, which is 120px drawn with the four spare
+     pixels Explore leaves at 210px for five. Five groups want that 210px, and this row never
+     folds the difficulty onto a line of its own, so all 86px comes off the title at every
+     width. Measured on this row, with the band already in it: 435 to 349 at 960, 595 to 509 at
+     1120, 222 to 136 at 1121, 381 to 295 at 1280, 701 to 615 at 1600 and 1021 to 935 at 1920.
+     The name crosses at 1280, 0 of 6 rows ellipsised against 2 of 6, and at 1121 the charter
+     chip goes from 171px to 85px. A 136px title on the page whose whole job is to show you six
+     charts is the measurement that settled this before at 168px, and the band moved it the
+     wrong way rather than making five affordable. */
   .rows {
     display: flex;
     flex-direction: column;
   }
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 150px) 124px 10px 46px;
+    grid-template-columns: 52px minmax(0, 1fr) 124px 10px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -817,9 +853,11 @@
      for a lazy image that has not decoded yet alike, so a row never flashes a transparent
      square as the page scrolls. */
   .cover {
-    width: 40px;
-    height: 40px;
-    border-radius: 5px;
+    width: 52px;
+    height: 52px;
+    /* --radius-sm rather than the 5px this was: 5px is not a step in the scale, and the row is
+       the last place in the app still spelling one of its own. */
+    border-radius: var(--radius-sm);
     object-fit: cover;
     display: block;
     background: var(--surface-2);
@@ -856,8 +894,7 @@
     min-width: 64px;
     flex: 0 1 auto;
   }
-  .meta,
-  .charter {
+  .meta {
     font-size: var(--fs-secondary);
     line-height: var(--lh-tight);
     color: var(--text-2);
@@ -865,8 +902,39 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .charter {
+  /* The band under the subtitle, drawn the way Explore's is, for the reason Explore's is drawn
+     that way: one line that does not wrap, because a band that takes two lines on the rows
+     carrying a long charter and one on the rest is a list of two row heights. The charter is
+     what gives, and an ellipsis on a name is what an ellipsis is for. */
+  .badges {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  /* Explore's chip, to the pixel, because a chart met in both lists has to read the same in
+     both. --lh-tight and no vertical padding, so the chip is 17px and the band is one text line
+     rather than a line the box grew. Declared before `.badge`, which sets `flex-shrink: 0`, so
+     this two-class selector is what makes the charter the one thing in the band that shrinks. */
+  .badges .charter {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .badge {
+    flex-shrink: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    line-height: var(--lh-tight);
     color: var(--text-3);
+    white-space: nowrap;
   }
   /* 9px between the groups, the gap Explore's row uses, so the pips read as groups and not as
      one run. `nowrap` because the width of this thing is the information it carries. */
@@ -894,12 +962,6 @@
     border-color: var(--danger);
     background: var(--danger);
   }
-  .len {
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    text-align: right;
-  }
-
   .scroller {
     display: flex;
     gap: 12px;
@@ -953,36 +1015,19 @@
     color: var(--text-1);
   }
 
-  /* The two widths where the row has to give something up, at the thresholds Explore's row uses,
-     so one window narrows both lists at the same moment.
+  /* The one width where this page has to give something up, and the row is no longer part of
+     it. The charter and the length were tracks at 899px of column and folded there; they are
+     chips inside the song column now, so the row's four tracks hold at every width the shell
+     supports and there is nothing left to fold. What is left is the hero, which has its own
+     reason: at 509px of column its two buttons stack under the figures rather than squeezing
+     to fit beside them.
 
-     What goes, in order. The length goes first: the rail shows it for the chart being looked at,
-     and it is the only fact here that is repeated somewhere a click away. The charter goes last
-     of the text, because two versions of a song are told apart by nothing else. Measured at
-     1280x800, which is the default window and lands in the first of these: the charter's 110px
-     leaves the title and its metadata a 261px box each. */
-  @container home (max-width: 899px) {
-    .row {
-      grid-template-columns: 40px minmax(0, 1fr) minmax(0, 110px) 124px 10px;
-    }
-    .row .len {
-      display: none;
-    }
-  }
-  /* 509px of column, which is a 1121px window with the rail back in it: the narrowest this page
-     is ever asked to be. The hero stacks its actions under its figures rather than squeezing
-     them, and the row is down to the three things that identify a chart. */
+     509px is a 1121px window with the rail back in it, the narrowest this page is ever asked
+     to be, and it is not the smallest window. */
   @container home (max-width: 559px) {
     .hero {
       flex-direction: column;
       align-items: stretch;
-    }
-    .row {
-      grid-template-columns: 40px minmax(0, 1fr) 124px;
-    }
-    .row .charter,
-    .row .health {
-      display: none;
     }
   }
 </style>
