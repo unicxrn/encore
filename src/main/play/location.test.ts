@@ -20,7 +20,7 @@ import {
 
 // join() uses the separator of the platform the tests run on, not of the platform being probed.
 // That is correct in production, where the two always match, and it is why the Windows
-// expectations below are built with join() rather than with literal backslashes — the same
+// expectations below are built with join() rather than with literal backslashes, the same
 // reasoning detect-library.test.ts records.
 const HOME = join('/home', 'u')
 const never = (): boolean => false

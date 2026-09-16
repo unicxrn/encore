@@ -117,7 +117,7 @@ describe('chartPlaySummaries', () => {
 
   it('omits checksums with no plays rather than returning zeroes', () => {
     // A page of 500 charts would otherwise be almost entirely rows meaning "no record", which
-    // also reads as "played zero times" — a different claim.
+    // also reads as "played zero times", a different claim.
     recordPlay(db, play())
     const summaries = chartPlaySummaries(db, [A, B])
     expect(summaries).toHaveLength(1)

@@ -415,7 +415,7 @@ export async function scanChart(
       ...scannedFields(scanned),
       ...mediaFlags(entries.map((e) => e.fileName)),
       // The selective read decrypts the chart file because scan-chart parses it, and those
-      // decoded bytes are what Clone Hero hashes — not the archive on disk. This is the case the
+      // decoded bytes are what Clone Hero hashes, not the archive on disk. This is the case the
       // checksum was verified against; see chart-checksum.ts.
       cloneHeroChecksum: cloneHeroChecksum(entries),
       albumArtMd5: cachedArtMd5(scanned, art),

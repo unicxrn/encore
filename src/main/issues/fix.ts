@@ -40,7 +40,7 @@ import { strayIniAction } from './actions/stray-ini'
  * - `cloneHeroChecksum` covers nothing `chartHash` does not: `getChartHash` hashes the chart
  *   file's bytes verbatim, so a chart file that moved moves both. What it adds is that it is
  *   derived by this codebase rather than read out of scan-chart, so the two cannot fail the same
- *   way, and — the point — that it is a number the game has been observed to record. The claim
+ *   way, and, the point, that it is a number the game has been observed to record. The claim
  *   "a repair cannot break multiplayer" no longer rests only on scan-chart's model of Clone
  *   Hero's identity; it rests on a value Clone Hero wrote.
  *

@@ -27,7 +27,7 @@ import type { ScoreFolderReport } from '../../shared/score-folder'
  *    `settings.ini`, `profiles.ini`, `Songs/` and `Logs/`. Verified 2026-09-11 against Clone
  *    Hero v1.1.0.6142-final.
  * 2. The release note that introduced it pairs it with the Replays feature, whose folder the
- *    same note writes as `Clone Hero/Replays` — the root under its own name.
+ *    same note writes as `Clone Hero/Replays`, the root under its own name.
  * 3. CHSuite, the one third-party tool known to touch the file, migrates it as a top-level
  *    sibling of `GameData/`, `PlayerData/` and `profiles.ini` rather than inside any of them.
  *
@@ -102,8 +102,8 @@ export function scoreStatsCandidates(
 /**
  * The scorestats.json path to watch, or null when the platform has no candidates at all.
  *
- * Picks the first candidate that exists. When none does — the common case, since most users have
- * no Clone Hero on the machine running Encore — it falls back to the FIRST candidate rather than
+ * Picks the first candidate that exists. When none does, which is the common case, since most users have
+ * no Clone Hero on the machine running Encore, it falls back to the FIRST candidate rather than
  * to null, so the watcher has somewhere to watch and picks the file up if it appears later. That
  * fallback is why `null` here means only "this platform is unknown to us", never "not installed":
  * the two need different wording, and the second is not the user's problem to solve.

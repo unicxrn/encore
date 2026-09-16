@@ -373,7 +373,7 @@ function wireIpc(): {
    * and nowhere else, the same arrangement detectChartLibraries uses, so the resolver stays
    * testable across platforms this machine is not.
    *
-   * Nothing about this can fail loudly. A machine with no Clone Hero — which is most of them —
+   * Nothing about this can fail loudly. A machine with no Clone Hero, which is most of them,
    * resolves a path that does not exist, watches nothing, and reports `available: false`. That
    * is a state the UI draws, not an error anyone has to see.
    */

@@ -320,7 +320,7 @@ export interface IpcDeps {
    * false` is an ordinary state for most users rather than an error (see shared/play.ts). A
    * consumer that skips it and calls the others on a machine with no Clone Hero gets an empty
    * array and a zeroed stats object, which is correct but indistinguishable from "installed and
-   * never played" — hence the gate.
+   * never played", hence the gate.
    *
    * `playSummaries` takes checksums rather than chart paths: the checksum is what the play table
    * is keyed by, it is on every ChartRecord already, and taking paths would make this a second

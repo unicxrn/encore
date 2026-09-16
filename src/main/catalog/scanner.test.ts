@@ -761,7 +761,7 @@ describe('cloneHeroChecksum in the catalog', () => {
     '[Song]\n{\n  Resolution = 192\n}\n[SyncTrack]\n{\n  0 = TS 4\n  0 = B 120000\n}\n[ExpertSingle]\n{\n  192 = N 0 0\n}\n'
   const expected = createHash('md5').update(chartText).digest('hex')
 
-  it('stores the md5 of a folder chart’s chart file', async () => {
+  it("stores the md5 of a folder chart's chart file", async () => {
     const root = tmpDir('ck-folder')
     mkdirSync(join(root, 'Song'), { recursive: true })
     writeFileSync(join(root, 'Song/notes.chart'), chartText)
