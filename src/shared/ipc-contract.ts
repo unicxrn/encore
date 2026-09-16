@@ -28,6 +28,25 @@ export const IPC = {
   // stops the renderer having to guess what main stored.
   favouritesList: 'favourites:list',
   favouritesSet: 'favourites:set',
+  // The setlists the user built, and the five writes that change them. Encore's own thing: Clone
+  // Hero has no setlist format to write to, and shared/setlists.ts records what was checked before
+  // that was believed. Entries are keyed by the chart through the same functions a favourite is,
+  // so a setlist and a heart can never disagree about which chart they mean.
+  //
+  // Every one of the six answers with the whole list, entries included, for the reason the
+  // favourites pair does: it is a name and a few short strings per chart on a list a person is
+  // meant to read, and handing it back is what stops the renderer guessing what main stored.
+  setlistsList: 'setlists:list',
+  setlistsCreate: 'setlists:create',
+  setlistsRename: 'setlists:rename',
+  setlistsDelete: 'setlists:delete',
+  setlistsSetEntry: 'setlists:set-entry',
+  setlistsMoveEntry: 'setlists:move-entry',
+  // The catalog rows behind one setlist's entries, in the setlist's own order, null where the
+  // library holds nothing under those names. Separate from the list above because it is the only
+  // part that depends on what is currently on disk: the list is the user's, this is the library's
+  // answer about it, and it is asked once when a setlist is opened rather than per launch.
+  setlistsCharts: 'setlists:charts',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
   downloadRetry: 'download:retry',

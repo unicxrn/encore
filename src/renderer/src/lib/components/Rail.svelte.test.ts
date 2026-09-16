@@ -6,6 +6,7 @@ import type { ChartData } from '../api/enchor'
 import { get } from 'svelte/store'
 import { closePreview, viewportMounted, viewportOwner } from '../stores/preview-controller'
 import { favourites } from '../stores/favourites'
+import { setlists } from '../stores/setlists'
 
 /**
  * What these can and cannot check.
@@ -576,16 +577,15 @@ describe('Rail: the actions a chart can actually answer', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  // The design drew a favourite and an add-to-setlist button. The first exists now; the second
-  // still has nothing behind it and is therefore still not drawn. The order is what keeps the
-  // action the row's first button and the way out its last.
-  it('draws the action, the heart and the way out, and no control for what the app lacks', () => {
+  // The design drew a favourite and an add-to-setlist button, and both are here now. The ORDER is
+  // what this pins: the action is the row's first button, the two icon buttons that do something
+  // to the chart sit between, and the way out of the column is last.
+  it('draws the action, the heart, the setlist button and the way out, in that order', () => {
     render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     const labels = [...document.querySelectorAll('.actions button')].map((b) =>
       (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
     )
-    expect(labels).toEqual(['Show in folder', 'Favourite', 'All details'])
-    expect(screen.queryByRole('button', { name: /setlist/i })).toBeNull()
+    expect(labels).toEqual(['Show in folder', 'Favourite', 'Add to setlist', 'All details'])
   })
 
   // `chartReveal` rejects for a path outside the configured library folders, which is a real
@@ -703,6 +703,187 @@ describe('Rail: the heart', () => {
     render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The catalog is closed')
+  })
+})
+
+/**
+ * The rail's third action, which is the design's add-to-setlist button.
+ *
+ * jsdom applies no CSS, so nothing here says whether the row still fits at 374px with three
+ * buttons in it; that is scripts/measure-rail-panel.mjs, which prints the action's width and
+ * whether its word is clipped. What is pinned is the part that would be a defect: which setlists
+ * the button says the chart is in, that adding it to one is a write keyed on the chart rather than
+ * on its path, and that a chart with no name is refused with the reason on screen.
+ */
+describe('Rail: the setlist button', () => {
+  const SETLIST = { id: 'a', name: 'Friday night', createdAt: 'now', entries: [] }
+  const HOLDING = {
+    ...SETLIST,
+    entries: [{ name: 'yyz', artist: 'RUSH', charter: 'SomeOne', addedAt: 'now' }]
+  }
+  afterEach(() => setlists.set([]))
+
+  const openPanel = async (): Promise<void> => {
+    await fireEvent.click(screen.getByRole('button', { name: 'Add to setlist' }))
+  }
+
+  it('keeps the panel shut until it is pressed', () => {
+    setlists.set([SETLIST])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    const button = screen.getByRole('button', { name: 'Add to setlist' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: /Friday night/ })).toBeNull()
+  })
+
+  it('lists the setlists, ticking the ones this chart is already in', async () => {
+    setlists.set([HOLDING, { ...SETLIST, id: 'b', name: 'Encores' }])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    // 'yyz'/'RUSH'/'SomeOne' against 'YYZ'/'Rush'/'someone': one chart, whatever case either side
+    // spelled it in, which is the shared key doing its job.
+    expect(screen.getByRole('button', { name: 'Friday night' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    expect(screen.getByRole('button', { name: 'Encores' }).getAttribute('aria-pressed')).toBe(
+      'false'
+    )
+  })
+
+  it('reads as on while the chart is in any setlist at all', () => {
+    setlists.set([HOLDING])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    expect(screen.getByRole('button', { name: 'Add to setlist' }).classList.contains('on')).toBe(
+      true
+    )
+  })
+
+  it('adds a library chart by the three fields it names itself by', async () => {
+    const setlistsSetEntry = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    setlists.set([SETLIST])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect(setlistsSetEntry).toHaveBeenCalledWith({
+      id: 'a',
+      name: 'YYZ',
+      artist: 'Rush',
+      charter: 'someone',
+      member: true
+    })
+  })
+
+  // The same press on a chart from Chorus, which is what a key on the chart rather than on a path
+  // buys: the entry is already there when the download lands.
+  it('adds a chart on Chorus the same way', async () => {
+    const setlistsSetEntry = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    setlists.set([SETLIST])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'remote', chart: chart() } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect(setlistsSetEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', name: 'YYZ', member: true })
+    )
+  })
+
+  it('takes it back out of one it is already in', async () => {
+    const setlistsSetEntry = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    setlists.set([HOLDING])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect(setlistsSetEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', member: false })
+    )
+  })
+
+  it('makes a setlist and puts the chart in it in one go', async () => {
+    const setlistsCreate = vi.fn().mockResolvedValue([SETLIST])
+    const setlistsSetEntry = vi.fn().mockResolvedValue([SETLIST])
+    vi.stubGlobal('encore', { setlistsCreate, setlistsSetEntry })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    const box = screen.getByLabelText('New setlist name')
+    await fireEvent.input(box, { target: { value: 'Friday night' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(setlistsCreate).toHaveBeenCalledWith({ name: 'Friday night' })
+    await waitFor(() =>
+      expect(setlistsSetEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a', name: 'YYZ', member: true })
+      )
+    )
+  })
+
+  // The raw `song.ini` text, not the stripped form the title above it is drawn from. Main is what
+  // normalises, and it has to be the only thing that does, or a chart added from Explore and the
+  // same chart added from Installed could become two rows.
+  it('hands main the chart text raw, markup and all', async () => {
+    const setlistsSetEntry = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    setlists.set([SETLIST])
+    const marked = record({ charter: '<color=#8200f3>SirMonkfish</color>' })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: marked } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect(setlistsSetEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ charter: '<color=#8200f3>SirMonkfish</color>' })
+    )
+  })
+
+  it('offers to name one when there are none, rather than an empty list', async () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    expect(screen.getByText(/You have no setlists yet/)).toBeTruthy()
+    expect(screen.getByLabelText('New setlist name')).toBeTruthy()
+  })
+
+  // The same refusal the heart makes, for the same reason: a chart drawn from its folder name has
+  // no identity an entry could hold on to.
+  it('refuses a chart that sets no name of its own, and says why where it was pressed', async () => {
+    const setlistsSetEntry = vi.fn()
+    vi.stubGlobal('encore', { setlistsSetEntry })
+    const target = { kind: 'local' as const, record: record({ name: null }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    const button = screen.getByRole('button', { name: 'Add to setlist' })
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    await fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(setlistsSetEntry).not.toHaveBeenCalled()
+    expect((await screen.findByRole('alert')).textContent).toContain('no name of its own')
+  })
+
+  it('says why a write was refused, where the user pressed it', async () => {
+    vi.stubGlobal('encore', {
+      setlistsSetEntry: vi.fn().mockRejectedValue(new Error('That setlist no longer exists.'))
+    })
+    setlists.set([SETLIST])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Friday night' }))
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'That setlist no longer exists.'
+    )
+  })
+
+  // A panel left open over the next chart would be a list of ticks about the chart before it.
+  it('shuts when the rail changes chart', async () => {
+    setlists.set([SETLIST])
+    const { rerender } = render(Rail, {
+      props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } }
+    })
+    await openPanel()
+    expect(screen.getByRole('button', { name: 'Friday night' })).toBeTruthy()
+    await rerender({
+      onOpenDetail: () => {},
+      target: { kind: 'local', record: record({ path: '/library/other', name: 'Other' }) }
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Add to setlist' }).getAttribute('aria-expanded')
+      ).toBe('false')
+    )
   })
 })
 

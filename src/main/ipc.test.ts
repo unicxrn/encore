@@ -35,6 +35,22 @@ const FAVOURITES = [
   }
 ]
 
+const SETLISTS = [
+  {
+    id: 'sl-1',
+    name: 'Friday night',
+    createdAt: '2026-09-16T00:00:00.000Z',
+    entries: [
+      {
+        name: 'Everlong',
+        artist: 'Foo Fighters',
+        charter: 'GuitarHero',
+        addedAt: '2026-09-16T00:00:00.000Z'
+      }
+    ]
+  }
+]
+
 const deps = (): IpcDeps => ({
   getSettings: vi.fn().mockReturnValue({ downloadFormat: 'sng' }),
   setSettings: vi.fn(),
@@ -43,6 +59,13 @@ const deps = (): IpcDeps => ({
   chartsExistByMeta: vi.fn().mockReturnValue([true]),
   listFavourites: vi.fn().mockReturnValue(FAVOURITES),
   setFavourite: vi.fn().mockReturnValue(FAVOURITES),
+  listSetlists: vi.fn().mockReturnValue(SETLISTS),
+  createSetlist: vi.fn().mockReturnValue(SETLISTS),
+  renameSetlist: vi.fn().mockReturnValue(SETLISTS),
+  deleteSetlist: vi.fn().mockReturnValue(SETLISTS),
+  setSetlistEntry: vi.fn().mockReturnValue(SETLISTS),
+  moveSetlistEntry: vi.fn().mockReturnValue(SETLISTS),
+  setlistCharts: vi.fn().mockReturnValue([null]),
   chartFacets: vi.fn().mockReturnValue({ artists: [], genres: [], charters: [], years: [] }),
   duplicateCharts: vi.fn().mockReturnValue({
     identical: [],
@@ -550,6 +573,73 @@ describe('registerIpc', () => {
       ipc.invoke(IPC.favouritesSet, { name: 'x'.repeat(401), favourite: true })
     ).rejects.toThrow()
     expect(d.setFavourite).not.toHaveBeenCalled()
+  })
+
+  it('routes setlists:list to deps.listSetlists', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.setlistsList)).toEqual(SETLISTS)
+    expect(d.listSetlists).toHaveBeenCalled()
+  })
+  it('routes each setlist write to its own dep and answers with the list', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const chart = { name: 'Everlong', artist: 'Foo Fighters', charter: null }
+    const calls = [
+      [IPC.setlistsCreate, { name: 'Friday night' }, d.createSetlist],
+      [IPC.setlistsRename, { id: 'sl-1', name: 'Saturday' }, d.renameSetlist],
+      [IPC.setlistsDelete, { id: 'sl-1' }, d.deleteSetlist],
+      [IPC.setlistsSetEntry, { id: 'sl-1', ...chart, member: true }, d.setSetlistEntry],
+      [IPC.setlistsMoveEntry, { id: 'sl-1', ...chart, delta: -1 }, d.moveSetlistEntry]
+    ] as const
+    for (const [channel, req, dep] of calls) {
+      expect(await ipc.invoke(channel, req)).toEqual(SETLISTS)
+      expect(dep).toHaveBeenCalledWith(req)
+    }
+  })
+  it('routes setlists:charts to deps.setlistCharts', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.setlistsCharts, { id: 'sl-1' })).toEqual([null])
+    expect(d.setlistCharts).toHaveBeenCalledWith({ id: 'sl-1' })
+  })
+  it('rejects a setlist write that names no setlist at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsDelete, { id: '' })).rejects.toThrow()
+    await expect(ipc.invoke(IPC.setlistsRename, { name: 'x' })).rejects.toThrow()
+    expect(d.deleteSetlist).not.toHaveBeenCalled()
+    expect(d.renameSetlist).not.toHaveBeenCalled()
+  })
+  it('rejects a setlist entry write that does not say which way at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsSetEntry, { id: 'sl-1', name: 'x' })).rejects.toThrow()
+    expect(d.setSetlistEntry).not.toHaveBeenCalled()
+  })
+  it('rejects a move of anything but one place at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const req = { id: 'sl-1', name: 'Everlong', delta: 3 }
+    await expect(ipc.invoke(IPC.setlistsMoveEntry, req)).rejects.toThrow()
+    expect(d.moveSetlistEntry).not.toHaveBeenCalled()
+  })
+  it('rejects setlist text no interface could have produced at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsCreate, { name: 'x'.repeat(200) })).rejects.toThrow()
+    await expect(
+      ipc.invoke(IPC.setlistsSetEntry, { id: 'sl-1', name: 'x'.repeat(401), member: true })
+    ).rejects.toThrow()
+    expect(d.createSetlist).not.toHaveBeenCalled()
+    expect(d.setSetlistEntry).not.toHaveBeenCalled()
   })
 
   it('routes catalog:rescan-charts to deps and returns the refreshed rows', async () => {

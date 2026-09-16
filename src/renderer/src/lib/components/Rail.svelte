@@ -16,6 +16,8 @@
   import { encore } from '../stores/bridge'
   import { favouriteId, favouriteKey, isFavouritable } from '../../../../shared/favourites'
   import { favouriteIds, toggleFavourite } from '../stores/favourites'
+  import { canJoinASetlist, setlistEntryKey, SETLIST_NAME_MAX } from '../../../../shared/setlists'
+  import { createSetlist, setlists, setlistsWith, setSetlistEntry } from '../stores/setlists'
   import {
     nowPlaying,
     playerError,
@@ -330,7 +332,9 @@
    * folder. The heart is the one control here that both kinds of subject can answer, because a
    * favourite is attached to the chart rather than to a copy of one (shared/favourites.ts): the
    * same press on a Chorus result and on the chart it becomes once downloaded is the same row.
-   * There is still no setlist anywhere behind the app, so none is drawn.
+   * Add to setlist is the third of them and is the same kind of control for the same reason: a
+   * setlist entry is keyed on the chart too (shared/setlists.ts), so a chart put in a setlist from
+   * here before it is downloaded is already in it when it arrives.
    *
    * Removal is deliberately not here, and it is the one of the three that was turned down rather
    * than being unavailable. Installed's own Remove does bookkeeping the rail cannot: it drops the
@@ -389,6 +393,83 @@
   const favourited = $derived(
     favouritable && $favouriteIds.has(favouriteId(favouriteKey(favSubject)))
   )
+
+  /**
+   * Which setlists hold this chart, and whether it can go in one at all.
+   *
+   * The same subject and the same refusal as the heart, through the same key: a chart with no name
+   * of its own has nothing for an entry to hold on to either, so the button says so where it was
+   * pressed rather than being a dead square. `favSubject` is reused rather than copied, because
+   * the two controls have to be talking about the same chart or one could add what the other
+   * cannot heart.
+   */
+  const setlistable = $derived(target !== null && canJoinASetlist(setlistEntryKey(favSubject)))
+  const UNNAMED_FOR_SETLIST =
+    'This chart sets no name of its own, so there is nothing for a setlist to hold on to. ' +
+    'Give it one in the metadata editor and it can go in one.'
+  const inSetlists = $derived(setlistsWith($setlists, favSubject))
+  /**
+   * The panel under the row, open or shut.
+   *
+   * Inline rather than a popover, which is the design decision worth recording. The rail is a
+   *374px column that already scrolls, and the only two shapes available were a panel that pushes
+   * the cards down and one positioned over them. The inline one needs no focus trap, no outside
+   * click handler and no z-index against a scrolling parent, and the rail already puts a
+   * conditional line (`act-error`) in exactly this place, so it is the shape this column has.
+   *
+   * Shut on every change of subject, by keying off `target`: a panel left open over a different
+   * chart would be a list of ticks about the chart before it.
+   */
+  let setlistPanelOpen = $state(false)
+  let newSetlistName = $state('')
+  $effect(() => {
+    void target
+    untrack(() => {
+      setlistPanelOpen = false
+      newSetlistName = ''
+    })
+  })
+
+  function openSetlistPanel(): void {
+    if (!setlistable) {
+      actionError = UNNAMED_FOR_SETLIST
+      return
+    }
+    actionError = null
+    setlistPanelOpen = !setlistPanelOpen
+  }
+
+  async function toggleSetlist(id: string, member: boolean): Promise<void> {
+    actionError = null
+    try {
+      await setSetlistEntry(id, favSubject, member)
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  /**
+   * Make a setlist and put this chart in it, which is the one move a user in this panel wants.
+   *
+   * Two calls rather than one channel that does both: the create is the write that can be refused
+   * (a name already taken, a name that is nothing), and folding the add into it would mean a
+   * refusal that leaves the caller unsure which half happened. The new setlist is found by the
+   * name main stored rather than by position, because the list is main's order and not this
+   * component's guess at it.
+   */
+  async function addToNewSetlist(event: SubmitEvent): Promise<void> {
+    event.preventDefault()
+    const wanted = newSetlistName.trim()
+    actionError = null
+    try {
+      await createSetlist(newSetlistName)
+      const made = $setlists.find((list) => list.name === wanted)
+      if (made !== undefined) await setSetlistEntry(made.id, favSubject, true)
+      newSetlistName = ''
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : String(err)
+    }
+  }
 
   async function favourite(): Promise<void> {
     if (!favouritable) {
@@ -692,13 +773,13 @@
          button floating at the left of a 374px column reads as the leftover of a row that lost its
          second control.
 
-         The heart sits between them, which is the design's order: the action, then the icon
-         buttons that do something to the chart, then the way out of the column. Measured with
-         `scripts/measure-rail-panel.mjs` at 1280x800: the action goes from 239px to 196px, so the
-         heart costs it 43px and the column no height at all, the row being one flex line whose
-         tallest control is still 36px. The same script clones a second icon button into the row
-         and measures again ("with setlist"), which puts the add-to-setlist button at another 43px
-         and the action at 153px, still short of clipping its own word. -->
+         The two icon buttons sit between them, which is the design's order: the action, then the
+         controls that do something to the chart, then the way out of the column. Measured with
+         `scripts/measure-rail-panel.mjs` at 1280x800: the action was 239px alone, 196px beside the
+         heart, and is 153px now that the setlist button is there too, so each icon button costs it
+         43px and the column no height at all, the row being one flex line whose tallest control is
+         still 36px. Nothing is clipped at 153px: "Show in folder" is the longest word this button
+         carries, longer than the "Download" a chart from Chorus gets. -->
     <div class="actions">
       {#if chart}
         <button class="act primary" onclick={() => void download()}>
@@ -737,6 +818,31 @@
           ><path d="M12 20s-7-4.4-7-9.3A4 4 0 0 1 12 8a4 4 0 0 1 7 2.7C19 15.6 12 20 12 20z" /></svg
         >
       </button>
+      <!-- The third action, beside the heart. An icon button and not a word, because it opens a
+           choice rather than doing one thing: which setlist is the question, and a button that
+           read "Add to setlist" would still have to ask it.
+
+           `aria-expanded` rather than `aria-pressed`: this does not hold a state of the chart the
+           way the heart does, it shows and hides the list under the row. `aria-disabled` and not
+           `disabled`, for the reason the heart records: Chromium suppresses every event on a
+           disabled control, tooltip included, so the refusal would be unreadable. -->
+      <button
+        class="act icon setlist"
+        aria-expanded={setlistPanelOpen}
+        aria-label="Add to setlist"
+        aria-disabled={!setlistable}
+        class:on={inSetlists.size > 0}
+        title={setlistable
+          ? inSetlists.size > 0
+            ? `In ${inSetlists.size} of your setlists`
+            : 'Add to a setlist'
+          : UNNAMED_FOR_SETLIST}
+        onclick={openSetlistPanel}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"
+          ><path d="M4 6h11M4 12h8M4 18h8M17 11v8M13 15h8" /></svg
+        >
+      </button>
       <!-- Sized to its own word and quiet, which is the whole of its design. This column is
            where a chart is judged; the page carries the things it cannot, the full difficulty
            matrix, the version check, the ABOUT table and the chips that search on a charter or
@@ -754,6 +860,49 @@
          this column, where the percent, the failure and the retry already are; a second line here
          would be the rail reporting on a queue it does not own. A refused reveal has no such
          second place, and silence there reads as a button that does nothing. -->
+    {#if setlistPanelOpen}
+      <!-- One toggle per setlist, and the way to make another. A chart can be in several at once,
+           which is why these are toggles rather than a radio group: the table's key carries the
+           setlist's id, so two setlists holding one chart is two rows and not a contradiction. -->
+      <div class="setlist-panel">
+        {#if $setlists.length === 0}
+          <p class="setlist-empty">You have no setlists yet. Name one and this chart goes in it.</p>
+        {:else}
+          <ul class="setlist-list">
+            {#each $setlists as list (list.id)}
+              {@const held = inSetlists.has(list.id)}
+              <li>
+                <button
+                  class="setlist-row"
+                  aria-pressed={held}
+                  onclick={() => void toggleSetlist(list.id, !held)}
+                >
+                  <span class="setlist-tick" aria-hidden="true">
+                    {#if held}
+                      <svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7" /></svg>
+                    {/if}
+                  </span>
+                  <span class="setlist-name">{list.name}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <form class="setlist-new" onsubmit={(e) => void addToNewSetlist(e)}>
+          <input
+            class="setlist-input"
+            type="text"
+            bind:value={newSetlistName}
+            maxlength={SETLIST_NAME_MAX}
+            aria-label="New setlist name"
+            placeholder="New setlist"
+          />
+          <button class="setlist-add" type="submit" disabled={newSetlistName.trim() === ''}
+            >Add</button
+          >
+        </form>
+      </div>
+    {/if}
     {#if actionError !== null}
       <p class="act-error" role="alert">{actionError}</p>
     {/if}
@@ -1202,6 +1351,127 @@
   }
   .act.fav[aria-pressed='true'] svg {
     fill: currentColor;
+  }
+  /* Accented once the chart is in a setlist, the way the heart is once it is hearted. Outlined,
+     not filled: the glyph is lines and a plus, and filling it would close the lines up. */
+  .act.setlist.on {
+    color: var(--accent-tint);
+    border-color: var(--accent);
+  }
+  /* Under the row rather than over it. See the panel's comment in the script above. */
+  .setlist-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 7px;
+    padding: 8px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    background: var(--ground-3);
+  }
+  .setlist-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* Capped so a long list cannot push the eight statistics and the health ring off the column.
+       Six rows at 28px; past that the panel scrolls and the cards below it stay where they are. */
+    max-height: 172px;
+    overflow-y: auto;
+  }
+  .setlist-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    cursor: pointer;
+    text-align: left;
+  }
+  .setlist-row:hover {
+    background: var(--ground-4);
+    color: var(--text-1);
+  }
+  .setlist-row[aria-pressed='true'] {
+    color: var(--text-1);
+  }
+  .setlist-tick {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: var(--accent-tint);
+  }
+  .setlist-tick svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .setlist-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .setlist-empty {
+    margin: 0;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-snug);
+    color: var(--text-3);
+  }
+  .setlist-new {
+    display: flex;
+    gap: 6px;
+  }
+  .setlist-input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--ground-4);
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+  }
+  .setlist-input:focus-visible {
+    border-color: var(--accent);
+  }
+  .setlist-add {
+    flex: none;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-2);
+    background: var(--ground-4);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .setlist-add:hover:not(:disabled) {
+    color: var(--text-1);
+    border-color: var(--accent);
+  }
+  .setlist-add:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   /**
    * The way through to the chart page: as wide as its word, and no wider.

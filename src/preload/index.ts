@@ -10,6 +10,7 @@ import type {
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
 import type { Favourite } from '../shared/favourites'
+import type { Setlist } from '../shared/setlists'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from '../main/assets/art'
 import type { LibraryCandidate } from '../main/catalog/detect-library'
@@ -104,6 +105,41 @@ const api = {
     charter?: string | null
     favourite: boolean
   }): Promise<Favourite[]> => ipcRenderer.invoke(IPC.favouritesSet, req),
+  // The setlists the user built, entries included. Read once on mount and kept, because the rail
+  // asks which setlists hold whatever chart is in front of it on every navigation and the sidebar
+  // draws how many there are on every render.
+  setlistsList: (): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsList),
+  // The five writes. Each answers with the whole list, so the renderer never reconstructs what
+  // main stored. Names arrive as the user typed them: main collapses the whitespace and decides
+  // whether the name is one it will keep.
+  setlistsCreate: (req: { name: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsCreate, req),
+  setlistsRename: (req: { id: string; name: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsRename, req),
+  setlistsDelete: (req: { id: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsDelete, req),
+  // The chart's own three fields, raw, exactly as favouritesSet takes them and for the same
+  // reason: main strips the markup and decides what is stored, so two screens adding the same
+  // chart cannot write two rows. See shared/setlists.ts.
+  setlistsSetEntry: (req: {
+    id: string
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    member: boolean
+  }): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsSetEntry, req),
+  setlistsMoveEntry: (req: {
+    id: string
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    delta: -1 | 1
+  }): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsMoveEntry, req),
+  // The library's row per entry, in the setlist's order, null where it holds none. Asked when a
+  // setlist is opened rather than per launch, because it is the only part of a setlist that
+  // depends on what is currently on disk.
+  setlistsCharts: (req: { id: string }): Promise<(ChartRecord | null)[]> =>
+    ipcRenderer.invoke(IPC.setlistsCharts, req),
   // What the library holds more than one copy of, in three separate relationships: the same
   // chart file installed twice, several versions of one charter's chart, and the same song by
   // different charters. The third is not a fault and is labelled so. Read straight out of the

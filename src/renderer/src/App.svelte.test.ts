@@ -313,16 +313,29 @@ describe('App keyboard shortcuts', () => {
     ['Digit1', 'Home'],
     ['Digit2', 'Explore'],
     ['Digit3', 'Installed'],
-    ['Digit4', 'Asset Studio'],
-    ['Digit5', 'Statistics'],
-    ['Digit6', 'Issues'],
-    ['Digit7', 'Duplicates'],
-    ['Digit8', 'Metadata editor'],
-    ['Digit9', 'Settings']
+    ['Digit4', 'Setlists'],
+    ['Digit5', 'Asset Studio'],
+    ['Digit6', 'Statistics'],
+    ['Digit7', 'Issues'],
+    ['Digit8', 'Duplicates'],
+    ['Digit9', 'Metadata editor']
   ])('Ctrl+%s goes to %s', async (code, label) => {
     render(App)
     press(document.body, { key: 'x', code, ctrlKey: true })
     await waitFor(() => expect(navItem(label).getAttribute('aria-current')).toBe('page'))
+  })
+
+  // Settings came off the digits when Setlists went in fourth, and is still one click away in two
+  // places. Pinned end to end rather than only in the matcher, because "reachable" is a claim
+  // about the app rather than about the decision table.
+  it('reaches Settings by its row, which is what losing the digit cost', async () => {
+    render(App)
+    press(document.body, { key: 'x', code: 'Digit9', ctrlKey: true })
+    await waitFor(() =>
+      expect(navItem('Metadata editor').getAttribute('aria-current')).toBe('page')
+    )
+    await fireEvent.click(navItem('Settings'))
+    await waitFor(() => expect(navItem('Settings').getAttribute('aria-current')).toBe('page'))
   })
 
   it('focuses the search field on Ctrl+K', async () => {

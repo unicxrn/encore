@@ -132,6 +132,7 @@ const answers = {
   playLifetime: () => ({ available: false, reason: 'noFile', entries: [] }),
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 })
 }
 window.encore = new Proxy(
