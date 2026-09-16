@@ -51,6 +51,9 @@ import { sweepTmpDir } from './downloads/sweep'
 import { ART_CACHE_VERSION, encodeAlbumArt, encodeSquareAlbumArt } from './art-encode'
 import { registerArtProtocol, registerArtScheme } from './art-protocol'
 import { convertToWebm } from './ffmpeg/convert'
+import { describeGameExecutable } from '../shared/game-launch'
+import { inspectGameExecutable } from './game/executable'
+import { launchGame as startGame } from './game/launch'
 import { locateFfmpeg, type FfmpegLocation } from './ffmpeg/locate'
 import { backupStoreBytes, clearBackups, listBackups } from './issues/backup-store'
 import { cancelFix, fixableCodes, runFix, type VideoConverter } from './issues/fix'
@@ -609,6 +612,44 @@ function wireIpc(): {
         ? await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
         : await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    // A file dialog rather than a directory one, with the filter the platform calls for. Windows
+    // starts a program by its `.exe`, so that is the only thing worth offering; on Linux the game
+    // is an AppImage or a binary with no extension at all, and a filter there would hide the file
+    // the user came to pick. The dialog attaches to the calling window, as pickFolder's does.
+    pickExecutable: async (sender) => {
+      const win =
+        BrowserWindow.fromWebContents(sender as Electron.WebContents) ??
+        BrowserWindow.getFocusedWindow()
+      const options: Electron.OpenDialogOptions = {
+        properties: ['openFile'],
+        ...(process.platform === 'win32'
+          ? { filters: [{ name: 'Programs', extensions: ['exe'] }] }
+          : {})
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    // The one place `process.platform` reaches the game rules, in the same arrangement
+    // detectChartLibraries and the score-file locator use: the module takes the platform as a
+    // parameter so its tests can cover the ones this machine is not. An empty path means "the
+    // stored one", which is what the Settings row asks on mount.
+    gameExecutableReport: ({ path }) =>
+      inspectGameExecutable(
+        path.trim() === '' ? loadSettings(settingsPath).gamePath : path,
+        process.platform
+      ),
+    // Settings are re-read per call, and the path is re-inspected, for the reason revealChart
+    // re-reads its folders: a program that was checked when it was chosen can have been
+    // uninstalled since, and reporting the refusal is the whole difference between a button that
+    // explains itself and one that does nothing.
+    launchGame: async () => {
+      const configured = loadSettings(settingsPath).gamePath
+      const report = inspectGameExecutable(configured, process.platform)
+      if (!report.usable) throw new Error(describeGameExecutable(report))
+      await startGame(configured)
     },
     windowControl: (action, sender) => {
       const win =

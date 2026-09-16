@@ -35,6 +35,7 @@ import {
   type ScoreFolderRequest
 } from '../shared/play'
 import type { ScoreFolderReport } from '../shared/score-folder'
+import type { GameExecutableReport } from '../shared/game-launch'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import { UpdateCheckRequestSchema } from '../shared/updates'
 import type { SidecarName, SidecarStatus } from './sidecars/manager'
@@ -110,6 +111,32 @@ export interface IpcDeps {
   clearFinishedDownloads: () => void
   windowControl: (action: 'minimize' | 'maximize' | 'close', sender: unknown) => void
   pickFolder: (sender: unknown) => Promise<string | null>
+  /**
+   * The file picker behind the Clone Hero setting. Separate from `pickFolder` because it opens
+   * on a file, and because the filter it offers is per platform: a `.exe` on Windows, anything on
+   * Linux, where the game arrives as an AppImage or as an extension-less binary. `sender` is
+   * passed for the reason `pickFolder` takes it, so the dialog attaches to the right window.
+   */
+  pickExecutable: (sender: unknown) => Promise<string | null>
+  /**
+   * What one path is, in the terms the setting needs before it stores anything.
+   *
+   * The Clone Hero half of what `scoreFolderReport` does for the score files, and it exists for
+   * the same reason: a path stored without being checked fails silently, and the failure looks
+   * exactly like the bug the setting was added to fix. An empty path asks about whatever is
+   * stored, which is how the Settings row describes itself on mount.
+   */
+  gameExecutableReport: (req: { path: string }) => GameExecutableReport
+  /**
+   * Start Clone Hero, detached, and let go of it.
+   *
+   * Takes nothing: the path is the stored setting rather than something the renderer names, so
+   * there is no payload to trust. It is re-inspected here before anything is spawned, because a
+   * program that was checked when it was chosen can have been uninstalled since, and rejects with
+   * the same sentence Settings would have shown rather than resolving on a launch that did not
+   * happen.
+   */
+  launchGame: () => Promise<void>
   readChartFiles: (
     path: string,
     chartType: 'folder' | 'sng'
@@ -346,6 +373,17 @@ const IssueRowSchema: z.ZodType<ChartIssueRow> = z.object({
 // defaultName must not contain path separators or ".." to prevent path-traversal
 // confusion (the user's chosen path is always used, so this is belt-and-suspenders).
 // content is capped at 10 MB (generous for any CSV we'd ever produce).
+/**
+ * The path Settings asks about before storing it.
+ *
+ * Capped at a length no filesystem accepts anyway (Linux caps a path at 4096 bytes, Windows at
+ * 32,767 with the extended prefix), so a hostile caller cannot turn one `stat` into a megabyte of
+ * string. Empty is allowed and means "the stored one", the same shape `ScoreFolderRequestSchema`
+ * uses. There is no containment check and there cannot be one: the whole point of the setting is
+ * that Clone Hero lives outside every folder Encore knows about. Nothing is opened, nothing is
+ * written, and the answer is metadata about a path the user picked themselves.
+ */
+const GameExecutableSchema = z.object({ path: z.string().max(32_767) })
 const SaveTextFileSchema = z.object({
   defaultName: z
     .string()
@@ -395,6 +433,18 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     deps.windowControl(WindowActionSchema.parse(raw), e.sender)
   )
   ipcMain.handle(IPC.dialogPickFolder, (e) => deps.pickFolder(e.sender))
+  // No payload, exactly as the folder picker has none: which filters a file dialog offers is
+  // decided in main from the platform, so there is nothing here for the renderer to name.
+  ipcMain.handle(IPC.dialogPickExecutable, (e) => deps.pickExecutable(e.sender))
+  // An absent payload is the ordinary "tell me about the stored one" call, so undefined is parsed
+  // as an empty path rather than rejected. Same shape, and same reason, as play:score-folder.
+  ipcMain.handle(IPC.gameExecutable, (_e, raw) =>
+    deps.gameExecutableReport(GameExecutableSchema.parse(raw ?? { path: '' }))
+  )
+  // No payload: the path this runs is the stored setting, not the renderer's to supply. A channel
+  // that took one would be a channel for running an arbitrary program, which is the one thing
+  // this feature must not become.
+  ipcMain.handle(IPC.gameLaunch, () => deps.launchGame())
   ipcMain.handle(IPC.chartReadFiles, (_e, raw) => {
     const { path, chartType } = ChartReadFilesSchema.parse(raw)
     return deps.readChartFiles(path, chartType)

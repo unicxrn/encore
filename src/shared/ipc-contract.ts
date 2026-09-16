@@ -38,6 +38,23 @@ export const IPC = {
   chartLyricLines: 'chart:lyric-lines',
   windowControl: 'window:control',
   dialogPickFolder: 'dialog:pick-folder',
+  // Picking the program Clone Hero is started by. A separate dialog from dialog:pick-folder
+  // because it opens on a file rather than a directory, and because the filter it offers depends
+  // on the platform, which is main's to decide and not the renderer's to name.
+  dialogPickExecutable: 'dialog:pick-executable',
+  // What Encore makes of one path: is there anything there, is it a file, and is it a file this
+  // platform could start. The check Settings makes BEFORE storing a path, on the same terms as
+  // play:score-folder: a stored path that cannot run would fail silently for as long as the user
+  // left it there. An empty path in the request means "report on whatever is stored", which is
+  // how the setting's own row describes itself without a second channel. Reads metadata, never
+  // contents, and writes nothing.
+  gameExecutable: 'game:executable',
+  // Start Clone Hero. Takes no payload: the path is the stored setting, not something the
+  // renderer names, so there is nothing here to trust or to validate. It is re-checked in main
+  // before anything is spawned, because a program can be uninstalled after it was chosen.
+  // Resolves once the operating system has accepted the process, and rejects with a sentence the
+  // UI can show when it has not.
+  gameLaunch: 'game:launch',
   sidecarStatus: 'sidecar:status',
   sidecarInstall: 'sidecar:install',
   sidecarUpdate: 'sidecar:update',
