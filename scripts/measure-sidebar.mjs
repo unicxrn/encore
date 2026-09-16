@@ -292,7 +292,10 @@ const CHEVRON = `(() => {
 
 const DOWNLOADS_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Downloads')`
 
-const NAV_READY = `document.querySelectorAll('nav.sidebar .section .item').length === 9`
+// Ten rows: the nine views Mod+1 to Mod+9 reach, plus Downloads, which opens a panel rather
+// than a view and so carries no digit. A count rather than a wait-for-any, because the sweep
+// measures every label and a screenshot taken mid-render would report boxes nobody will see.
+const NAV_READY = `document.querySelectorAll('nav.sidebar .section .item').length === 10`
 const ISSUES_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Issues')`
 const HOME_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Home')`
 
