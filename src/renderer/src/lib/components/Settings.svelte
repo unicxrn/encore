@@ -16,6 +16,7 @@
   import { APP_VERSION } from '../../../../shared/constants'
   import { resolveChartFolderName } from '../../../../shared/naming'
   import { describeScoreFolder, type ScoreFolderReport } from '../../../../shared/score-folder'
+  import { describeGameExecutable, type GameExecutableReport } from '../../../../shared/game-launch'
 
   interface SidecarStatus {
     installed: boolean
@@ -89,6 +90,50 @@
     scoreFolderError = null
     await patchSettings({ scoreFolder: '' })
     await loadScoreFolder()
+  }
+
+  // ── Clone Hero itself ──────────────────────────────────────────────────────
+  /**
+   * The program the Launch button in the title bar starts.
+   *
+   * There is no probe behind this one, which is what makes it different from every other path in
+   * this view. Encore knows where the songs are because the user named a folder it scans, and it
+   * knows where the score files are because the game writes them to a fixed place per platform.
+   * The executable is wherever its owner installed it: Steam, an extracted zip, an AppImage in a
+   * downloads folder. So the only honest starting state is empty, and the only way out of it is
+   * for the user to say.
+   *
+   * A chosen path is checked before it is stored, on the same terms the score folder is and for
+   * the same reason: an AppImage with no execute bit, or a folder picked instead of the program
+   * inside it, would be stored happily and then turn Launch into a button that never works.
+   */
+  let gameExe = $state<GameExecutableReport | null>(null)
+  let gameExeError = $state<string | null>(null)
+
+  // Asks about whatever is stored, so the row describes where Encore would actually look rather
+  // than what was true when the path was chosen.
+  async function loadGameExe(): Promise<void> {
+    gameExe = await encore().gameExecutable('')
+  }
+
+  const chooseGameExe = async (): Promise<void> => {
+    const path = await encore().pickExecutable()
+    if (!path) return
+    const report = await encore().gameExecutable(path)
+    if (!report.usable) {
+      // Refused, not stored. The message says what was wrong with the path that was picked.
+      gameExeError = describeGameExecutable(report)
+      return
+    }
+    gameExeError = null
+    await patchSettings({ gamePath: path })
+    await loadGameExe()
+  }
+
+  const clearGameExe = async (): Promise<void> => {
+    gameExeError = null
+    await patchSettings({ gamePath: '' })
+    await loadGameExe()
   }
 
   // ── the folder a download lands in ─────────────────────────────────────────
@@ -279,6 +324,7 @@
     void loadSidecarStatus()
     void loadBackups()
     void loadScoreFolder()
+    void loadGameExe()
     // A read of what main already concluded, not a second check, and not the only caller of it:
     // App subscribes at launch and reads once there, which is what makes the launch prompt a
     // launch prompt. Asking GitHub again on every visit to this view would spend a request to be
@@ -401,6 +447,41 @@
           </button>
         {/if}
       </div>
+    </div>
+
+    <div class="block">
+      <h3 class="block-head">Clone Hero itself</h3>
+      <p class="hint prose">
+        Point Encore at the program you start Clone Hero with, and Launch Clone Hero in the title
+        bar starts it. Encore does not look for this one: the game is installed wherever you put it,
+        so there is nothing to search and a wrong guess would be worse than asking.
+      </p>
+      <p class="score-folder">{gameExe ? describeGameExecutable(gameExe) : '—'}</p>
+      {#if gameExe?.supported}
+        <p class="hint prose">
+          {#if $settings.gamePath}
+            Encore starts it and lets go of it: closing Encore does not close the game.
+          {:else}
+            On Linux that is the AppImage or the <span class="mono">Clone Hero</span> file in the
+            folder you extracted, and on Windows it is
+            <span class="mono">Clone Hero.exe</span>.
+          {/if}
+        </p>
+      {/if}
+      {#if gameExeError}
+        <!-- The refusal. Nothing was stored, and this says what was wrong with the path. -->
+        <p class="tool-error" role="alert">{gameExeError}</p>
+      {/if}
+      {#if gameExe?.supported}
+        <div class="score-actions">
+          <button class="btn-primary" onclick={() => void chooseGameExe()}>
+            Choose Clone Hero
+          </button>
+          {#if $settings.gamePath}
+            <button class="hairline sentence" onclick={() => void clearGameExe()}>Forget it</button>
+          {/if}
+        </div>
+      {/if}
     </div>
   </section>
 
