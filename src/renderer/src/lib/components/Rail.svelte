@@ -375,12 +375,26 @@
    * is the way out of it. See `isFavouritable`.
    */
   const favouritable = $derived(target !== null && isFavouritable(favouriteKey(favSubject)))
+  /**
+   * Why the heart is refused, said where the user pressed it rather than in a tooltip.
+   *
+   * The button carries `aria-disabled` and not `disabled`, which is the whole reason this string
+   * exists: Chromium suppresses every event on a disabled control, its own tooltip included, so a
+   * `title` there is a reason nobody can read and the button is a dead square with no explanation.
+   * This way the press lands, and the sentence goes to the line a refused reveal already uses.
+   */
+  const UNNAMED_CHART =
+    'This chart sets no name of its own, so there is nothing for a favourite to hold on to. ' +
+    'Give it one in the metadata editor and the heart will keep.'
   const favourited = $derived(
     favouritable && $favouriteIds.has(favouriteId(favouriteKey(favSubject)))
   )
 
   async function favourite(): Promise<void> {
-    if (!favouritable) return
+    if (!favouritable) {
+      actionError = UNNAMED_CHART
+      return
+    }
     actionError = null
     try {
       await toggleFavourite(favSubject, !favourited)
@@ -711,12 +725,12 @@
         class="act icon fav"
         aria-pressed={favourited}
         aria-label="Favourite"
-        disabled={!favouritable}
+        aria-disabled={!favouritable}
         title={favouritable
           ? favourited
             ? 'Remove from favourites'
             : 'Add to favourites'
-          : 'This chart sets no name of its own, so there is nothing for a favourite to hold on to. The metadata editor can give it one.'}
+          : UNNAMED_CHART}
         onclick={() => void favourite()}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true"
@@ -1172,11 +1186,10 @@
     width: 36px;
     padding: 0;
   }
-  .act:disabled {
+  .act[aria-disabled='true'] {
     opacity: 0.45;
-    cursor: default;
   }
-  .act:disabled:hover {
+  .act[aria-disabled='true']:hover {
     color: var(--text-2);
     border-color: var(--border-2);
   }

@@ -683,12 +683,18 @@ describe('Rail: the heart', () => {
   // A chart with no name is drawn from its folder name, which is a display fallback and not an
   // identity: two of them would be one favourite between them, and renaming a folder would move
   // it. Refused rather than attached to something that cannot hold it.
-  it('refuses a chart that sets no name of its own, and says why', () => {
+  it('refuses a chart that sets no name of its own, and says why where it was pressed', async () => {
+    const favouritesSet = vi.fn()
+    vi.stubGlobal('encore', { favouritesSet })
     const target = { kind: 'local' as const, record: record({ name: null }) }
     render(Rail, { props: { onOpenDetail: () => {}, target } })
-    const heart = screen.getByRole('button', { name: 'Favourite' }) as HTMLButtonElement
-    expect(heart.disabled).toBe(true)
-    expect(heart.title).toContain('no name of its own')
+    const heart = screen.getByRole('button', { name: 'Favourite' })
+    expect(heart.getAttribute('aria-disabled')).toBe('true')
+    // aria-disabled rather than disabled, so the press still lands and the reason is a sentence
+    // on screen: Chromium suppresses the tooltip on a disabled control along with everything else.
+    await fireEvent.click(heart)
+    expect(favouritesSet).not.toHaveBeenCalled()
+    expect((await screen.findByRole('alert')).textContent).toContain('no name of its own')
   })
 
   it('says why a heart was refused, where the user pressed it', async () => {
