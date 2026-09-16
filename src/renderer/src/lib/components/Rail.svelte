@@ -166,10 +166,17 @@
 
   // What the badge over the highway says the preview would play. Read off the same two lists the
   // selects are built from, so it cannot name a track the selects do not offer.
-  const trackLabel = $derived(
-    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} · ` +
-      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  const diffWord = $derived(
+    DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty
   )
+  const instLabel = $derived(
+    instrumentList.find((o) => o.value === instrument)?.label ?? instrument
+  )
+  const trackLabel = $derived(`${diffWord} · ${instLabel}`)
+  // The same two words for the player bar, without the separator: the badge sits over the lane
+  // with nothing else in it and can afford one, and the bar's second line already has a middot
+  // between the artist and this.
+  const trackName = $derived(`${diffWord} ${instLabel}`)
 
   // Keep the two selections answerable by the chart in front of us. Written the way the chart
   // page's preview pane writes them, for the same reason: switching instrument can drop the
@@ -594,6 +601,7 @@
         title,
         artist,
         artUrl: coverUrl,
+        track: trackName,
         source,
         instrument,
         difficulty

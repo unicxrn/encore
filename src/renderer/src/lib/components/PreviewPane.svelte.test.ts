@@ -63,7 +63,7 @@ const lyricsToggle = (): HTMLButtonElement =>
 
 /** What the player does on every frame, minus the player: the controller's progress store. */
 function playingAt(currentMs: number): void {
-  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null })
+  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
   progress.set({ percent: (currentMs / 10_000) * 100, currentMs, totalMs: 10_000 })
 }
 
@@ -205,6 +205,27 @@ describe('PreviewPane hands the player bar a name it can read', () => {
     })
     expect(get(nowPlaying)).toMatchObject({ title: 'YYZ', artist: TAGGED_CHARTER_TEXT })
   })
+
+  /**
+   * The track, in the words the selects above the stage use rather than the keys the chart format
+   * uses. The bar prints this verbatim, so composing it here is what keeps the pane and the bar
+   * from naming one preview two ways.
+   */
+  it('names the track it opened in the words its own selects offer', async () => {
+    vi.stubGlobal('encore', {
+      chartLyricLines: () => Promise.resolve(LINES),
+      chartReadFiles: () => Promise.resolve([])
+    })
+    // Drums and nothing else, so the pick the pane lands on is not the guitar default: the
+    // string has to follow the select rather than name whatever loaded first.
+    render(PreviewPane, { props: { target: localRecord({ diffDrums: 5 }), instruments: [] } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+    await waitFor(() => {
+      if (get(nowPlaying) === null) throw new Error('nothing playing yet')
+    })
+    expect(get(nowPlaying)?.track).toBe('Expert Drums')
+  })
 })
 
 /**
@@ -231,7 +252,7 @@ describe('PreviewPane draws the still highway with nothing playing', () => {
 
   it('gets out of the way once something is playing', async () => {
     renderPane(localRecord())
-    nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null })
+    nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
     await tick()
 
     expect(document.querySelector('.stage .rest')?.classList.contains('gone')).toBe(true)

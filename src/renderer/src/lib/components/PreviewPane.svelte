@@ -30,16 +30,18 @@
   interface DiffOption {
     value: string
     label: string
+    /** The word on its own, for the player bar, where the matrix letter would be noise. */
+    word: string
     key: DiffKey
   }
 
   // Difficulty labels carry the matrix letter so the select and the E/M/H/X
   // matrix on the Overview tab read as the same vocabulary.
   const DIFFICULTY_OPTIONS: readonly DiffOption[] = [
-    { value: 'expert', label: 'Expert (X)', key: 'X' },
-    { value: 'hard', label: 'Hard (H)', key: 'H' },
-    { value: 'medium', label: 'Medium (M)', key: 'M' },
-    { value: 'easy', label: 'Easy (E)', key: 'E' }
+    { value: 'expert', label: 'Expert (X)', word: 'Expert', key: 'X' },
+    { value: 'hard', label: 'Hard (H)', word: 'Hard', key: 'H' },
+    { value: 'medium', label: 'Medium (M)', word: 'Medium', key: 'M' },
+    { value: 'easy', label: 'Easy (E)', word: 'Easy', key: 'E' }
   ]
 
   // Playable instruments. Remote charts get the API's per-difficulty matrix; local charts
@@ -138,6 +140,14 @@
     return target.chart.albumArtMd5 ? albumArtUrl(target.chart.albumArtMd5) : null
   })
 
+  // What the player bar's second line names the track as. Read off the same two lists these
+  // selects are built from, so the bar cannot name a track this pane does not offer, and built
+  // the same way the rail builds its own.
+  const trackName = $derived(
+    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} ` +
+      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  )
+
   async function buildSource(): Promise<PreviewSource> {
     if (target.kind === 'remote') {
       const chart = target.chart
@@ -166,6 +176,7 @@
         title,
         artist,
         artUrl: coverUrl,
+        track: trackName,
         source,
         instrument,
         difficulty,

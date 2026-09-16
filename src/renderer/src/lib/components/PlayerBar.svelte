@@ -78,6 +78,11 @@
 </script>
 
 <footer class="playerbar">
+  <!-- The same three-part shape whether a chart is loaded or not: a 40px tile, a name, and a
+       line under it. The bar used to answer the empty case with the word ENCORE, which named the
+       app in the one place nobody needs telling and left the other two thirds of the group
+       blank. What it says instead is what is true (nothing is previewing) and where a preview
+       comes from, in the slots it will use for the chart's own name the moment there is one. -->
   <div class="now">
     {#if $nowPlaying}
       {#if art}
@@ -87,10 +92,30 @@
       {/if}
       <div class="meta">
         <span class="title">{$nowPlaying.title}</span>
-        <span class="artist">{$nowPlaying.artist}</span>
+        <!-- Artist and track on one line, which is the design's arrangement. The artist is the
+             half that ellipsises and the track is pinned beside it, deliberately: the title
+             above already carries the song, so a long artist crowding out which instrument and
+             difficulty are playing would lose the only thing on this line the rest of the bar
+             does not say. -->
+        <span class="line">
+          <span class="artist">{$nowPlaying.artist}</span>
+          <span class="track">{$nowPlaying.track}</span>
+        </span>
       </div>
     {:else}
-      <span class="wordmark">ENCORE</span>
+      <div class="art tile" aria-hidden="true">
+        <svg viewBox="0 0 24 24"
+          ><path d="M9 17V6.2l9-2v10.6" /><circle cx="6.6" cy="17.2" r="2.6" /><circle
+            cx="15.6"
+            cy="14.9"
+            r="2.6"
+          /></svg
+        >
+      </div>
+      <div class="meta">
+        <span class="title resting">Nothing previewing</span>
+        <span class="line"><span class="artist">Press play on a chart</span></span>
+      </div>
     {/if}
   </div>
 
@@ -229,12 +254,33 @@
   .art {
     width: 40px;
     height: 40px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     object-fit: cover;
     flex-shrink: 0;
   }
   .art.placeholder {
     background: var(--surface-2);
+  }
+  /* The resting tile. Outlined rather than filled flat, so the empty group reads as a box
+     waiting for a cover rather than as a grey smudge, and a glyph rather than a play triangle:
+     a triangle in the slot beside a real play button is a second button that does nothing. */
+  .art.tile {
+    background: var(--ground-2);
+    border: 1px solid var(--border-1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-3);
+  }
+  .art.tile svg {
+    width: 17px;
+    height: 17px;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1.7;
+  }
+  .art.tile path {
+    fill: none;
   }
   .meta {
     display: flex;
@@ -252,15 +298,33 @@
     font-weight: 600;
     color: var(--text-1);
   }
+  /* An absence is not a name: the resting line takes the second text level, so the bar with
+     nothing in it does not sit at the same weight of voice as the bar with a song in it. */
+  .title.resting {
+    color: var(--text-2);
+  }
+  .line {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+  }
   .artist {
+    min-width: 0;
     font-size: var(--fs-caption);
     color: var(--text-2);
   }
-  .wordmark {
-    font-family: var(--font-mono);
+  /* Never shrinks: see the note beside the markup. The separator belongs to the track and not
+     to the artist, so a chart whose artist is empty gets the track with nothing in front of
+     it rather than a middot floating at the start of the line. */
+  .track {
+    flex: none;
     font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
     color: var(--text-3);
+    white-space: nowrap;
+  }
+  .artist:not(:empty) + .track::before {
+    content: ' · ';
+    white-space: pre;
   }
   .transport {
     flex: 1;
