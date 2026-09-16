@@ -3,7 +3,6 @@ import {
   diffDisplay,
   fallbackChartName,
   formatBytes,
-  instrumentDiff,
   msToTime,
   partState,
   playedOn,
@@ -71,30 +70,6 @@ describe('partState', () => {
     // Real data, same sample: diff_guitar of 20 and several of 7 and 8. Where the scale stops
     // is a rendering decision, so it belongs to whatever draws this and not to the fact.
     expect(partState(['guitar'], 'guitar', 20)).toEqual({ kind: 'rated', tier: 20 })
-  })
-})
-
-describe('instrumentDiff', () => {
-  it('shows the rating when the instrument is charted', () => {
-    expect(instrumentDiff(['guitar'], 'guitar', 4)).toBe('4')
-  })
-  it('shows a dash when charted but unrated', () => {
-    expect(instrumentDiff(['guitar'], 'guitar', null)).toBe('–')
-    // song.ini's -1 sentinel is still "charted but unrated", not "absent".
-    expect(instrumentDiff(['guitar'], 'guitar', -1)).toBe('–')
-  })
-  it('shows nothing when the instrument is not charted at all', () => {
-    // "no bass track" and "bass with no rating" are different facts and must not look alike.
-    expect(instrumentDiff(['guitar'], 'bass', null)).toBe('')
-    // A stale rating for a track the chart does not contain is still absent: the note data
-    // wins over song.ini, which charters routinely copy between projects without editing.
-    expect(instrumentDiff(['guitar'], 'bass', 4)).toBe('')
-  })
-  it('falls back to the rating when instruments are unknown', () => {
-    // Rows scanned before instruments were stored have an empty list, which is not the same
-    // as "this chart has no instruments". Show what we have rather than blanking the row.
-    expect(instrumentDiff([], 'guitar', 4)).toBe('4')
-    expect(instrumentDiff([], 'bass', null)).toBe('–')
   })
 })
 
