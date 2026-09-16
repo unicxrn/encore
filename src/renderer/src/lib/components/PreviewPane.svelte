@@ -814,9 +814,13 @@
   /* Faded out rather than torn out, and clipped to the viewport's own corners because it sits
      over it rather than in it. Inert to the pointer throughout, so the player's own clicks and
      shortcuts land on the player. */
+  /* Inset by the viewport's border and not by nothing. `.screen` is the size of the viewport's
+     border box and the player element fills its content box, so a lane at inset 0 is drawn two
+     pixels wider and a pixel higher than the lane that replaces it. The rail's own frame carries
+     its border on the element outside both and needs no such offset. */
   .rest {
     position: absolute;
-    inset: 0;
+    inset: 1px;
     border-radius: var(--radius);
     overflow: hidden;
     pointer-events: none;
