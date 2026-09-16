@@ -34,6 +34,13 @@
  *               the strike line sits where a player would look, whether the outer frets are
  *               inside the frame rather than clipped by it, and whether the drawing covers the
  *               box or leaves a band of the old black rectangle showing.
+ *   motion      What reduced motion collapses, asked of the engine rather than of the
+ *               stylesheet. The lane moves one thing, the strike line while a chart is being
+ *               fetched and parsed, and it moves it with a CSS animation so that the global rule
+ *               at the foot of tokens.css is what turns it off. This emulates the media query
+ *               both ways and reads back what the strike line computes to, which is the only
+ *               place that claim can be checked: jsdom loads no stylesheet and the source test
+ *               beside the component can only say the rules are written down.
  *   transport   The row under it, which is the transport a user can actually reach: the player
  *               bar cedes its own whenever a viewport is registered, and a preview can only live
  *               inside one. A time either side of the track costs the track its width, and the
@@ -513,6 +520,36 @@ app.whenReady().then(async () => {
   await waitFor(win, `document.querySelector('.rail .head')`)
   await sleep(1500)
 
+  /**
+   * The strike line's computed animation, with the media query emulated both ways.
+   *
+   * The opening class is put on by hand: the lane only wears it while a chart is being read, and
+   * that is not a state this harness can hold still. What is under test is the CSS, not the app
+   * state that reaches for it.
+   */
+  const MOTION = `(() => {
+    const svg = document.querySelector('.rail .hw .rest svg.highway')
+    const holder = document.querySelector('.rail .hw .rest')
+    if (!svg || !holder) return null
+    svg.classList.add('opening')
+    const line = getComputedStyle(svg.querySelector('.strike'))
+    const out = {
+      animation: line.animationName,
+      opacity: line.strokeOpacity,
+      fade: getComputedStyle(holder).transitionDuration
+    }
+    svg.classList.remove('opening')
+    return out
+  })()`
+
+  const emulate = async (value) => {
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-motion', value }]
+    })
+    await sleep(120)
+    return evalIn(win, MOTION)
+  }
+
   const p = await evalIn(win, PANEL)
   if (p.railDisplay !== 'flex') {
     console.log(
@@ -581,6 +618,24 @@ app.whenReady().then(async () => {
     )
   }
   console.log(`  sideways      column ${p.sidewaysBy}px, document ${p.docSidewaysBy}px`)
+
+  if (p.lane) {
+    win.webContents.debugger.attach('1.3')
+    const normal = await emulate('no-preference')
+    const reduced = await emulate('reduce')
+    const says = (m) =>
+      `strike animation ${m.animation}, stroke-opacity ${m.opacity}, lane fade ${m.fade}`
+    console.log(`  motion        as set: ${says(normal)}`)
+    console.log(
+      `                reduced: ${says(reduced)}  ${
+        reduced.animation === 'none' &&
+        reduced.opacity === normal.opacity &&
+        parseFloat(reduced.fade) === 0
+          ? 'ok, a still frame of the lane as drawn'
+          : 'STILL MOVES'
+      }`
+    )
+  }
 
   app.exit(0)
 })
