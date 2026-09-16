@@ -418,6 +418,12 @@
     line-height: var(--lh-prose);
     color: var(--text-2);
   }
+  /* Wraps rather than scrolling, and the tabs are not capped.
+     Measured with `scripts/measure-setlists.mjs` at 1280x800: four ordinary names are 112px at
+     the widest and sit on one line; four names at the 60-character cap are 412px each and take
+     four lines, which pushes the list down about 144px and clips nothing. A max-width would trade
+     that for an ellipsis in the one place a setlist is picked BY its name, which is the worse
+     half: the name is the user's own word and the strip is above a page that already scrolls. */
   .s-picker {
     display: flex;
     flex-wrap: wrap;
@@ -494,7 +500,12 @@
     flex-direction: column;
   }
   /* One grid so every row's columns line up down the list, which is what makes an ORDER readable
-     as one. The title takes what is left; everything else is sized to its own content. */
+     as one. The title takes what is left; everything else is sized to its own content.
+     Measured at 1280x800, where the sidebar and the rail leave this view 653px: an ordinary title
+     gets 379px and the longest title on Chorus gets 364px, both whole, and the artist and charter
+     line under it is what gives way first, ellipsised by 124px in the long case. That is the right
+     one to lose: the title is what a reader runs their eye down. No row scrolls sideways at any of
+     960, 1280 or 1920, and neither does the document. */
   .s-row {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) auto auto auto;

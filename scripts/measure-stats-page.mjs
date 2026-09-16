@@ -108,6 +108,7 @@ const answers = {
   existsByMeta: () => [],
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   updatesLast: () => [],
   appUpdateStatus: () => ({
     currentVersion: '0.3.1',

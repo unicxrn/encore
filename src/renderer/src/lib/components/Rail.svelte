@@ -773,13 +773,13 @@
          button floating at the left of a 374px column reads as the leftover of a row that lost its
          second control.
 
-         The heart sits between them, which is the design's order: the action, then the icon
-         buttons that do something to the chart, then the way out of the column. Measured with
-         `scripts/measure-rail-panel.mjs` at 1280x800: the action goes from 239px to 196px, so the
-         heart costs it 43px and the column no height at all, the row being one flex line whose
-         tallest control is still 36px. The same script clones a second icon button into the row
-         and measures again ("with setlist"), which puts the add-to-setlist button at another 43px
-         and the action at 153px, still short of clipping its own word. -->
+         The two icon buttons sit between them, which is the design's order: the action, then the
+         controls that do something to the chart, then the way out of the column. Measured with
+         `scripts/measure-rail-panel.mjs` at 1280x800: the action was 239px alone, 196px beside the
+         heart, and is 153px now that the setlist button is there too, so each icon button costs it
+         43px and the column no height at all, the row being one flex line whose tallest control is
+         still 36px. Nothing is clipped at 153px: "Show in folder" is the longest word this button
+         carries, longer than the "Download" a chart from Chorus gets. -->
     <div class="actions">
       {#if chart}
         <button class="act primary" onclick={() => void download()}>

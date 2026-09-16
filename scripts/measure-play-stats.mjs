@@ -166,6 +166,7 @@ const answers = {
   },
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   updatesLast: () => [],
   // The real shape main pushes: state is an object with a kind, not a bare string. It was a
   // bare string here until the sidebar started drawing this, and the footer measured empty.

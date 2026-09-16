@@ -128,6 +128,7 @@ const answers = {
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' }),
   // Enough for buildSource to resolve. The bytes are empty, so the parse behind it fails, which

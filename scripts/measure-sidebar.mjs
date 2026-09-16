@@ -24,9 +24,9 @@
  *              figure at all, so "what happens to Asset Studio" has a number rather than a guess.
  *
  * The live half drives the figures through the fake preload: a library count, a download queue,
- * a duplicate report with spare copies in it, and an issue report. The issue pill is the one that
- * cannot be set from the preload alone, because the Issues view is what publishes it, so the
- * script navigates there and back the way a user would.
+ * a duplicate report with spare copies in it, a list of setlists, and an issue report. The issue
+ * pill is the one that cannot be set from the preload alone, because the Issues view is what
+ * publishes it, so the script navigates there and back the way a user would.
  *
  * What it touches: a throwaway user-data directory, and nothing else. No network, no catalogue,
  * no library, no settings: the preload it writes below answers every call from memory.
@@ -53,6 +53,11 @@ const LIBRARY = Number(process.env.LIBRARY || 99999)
 const QUEUED = Number(process.env.QUEUED || 9999)
 const SPARE = Number(process.env.SPARE || 9999)
 const BROKEN = Number(process.env.BROKEN || 99999)
+// Setlists are made one at a time by hand, so there is no population figure to size this against
+// the way LIBRARY is sized against Chorus. 9,999 is four digits, which is past any list a person
+// would build and keep apart in their head, and the sweep at the bottom prices the label against
+// six digits regardless.
+const SETLISTS = Number(process.env.SETLISTS || 9999)
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'encore-sidebar-'))
 const preloadPath = path.join(scratch, 'preload.cjs')
@@ -62,6 +67,7 @@ fs.writeFileSync(
 const QUEUED = ${QUEUED}
 const SPARE = ${SPARE}
 const BROKEN = ${BROKEN}
+const SETLISTS = ${SETLISTS}
 
 const settings = {
   libraryFolders: [{ path: '/home/someone/.clonehero/Songs', isDefault: true }],
@@ -115,6 +121,13 @@ const answers = {
     unidentifiedCharts: 0
   }),
   favouritesList: () => [],
+  setlistsList: () =>
+    Array.from({ length: SETLISTS }, (_, i) => ({
+      id: 'setlist-' + i,
+      name: 'Setlist ' + i,
+      createdAt: '2026-09-16T00:00:00.000Z',
+      entries: []
+    })),
   downloadList: () =>
     Array.from({ length: QUEUED }, (_, i) => ({
       md5: String(i).padStart(32, '0'),
@@ -293,10 +306,11 @@ const CHEVRON = `(() => {
 
 const DOWNLOADS_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Downloads')`
 
-// Ten rows: the nine views Mod+1 to Mod+9 reach, plus Downloads, which opens a panel rather
-// than a view and so carries no digit. A count rather than a wait-for-any, because the sweep
-// measures every label and a screenshot taken mid-render would report boxes nobody will see.
-const NAV_READY = `document.querySelectorAll('nav.sidebar .section .item').length === 10`
+// Eleven rows: the ten views, of which the first nine carry Mod+1 to Mod+9, plus Downloads,
+// which opens a panel rather than a view and so carries no digit. A count rather than a
+// wait-for-any, because the sweep measures every label and a screenshot taken mid-render would
+// report boxes nobody will see.
+const NAV_READY = `document.querySelectorAll('nav.sidebar .section .item').length === 11`
 const ISSUES_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Issues')`
 const HOME_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Home')`
 

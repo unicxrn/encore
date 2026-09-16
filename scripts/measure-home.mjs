@@ -133,6 +133,7 @@ const answers = {
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' })
 }

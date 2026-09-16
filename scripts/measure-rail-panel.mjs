@@ -203,6 +203,7 @@ const answers = {
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
   favouritesList: () => [],
+  setlistsList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' })
 }
@@ -354,20 +355,11 @@ const PANEL = `(() => {
     }))
   const actions = measureActions()
 
-  // The room the add-to-setlist button is going to want. A second icon button is cloned in
-  // beside the heart and the row is measured again, then the clone is removed: the question is
-  // what the action's width falls to and whether its own word survives it, and that is layout,
-  // which is exactly the thing no jsdom test can answer. The clone is the heart, so it is the
-  // real width of a real icon button rather than a guess at one.
-  let room = null
-  const heart = rail.querySelector('.actions .icon')
-  if (heart) {
-    const clone = heart.cloneNode(true)
-    clone.setAttribute('aria-label', 'Add to setlist')
-    heart.after(clone)
-    room = measureActions()
-    clone.remove()
-  }
+  // The probe that used to be here cloned a second icon button into the row to price the
+  // add-to-setlist button before it existed. It is gone because the button is here now and
+  // `actions` above measures the real thing: at 1280x800 the action is 153px with all three
+  // drawn, which is exactly what the clone predicted. A fourth icon button would want the
+  // probe back; nothing has asked for one.
 
   return {
     railDisplay: style.display,
@@ -385,7 +377,6 @@ const PANEL = `(() => {
     context: (rail.querySelector('.context') || { textContent: '' }).textContent.trim(),
     badge: (rail.querySelector('.hwt') || { textContent: '' }).textContent.trim(),
     actions,
-    room,
     statColumns: lefts.length,
     statCount: cells.length,
     stats,
@@ -458,7 +449,6 @@ app.whenReady().then(async () => {
   const actionLine = (list) =>
     list.map((a) => `${a.label} ${a.width}x${a.height}${a.clipped ? ' CLIPPED' : ''}`).join(', ')
   console.log(`  actions       ${actionLine(p.actions)}`)
-  if (p.room) console.log(`  with setlist  ${actionLine(p.room)}`)
   console.log(`  statistics    ${p.statCount} cells in ${p.statColumns} column(s)`)
   for (const s of p.stats) {
     console.log(
