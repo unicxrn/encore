@@ -1539,3 +1539,142 @@ describe('Explore filter header', () => {
     expect(lastParams().sort ?? null).toBeNull()
   })
 })
+
+/**
+ * The row as the approved design has it: five instruments as rings over their pips, and a band
+ * of badges under the subtitle carrying what used to be columns.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says how wide any of it is, which
+ * of the two folded layouts is in force, or whether the band wraps. `scripts/measure-explore-
+ * row.mjs` answers all of that in a real engine. These pin what is drawn and what it claims.
+ */
+describe('Explore rows as the design draws them', () => {
+  const FULL_BAND: ChartData[] = [
+    {
+      ...chart(51, null, 'BandCharter'),
+      name: 'Full Band',
+      song_length: 196_000,
+      diff_guitar: 4,
+      diff_bass: 2,
+      diff_drums: 5,
+      diff_keys: 3,
+      diff_vocals: 1,
+      notesData: {
+        instruments: ['guitar', 'bass', 'drums', 'keys'],
+        hasVocals: true,
+        noteCounts: [
+          { instrument: 'guitar', difficulty: 'easy', count: 120 },
+          { instrument: 'guitar', difficulty: 'hard', count: 700 },
+          { instrument: 'drums', difficulty: 'expert', count: 900 },
+          // A declared difficulty with no notes on it is not a difficulty the chart was
+          // written at, which is why the count and not the row is what counts.
+          { instrument: 'bass', difficulty: 'medium', count: 0 }
+        ]
+      }
+    }
+  ]
+
+  const EXPERT_ONLY: ChartData[] = [
+    {
+      ...chart(52, null, 'ExpertCharter'),
+      name: 'Expert Only',
+      song_length: null,
+      notesData: {
+        instruments: ['guitar'],
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 1274 }]
+      }
+    }
+  ]
+
+  const UNSCANNED: ChartData[] = [
+    { ...chart(53, null, 'UnscannedCharter'), name: 'Never Scanned', notesData: null }
+  ]
+
+  async function renderRows(data: ChartData[], term: string): Promise<void> {
+    searchCharts.mockResolvedValue({ found: data.length, out_of: data.length, page: 1, data })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse()
+    await screen.findByText(data[0].name)
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws all five instruments, including the two the row used to leave out', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Guitar: difficulty 4 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Bass: difficulty 2 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Drums: difficulty 5 of 6')).toBeTruthy()
+    // The two that were only on the chart page before.
+    expect(screen.getByLabelText('Keys: difficulty 3 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+    expect(document.querySelectorAll('.row .diffs .part')).toHaveLength(5)
+  })
+
+  it('draws the row as icons and the same five on a card as letters', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(document.querySelectorAll('.row .diffs .ring')).toHaveLength(5)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
+    await screen.findByText('Full Band')
+    // A card is 148px wide and has no line to give a 19px ring, so it keeps the letter form.
+    // Five groups either way: switching layout changes the shape, not the subject.
+    expect(document.querySelectorAll('.card .c-diffs .part')).toHaveLength(5)
+    expect(document.querySelectorAll('.card .c-diffs .ring')).toHaveLength(0)
+    browseSearch.setMode('list')
+  })
+
+  it('reads vocals off the lyric flag, because the scan never lists it as a track', async () => {
+    // `notesData.instruments` counts playable note tracks and vocals is not one, so a row that
+    // trusted the list alone would tell every singer in the catalog that nothing is charted for
+    // them. The fixture above leaves vocals out of `instruments` and sets `hasVocals`.
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+  })
+
+  it('says vocals are not charted when the scan found no lyrics', async () => {
+    // The other half of the rule above: the flag is read, not assumed, so a chart with no
+    // lyrics does not get a lit ring for a part nobody sang.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByLabelText('Vocals: not charted')).toBeTruthy()
+  })
+
+  it('puts the length, the spread and the charter in one band under the subtitle', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect(band).toBeTruthy()
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '3:16',
+      'E/H/X',
+      'BandCharter'
+    ])
+    // They were tracks of their own before, and the width they cost is what paid for the
+    // difficulty column. Nothing outside the band still draws them.
+    expect(document.querySelector('.row > .charter')).toBeNull()
+    expect(document.querySelector('.row .len')).toBeNull()
+  })
+
+  it('names a chart written at one difficulty in a word rather than a letter', async () => {
+    // "X" is the thing a beginner most needs to be told, and one letter is the least legible
+    // way to tell them.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByText('EXPERT ONLY')).toBeTruthy()
+    // No length badge: `song_length` is null on this fixture, and msToTime's placeholder in a
+    // badge would be a badge that says nothing.
+    expect(screen.queryByText('—')).toBeNull()
+  })
+
+  it('claims no spread at all for a chart nobody scanned', async () => {
+    // A chart with no note data is not a chart with no difficulties, and a badge cannot say
+    // "unknown" in four characters.
+    await renderRows(UNSCANNED, 'never-scanned')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '4:10',
+      'UnscannedCharter'
+    ])
+  })
+})

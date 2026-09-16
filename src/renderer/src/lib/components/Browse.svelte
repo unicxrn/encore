@@ -420,30 +420,88 @@
   }
 
   /**
-   * The three parts a row draws pips for, and the only three.
+   * The five parts a row draws, and the only five.
    *
    * Chorus returns thirteen `diff_*` fields and the matrix can list ten instruments, but a row
-   * is read by scanning down a column and a column only exists if every row has it. Ten would
-   * be a wall; three fixed ones are three columns the eye can follow. Keys, vocals and the
-   * six-fret variants are in the chart Detail, where there is room to be complete.
+   * is read by scanning down a column and a column only exists if every row has it. Thirteen
+   * would be a wall. These five are the band Clone Hero is played in and the five the approved
+   * design draws: the six-fret variants and the co-op parts are controller and seating
+   * arrangements rather than instruments, and they stay in the chart page's matrix, which has a
+   * column per row and room to be complete.
    *
-   * The same three Installed shows, in the same order, so a chart looks the same in both lists.
+   * Installed still shows three. That is not this list disagreeing with it: Explore's row folds
+   * the difficulty onto a line of its own below 800px and Installed's does not, so the two have
+   * different room, and Installed is the list of charts you already chose rather than the one
+   * you are choosing from.
    */
   const ROW_PARTS: readonly { key: string; label: string }[] = [
     { key: 'guitar', label: 'Guitar' },
     { key: 'bass', label: 'Bass' },
-    { key: 'drums', label: 'Drums' }
+    { key: 'drums', label: 'Drums' },
+    { key: 'keys', label: 'Keys' },
+    { key: 'vocals', label: 'Vocals' }
   ]
 
   function tierOf(chart: ChartData, key: string): number | null {
     if (key === 'bass') return chart.diff_bass
     if (key === 'drums') return chart.diff_drums
+    if (key === 'keys') return chart.diff_keys
+    if (key === 'vocals') return chart.diff_vocals
     return chart.diff_guitar
   }
 
-  /** scan-chart's reading of which tracks the chart contains, empty when it never read it. */
+  /**
+   * scan-chart's reading of which tracks the chart contains, empty when it never read it.
+   *
+   * Vocals is appended rather than read out of the list, because it is never in the list: the
+   * scan counts playable note tracks and a lyric track is not one, which is why the chart page's
+   * matrix has no vocals row either. `hasVocals` is the same scan's answer to the same question
+   * for that one track, so a chart with lyrics reports vocals present and one without reports it
+   * absent, which is what the ring beside the pips is for.
+   */
   function partsOf(chart: ChartData): readonly string[] {
-    return chart.notesData?.instruments ?? []
+    const scanned = chart.notesData?.instruments ?? []
+    if (!chart.notesData?.hasVocals) return scanned
+    return scanned.includes('vocals') ? scanned : [...scanned, 'vocals']
+  }
+
+  /**
+   * Which difficulties the chart was written at, across every instrument it has.
+   *
+   * The union rather than one row per instrument: the chart page's matrix answers per part, and
+   * what a row has space for is the one question someone scanning a list asks, which is whether
+   * there is anything here below expert. Read off `noteCounts`, which is scan-chart's own count
+   * of notes on each track, so a difficulty declared in the metadata but empty of notes does not
+   * count as charted.
+   *
+   * Null when the chart was never scanned. A chart with no note data is not a chart with no
+   * difficulties, and a badge cannot say "unknown" in four characters.
+   */
+  const DIFF_LETTERS: readonly { key: string; letter: string; word: string }[] = [
+    { key: 'easy', letter: 'E', word: 'easy' },
+    { key: 'medium', letter: 'M', word: 'medium' },
+    { key: 'hard', letter: 'H', word: 'hard' },
+    { key: 'expert', letter: 'X', word: 'expert' }
+  ]
+
+  function spreadOf(chart: ChartData): { text: string; title: string } | null {
+    const counts = chart.notesData?.noteCounts ?? []
+    const present = DIFF_LETTERS.filter((d) =>
+      counts.some((c) => c.difficulty === d.key && c.count > 0)
+    )
+    if (present.length === 0) return null
+    const words = present.map((d) => d.word)
+    const listed =
+      words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+    return {
+      // The one-difficulty case named in words, because "X" alone is the thing a beginner most
+      // needs to be told and a single letter is the least legible way to tell them.
+      text:
+        present.length === 1
+          ? `${present[0].word.toUpperCase()} ONLY`
+          : present.map((d) => d.letter).join('/'),
+      title: `Charted at ${listed}.`
+    }
   }
 
   /**
@@ -775,15 +833,45 @@
         <span class="badge mono" title={badge.title}>{badge.text}</span>
       {/each}
     {/snippet}
-    {#snippet pips(c: ChartData)}
+    <!-- `icon` is the row's, not the card's. A row draws the group as a ring with the pips under
+         it, five across, which is the shape the approved design has and the shape five instruments
+         need: five letters in a line read as a word. A card is 148px wide and has no line to give
+         a 19px ring, so it keeps the letters. Both draw the same five parts, so switching layout
+         changes the shape and not the subject. -->
+    {#snippet pips(c: ChartData, icon: boolean)}
       {#each ROW_PARTS as part (part.key)}
         <DiffPips
           instrument={part.key}
           label={part.label}
           instruments={partsOf(c)}
           tier={tierOf(c, part.key)}
+          {icon}
         />
       {/each}
+    {/snippet}
+    <!-- The band under the subtitle: what the chart is, rather than what it is called.
+         Length, the difficulties it was written at, the flags that survived the cut above, and
+         the charter.
+         Two of the design's six are missing and cannot be drawn. The chart format (a Rock Band
+         conversion against a native Clone Hero chart) and the download count are not in the
+         answer: all 66 fields of a search result were dumped on 2026-09-16 and neither is among
+         them, nor is a file size or a rating. Chart Manager has them because it also queries
+         RhythmVerse. Encore does not, so a badge for either would be empty on every row.
+         "In library" is not here either, and that one is a choice: the row already says it,
+         once, where the Download button would otherwise be, which is where the question it
+         answers gets asked. -->
+    {#snippet band(c: ChartData)}
+      {@const spread = spreadOf(c)}
+      <span class="badges">
+        {#if c.song_length != null && c.song_length >= 0}
+          <span class="badge mono">{msToTime(c.song_length)}</span>
+        {/if}
+        {#if spread}
+          <span class="badge mono" title={spread.title}>{spread.text}</span>
+        {/if}
+        {@render badges(c)}
+        <span class="badge mono charter">{stripRichText(c.charter)}</span>
+      </span>
     {/snippet}
     <!-- Nothing at all for a clean chart, which is 60 charts in 100. A mark on every row is a
          mark that means nothing; this one only appears where there is something to say, so the
@@ -861,7 +949,7 @@
         <!-- The pips and the badges are the same two the row draws, so a chart says the same
              thing in both layouts and switching between them is a change of shape, not of
              subject. They wrap, because a card is 148px wide and a row is not. -->
-        <span class="c-diffs">{@render pips(c)}</span>
+        <span class="c-diffs">{@render pips(c, false)}</span>
         <!-- No badges here, unlike the row. A card is 150px wide at the default window, and a
              badge beside the button either wraps the button onto a line of its own or is clipped
              by the card's edge; measured, the wrap made cards 21px taller than the ones with no
@@ -931,15 +1019,13 @@
                     aria-label="{group.others.length + 1} versions">+{group.others.length}</button
                   >
                 {/if}
-                {@render badges(chart)}
               </span>
               <span class="artist">{metaOf(chart)}</span>
+              {@render band(chart)}
             </span>
-            <span class="charter">{stripRichText(chart.charter)}</span>
-            <span class="diffs">{@render pips(chart)}</span>
+            <span class="diffs">{@render pips(chart, true)}</span>
             <span class="health">{@render health(chart)}</span>
             <span class="act">{@render action(chart)}</span>
-            <span class="len">{msToTime(chart.song_length)}</span>
           </div>
           {#if isExpanded}
             {#each group.others as alt (alt.chartId)}
@@ -966,15 +1052,14 @@
                       class="name"
                       aria-label={chartLabel(alt)}
                       onclick={() => selectChart(alt)}>{stripRichText(alt.name)}</button
-                    >{@render badges(alt)}</span
+                    ></span
                   >
                   <span class="artist">{metaOf(alt)}</span>
+                  {@render band(alt)}
                 </span>
-                <span class="charter">{stripRichText(alt.charter)}</span>
-                <span class="diffs">{@render pips(alt)}</span>
+                <span class="diffs">{@render pips(alt, true)}</span>
                 <span class="health">{@render health(alt)}</span>
                 <span class="act">{@render action(alt)}</span>
-                <span class="len">{msToTime(alt.song_length)}</span>
               </div>
             {/each}
           {/if}
@@ -1266,19 +1351,21 @@
     overflow-y: auto;
     border-top: 1px solid var(--hairline);
   }
-  /* The wide row, which is one line of nine tracks: checkbox, index, cover, song, charter,
-     difficulty, health, action, length. Two of those tracks fold away below; see the container
-     query under `.len`.
+  /* The wide row, which is one line of seven tracks: checkbox, index, cover, song, difficulty,
+     health, action. The index folds away below 900px and the difficulty onto a line of its own
+     below 800px; see the two container queries at the end of this block.
 
-     `minmax(0, …)` on the two text tracks rather than a bare `1fr` and a bare `150px`: a grid
-     track's automatic minimum is the widest thing in it, so a chart with a long title pushes
-     the row wider than the box instead of ellipsising inside it, and the whole list then
-     scrolls sideways. This is the rule that keeps Explore from doing that. */
+     The charter and the length used to be tracks of their own. They are badges under the
+     subtitle now, which is where the approved design puts them, and dropping the two fixed
+     tracks is most of what paid for the difficulty column going from 136px to 210px.
+
+     `minmax(0, 1fr)` on the song rather than a bare `1fr`: a grid track's automatic minimum is
+     the widest thing in it, so a chart with a long title pushes the row wider than the box
+     instead of ellipsising inside it, and the whole list then scrolls sideways. This is the
+     rule that keeps Explore from doing that. */
   .row {
     display: grid;
-    grid-template-columns:
-      16px 26px 40px minmax(0, 1fr) minmax(0, 150px)
-      136px 10px 92px 46px;
+    grid-template-columns: 22px 26px 52px minmax(0, 1fr) 210px 10px 92px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1295,10 +1382,11 @@
   }
   /* Fixed rather than aspect-ratio: a square that takes its height from its width is a square
      that changes the row's height when the column does, and rows of two heights are the thing
-     the eye trips over when scanning a list. */
+     the eye trips over when scanning a list. 52px, which is the size in the approved design and
+     about what three lines of text beside it come to, so the cover no longer sets the height. */
   .cover {
-    width: 40px;
-    height: 40px;
+    width: 52px;
+    height: 52px;
     border-radius: 5px;
     object-fit: cover;
     display: block;
@@ -1341,7 +1429,8 @@
     z-index: var(--z-raised);
   }
   /* 16px, not the UA's 13: the tick has to be readable over album art, and 13px was the
-     smallest target in the app. */
+     smallest target in the app. The row's track is 22px, which is the design's, so the box is
+     centred in it rather than left against the edge of the list. */
   .pick {
     margin: 0;
     width: 16px;
@@ -1349,6 +1438,9 @@
     cursor: pointer;
     accent-color: var(--accent);
     flex-shrink: 0;
+  }
+  .row .pick {
+    justify-self: center;
   }
   /* Sits above the results, not in the filter row: it is about the rows the
      user has picked, not about which rows are shown. */
@@ -1465,17 +1557,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* `nowrap`, and the same 6px between parts the row uses, which together draw 133px. A card is
-     at least 148px wide and loses 12 to its padding, so the three groups fit with 3px to spare
-     and the overflow rule is the belt rather than the plan: a wrap here would make one card
-     taller than the ones beside it, and a gallery lines its cards up by their edges.
+  /* Wraps, now that there are five groups and not three. The old rule was `nowrap`, to stop one
+     card standing taller than the ones beside it; what made that a risk was a badge that only
+     some charts carry. The difficulty groups are not that: every card draws five of them, so
+     every card wraps at the same point and the gallery still lines up.
 
      `margin-top: auto` on the foot pins the action to the bottom of every card, so a column of
      cards has its buttons on one line whatever length of title each one carries. */
   .c-diffs {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 5px 6px;
     overflow: hidden;
     margin-top: 4px;
   }
@@ -1567,12 +1659,26 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The band under the subtitle. Wraps, because the badges a chart carries are not a fixed set
+     and the column they sit in is 281px at its narrowest; the alternative is clipping one, and
+     a half-drawn badge is worse than a second line. Every row has at least the length, the
+     difficulty spread and the charter, so the common case is one line and the rows that take
+     two are the rows with something extra to say. */
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    margin-top: 5px;
+    min-width: 0;
+  }
+  /* A badge like the others now, rather than a column of its own. Capped and ellipsised because
+     a charter name is the one field here with no bound on it: "CCC, Toppin, and four more" would
+     otherwise push the whole band onto a second line on its own. */
   .charter {
-    font-size: var(--fs-secondary);
-    color: var(--text-2);
+    max-width: 16ch;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
   /* Version chip: mono, quiet (text-3 + hairline), same family as lib-badge.
      A real <button> since the row stopped being one; appearance:none so the
@@ -1617,12 +1723,17 @@
     vertical-align: middle;
     line-height: var(--lh-tight);
   }
-  /* 6px between the three parts, which is half the 12px that separates a part's letter from
-     the next part's pips. The gap inside a group has to read as smaller than the gap between
-     groups or the eighteen bars read as one run. */
+  /* 9px between the five groups, against the 2px between the pips inside one and the 4px that
+     separates a group's ring from its own pips. The gap inside a group has to read as smaller
+     than the gap between groups or the thirty pips read as one run.
+
+     5 groups of 34px plus 4 gaps of 9px is 206px drawn in a 210px track. The four spare pixels
+     are the margin for the subpixel width of a border-boxed circle: `DiffPips` does not shrink,
+     by design, so a track one pixel short would paint the fifth guitar over the health mark
+     rather than squeezing it. */
   .diffs {
     display: flex;
-    gap: 6px;
+    gap: 9px;
     min-width: 0;
   }
   .health {
@@ -1698,95 +1809,55 @@
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
   }
-  .len {
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    text-align: right;
-  }
-  /* What the row gives up when the column it lives in is narrow, and why these two.
-     The index is a position in a list the user is already looking at, and the length is the
-     one field here that is also on the chart Detail one click away. Everything else is either
-     the chart's identity or a reason to download it.
-
-     900px is where the nine tracks stop leaving the title a readable share, and it is a measured
-     number rather than a guessed one. At 788px, which is this column at a 1400px window, the
-     nine tracks left the song 160px and six of twenty-five titles hit their floor at 64px.
-     Below 900 the same row is two lines: the cover spans both, the charter drops under the
-     song, and the three columns at the end stay put, so the difficulty and the action are still
-     a column the eye can run down. That buys the title 502px at the same 1120px window where
-     the wide layout would have given it 254.
+  /* The first thing the row gives up when its column is narrow, and why it is this one: the
+     index is a position in a list the user is already looking at, and every other track is
+     either the chart's identity or a reason to download it. 900px is where the seven tracks
+     stop leaving the title a readable share.
 
      `scripts/measure-explore-row.mjs` reports all of this at every width the shell supports. */
   @container results (max-width: 899px) {
     .row {
-      grid-template-columns: 16px 44px minmax(0, 1fr) 136px 10px 92px;
-      grid-template-rows: auto auto;
-      row-gap: 1px;
+      grid-template-columns: 22px 52px minmax(0, 1fr) 210px 10px 92px;
     }
-    .row .num,
-    .row .len {
+    .row .num {
       display: none;
+    }
+  }
+  /* Where the difficulty stops fitting beside the song and takes a line of its own.
+
+     800px is the measured crossing, not a guessed one: with the six-track layout the song track
+     is the column width less 468px, so at 800 the song is 332px against a difficulty column of
+     210, and below that the thing the row is a list OF is narrower than the decoration beside
+     it. The two widths this actually catches are 722px, which is this column at the 960px window
+     minimum, and 668px at 1280px.
+
+     The narrowest it ever gets is 509px: a 1121px window, the first width at which the 374px
+     rail appears and takes its share back from a column that had 882px at 1120px. Four tracks
+     and two lines hold there with 281px of song, where six tracks on one line would have left
+     it 41px. The health mark goes under the button and the difficulty under the song, so the
+     row keeps saying all of it and says it down instead of across. */
+  @container results (max-width: 799px) {
+    .row {
+      grid-template-columns: 22px 52px minmax(0, 1fr) 92px;
+      grid-template-rows: auto auto;
+      row-gap: 4px;
     }
     /* Every child placed by hand rather than two of them placed and the rest left to fall
        where they may. Auto-placement runs in passes, and an item with a definite row and an
        automatic column is resolved in a different pass from one with neither, so the first
        version of this block put the song in a 92px track and the difficulty in a 40px one.
-       Nine children into six tracks has no reading that can be left to inference. */
+       Seven children into four tracks has no reading that can be left to inference. */
     .row .pick {
       grid-area: 1 / 1 / 3 / 2;
     }
     .row .cover {
       grid-area: 1 / 2 / 3 / 3;
-      width: 44px;
-      height: 44px;
     }
     .row .song {
       grid-area: 1 / 3 / 2 / 4;
     }
-    .row .charter {
-      grid-area: 2 / 3 / 3 / 4;
-    }
     .row .diffs {
-      grid-area: 1 / 4 / 3 / 5;
-    }
-    .row .health {
-      grid-area: 1 / 5 / 3 / 6;
-    }
-    .row .act {
-      grid-area: 1 / 6 / 3 / 7;
-    }
-  }
-  /* The narrowest the view column ever gets, which is 509px: a 1121px window, the first width
-     at which the 374px rail appears and takes its share back from a column that had 882px at
-     1120px. Six tracks do not fit in it. Two lines became three: the difficulty moves under the
-     charter and the health mark under the button, so the row keeps saying all of it and says it
-     down instead of across.
-
-     Measured, not guessed. With the six-track layout at this width the song column was 129px,
-     and after a version chip and two badges took their fixed share the title was left a 0px
-     box. `scripts/measure-explore-row.mjs` at SIZE=1121x800 is where that number comes from. */
-  @container results (max-width: 559px) {
-    .row {
-      grid-template-columns: 16px 40px minmax(0, 1fr) 92px;
-      grid-template-rows: auto auto auto;
-    }
-    .row .pick {
-      grid-area: 1 / 1 / 4 / 2;
-    }
-    .row .cover {
-      grid-area: 1 / 2 / 4 / 3;
-      width: 40px;
-      height: 40px;
-    }
-    .row .song {
-      grid-area: 1 / 3 / 2 / 4;
-    }
-    .row .charter {
       grid-area: 2 / 3 / 3 / 4;
-    }
-    .row .diffs {
-      grid-area: 3 / 3 / 4 / 4;
     }
     .row .act {
       grid-area: 1 / 4 / 2 / 5;
@@ -1794,7 +1865,13 @@
     /* On the difficulty's line rather than the button's: the two are what the row says about
        the chart itself, and the button is what the user does about it. */
     .row .health {
-      grid-area: 3 / 4 / 4 / 5;
+      grid-area: 2 / 4 / 3 / 5;
+    }
+    /* The cover no longer spans the whole row's height once the row is two lines tall, so it is
+       pinned to the top of its cell instead of floating in the middle of one. */
+    .row .cover,
+    .row .pick {
+      align-self: start;
     }
   }
   .more-row {
