@@ -63,7 +63,7 @@ const lyricsToggle = (): HTMLButtonElement =>
 
 /** What the player does on every frame, minus the player: the controller's progress store. */
 function playingAt(currentMs: number): void {
-  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null })
+  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
   progress.set({ percent: (currentMs / 10_000) * 100, currentMs, totalMs: 10_000 })
 }
 
@@ -204,6 +204,58 @@ describe('PreviewPane hands the player bar a name it can read', () => {
       if (get(nowPlaying) === null) throw new Error('nothing playing yet')
     })
     expect(get(nowPlaying)).toMatchObject({ title: 'YYZ', artist: TAGGED_CHARTER_TEXT })
+  })
+
+  /**
+   * The track, in the words the selects above the stage use rather than the keys the chart format
+   * uses. The bar prints this verbatim, so composing it here is what keeps the pane and the bar
+   * from naming one preview two ways.
+   */
+  it('names the track it opened in the words its own selects offer', async () => {
+    vi.stubGlobal('encore', {
+      chartLyricLines: () => Promise.resolve(LINES),
+      chartReadFiles: () => Promise.resolve([])
+    })
+    // Drums and nothing else, so the pick the pane lands on is not the guitar default: the
+    // string has to follow the select rather than name whatever loaded first.
+    render(PreviewPane, { props: { target: localRecord({ diffDrums: 5 }), instruments: [] } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+    await waitFor(() => {
+      if (get(nowPlaying) === null) throw new Error('nothing playing yet')
+    })
+    expect(get(nowPlaying)?.track).toBe('Expert Drums')
+  })
+})
+
+/**
+ * The still lane, which the pane draws for the same reason the rail does: with nothing playing
+ * the viewport is a dark rectangle, and this is the surface a chart page is opened to look at.
+ *
+ * jsdom applies no CSS and computes no layout, so the drawing itself is checked in
+ * `highway.test.ts` and `Highway.svelte.test.ts`. What is pinnable here is that the pane asks
+ * for it, over the element the controller writes into rather than inside it, and gets out of the
+ * way once there is a preview to see.
+ */
+describe('PreviewPane draws the still highway with nothing playing', () => {
+  it('draws a lane over the viewport rather than leaving it empty', () => {
+    renderPane(localRecord())
+    const screenBox = document.querySelector('.stage .screen') as HTMLElement
+    const rest = screenBox.querySelector('.rest') as HTMLElement
+
+    expect(rest.classList.contains('gone')).toBe(false)
+    expect(rest.querySelector('svg.highway .strike')).toBeTruthy()
+    const kids = [...screenBox.children].map((el) => el.className.split(' ')[0])
+    expect(kids.indexOf('rest')).toBeGreaterThan(kids.indexOf('viewport'))
+    expect(document.querySelector('.stage .viewport')?.children).toHaveLength(0)
+  })
+
+  it('gets out of the way once something is playing', async () => {
+    renderPane(localRecord())
+    nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
+    await tick()
+
+    expect(document.querySelector('.stage .rest')?.classList.contains('gone')).toBe(true)
   })
 })
 

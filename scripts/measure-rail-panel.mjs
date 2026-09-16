@@ -28,6 +28,25 @@
  *               declares an ellipsis. STATE=long is what that case exists for.
  *   wraps       The health checklist running onto a second line, which is the one thing that
  *               makes the health card taller than the ring beside it for a reason nobody chose.
+ *   lane        The still highway, which is what this frame shows for as long as nothing is
+ *               playing. jsdom sees an SVG with the right number of shapes in it and nothing
+ *               about where any of them are, so this reads back the frame it landed in: whether
+ *               the strike line sits where a player would look, whether the outer frets are
+ *               inside the frame rather than clipped by it, and whether the drawing covers the
+ *               box or leaves a band of the old black rectangle showing.
+ *   motion      What reduced motion collapses, asked of the engine rather than of the
+ *               stylesheet. The lane moves one thing, the strike line while a chart is being
+ *               fetched and parsed, and it moves it with a CSS animation so that the global rule
+ *               at the foot of tokens.css is what turns it off. This emulates the media query
+ *               both ways and reads back what the strike line computes to, which is the only
+ *               place that claim can be checked: jsdom loads no stylesheet and the source test
+ *               beside the component can only say the rules are written down.
+ *   transport   The row under it, which is the transport a user can actually reach: the player
+ *               bar cedes its own whenever a viewport is registered, and a preview can only live
+ *               inside one. A time either side of the track costs the track its width, and the
+ *               handle is a zero-height box translated by a percentage of its own width, which
+ *               is a thing that is off by half a handle the moment somebody centres it
+ *               differently and a thing no jsdom test can see.
  *
  * The states, because the happy one is not the one that breaks:
  *
@@ -41,8 +60,9 @@
  *            same sample was 54,823, so eight digits is roughly three orders of magnitude past
  *            anything real and is here to find the column that gives way first.
  *   remote   a chart from Chorus, where two of the five health checks are unknown rather than
- *            missing and the ring's denominator is therefore not five. Reached through Explore
- *            with `fetch` stubbed, so it makes no network request and reads no real catalog.
+ *            missing and the ring's denominator is therefore not five. Reached through Home's
+ *            Surprise me with `fetch` stubbed, so it makes no network request and reads no real
+ *            catalog. Explore's own search is not the route any more; see the note at the leg.
  *
  * What it touches: a throwaway user-data directory and nothing else. The preload it writes
  * answers every call from memory, and the one leg that would otherwise reach api.enchor.us
@@ -383,6 +403,51 @@ const PANEL = `(() => {
     ring,
     rows,
     clipped,
+    lane: (() => {
+      const frame = rail.querySelector('.hw')
+      const holder = rail.querySelector('.hw .rest')
+      const svg = rail.querySelector('.hw .rest svg.highway')
+      if (!frame || !holder || !svg) return null
+      // The frame's CONTENT box, not its border box: the still lane is inset inside the 1px
+      // border, and comparing against the outer edge reports a two-pixel gap that is the border.
+      const f = { width: frame.clientWidth, height: frame.clientHeight }
+      const g = svg.getBoundingClientRect()
+      const strike = svg.querySelector('.strike').getBoundingClientRect()
+      const frets = [...svg.querySelectorAll('.fret')].map((el) => el.getBoundingClientRect())
+      return {
+        faded: getComputedStyle(holder).opacity !== '1',
+        state: svg.getAttribute('class'),
+        frame: { w: round(f.width), h: round(f.height) },
+        covers: round(g.width) >= round(f.width) - 1 && round(g.height) >= round(f.height) - 1,
+        strikeDown: Math.round(((strike.top - g.top) / g.height) * 100),
+        frets: frets.length,
+        leftGap: round(frets[0].left - g.left),
+        rightGap: round(g.right - frets[frets.length - 1].right),
+        fret: { w: round(frets[0].width), h: round(frets[0].height) }
+      }
+    })(),
+    transport: (() => {
+      const row = rail.querySelector('.preview .transport')
+      if (!row) return null
+      const seek = row.querySelector('.seek')
+      const track = row.querySelector('.seek .track')
+      const knob = row.querySelector('.seek .knob')
+      const b = (el) => {
+        const r = el.getBoundingClientRect()
+        return { left: round(r.left), right: round(r.right), w: round(r.width) }
+      }
+      return {
+        height: round(row.getBoundingClientRect().height),
+        parts: [...row.children].map((el) => ({
+          cls: el.className.split(' ')[0],
+          w: round(el.getBoundingClientRect().width),
+          says: el.tagName === 'SPAN' ? el.textContent.trim() : null
+        })),
+        seek: b(seek),
+        track: b(track),
+        knob: b(knob)
+      }
+    })(),
     sidewaysBy: rail.scrollWidth - rail.clientWidth,
     docSidewaysBy: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }
@@ -412,8 +477,37 @@ app.whenReady().then(async () => {
     `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}' || b.textContent.trim().startsWith('${label} '))`
 
   if (state === 'remote') {
+    // Home's Surprise me, and not Explore's own search box, which is what this leg used to do.
+    //
+    // Explore's auto-search answers here and still draws nothing: with the stub above in place
+    // the store finishes the run (`searched` true, `found` 1, `error` null, one row in
+    // `results`), and the grid stays empty because the `groups` derived those rows are read
+    // through is still the empty array it computed before they arrived. That is a fault in
+    // Explore, not in this harness, and it is not this file's to fix.
+    //
+    // Surprise me reaches the same rows by the other door: it hands its charts to the store
+    // through `present()`, which sets `results` outright, and the grid draws them. One card,
+    // the Chorus chart stubbed below, and clicking it puts that chart in the rail, which is
+    // the only thing this leg ever wanted.
+    //
+    // Explore is opened first and left, which looks pointless and is not. `groups` only
+    // recomputes while something is subscribed to it, and nothing is until Explore has been
+    // mounted once; hand rows to a store whose derived has never had a subscriber and the grid
+    // mounts onto the empty array that derived still holds. Opening Explore, going to Home and
+    // coming back through Surprise me is the shortest path that has Explore subscribed before
+    // the rows arrive. Measured: without the first visit this leg draws no card either, and
+    // neither does it without the two settles below, which let the first search finish and Home
+    // finish mounting before the button is pressed.
     await waitFor(win, named('Explore'))
     await evalIn(win, `${named('Explore')}.click(), 1`)
+    await waitFor(win, `document.querySelector('.table')`)
+    await sleep(6000)
+    await waitFor(win, named('Home'))
+    await evalIn(win, `${named('Home')}.click(), 1`)
+    await sleep(1500)
+    const surprise = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Surprise me')`
+    await waitFor(win, surprise)
+    await evalIn(win, `${surprise}.click(), 1`)
     await waitFor(win, `document.querySelectorAll('.table .row, .table .card').length > 0`)
     await evalIn(win, `document.querySelector('.table .row, .table .card').click(), 1`)
   } else {
@@ -425,6 +519,36 @@ app.whenReady().then(async () => {
   }
   await waitFor(win, `document.querySelector('.rail .head')`)
   await sleep(1500)
+
+  /**
+   * The strike line's computed animation, with the media query emulated both ways.
+   *
+   * The opening class is put on by hand: the lane only wears it while a chart is being read, and
+   * that is not a state this harness can hold still. What is under test is the CSS, not the app
+   * state that reaches for it.
+   */
+  const MOTION = `(() => {
+    const svg = document.querySelector('.rail .hw .rest svg.highway')
+    const holder = document.querySelector('.rail .hw .rest')
+    if (!svg || !holder) return null
+    svg.classList.add('opening')
+    const line = getComputedStyle(svg.querySelector('.strike'))
+    const out = {
+      animation: line.animationName,
+      opacity: line.strokeOpacity,
+      fade: getComputedStyle(holder).transitionDuration
+    }
+    svg.classList.remove('opening')
+    return out
+  })()`
+
+  const emulate = async (value) => {
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-motion', value }]
+    })
+    await sleep(120)
+    return evalIn(win, MOTION)
+  }
 
   const p = await evalIn(win, PANEL)
   if (p.railDisplay !== 'flex') {
@@ -475,7 +599,50 @@ app.whenReady().then(async () => {
       ? '  clipped       nothing'
       : `  clipped       ${p.clipped.map((c) => `.${c.cls} at ${c.box}px: "${c.says}"`).join('\n                ')}`
   )
+  if (p.lane) {
+    console.log(
+      `  lane          ${p.lane.state}, ${p.lane.faded ? 'FADED OUT' : 'drawn'} in a ${p.lane.frame.w}x${p.lane.frame.h} frame, ${p.lane.covers ? 'covers it' : 'LEAVES A GAP'}`
+    )
+    console.log(
+      `                strike line ${p.lane.strikeDown}% down, ${p.lane.frets} frets of ${p.lane.fret.w}x${p.lane.fret.h}px, ${p.lane.leftGap}px clear at the left and ${p.lane.rightGap}px at the right`
+    )
+  }
+  if (p.transport) {
+    const t = p.transport
+    const off = Math.max(0, t.track.left - t.knob.left, t.knob.right - t.track.right)
+    console.log(
+      `  transport     ${t.height}px tall: ${t.parts.map((x) => `${x.cls} ${x.w}px${x.says ? ` "${x.says}"` : ''}`).join(', ')}`
+    )
+    console.log(
+      `                handle ${t.knob.w}px box at ${t.knob.left}-${t.knob.right}px on a track at ${t.track.left}-${t.track.right}px  ${off === 0 ? 'ok' : `OVERHANGS BY ${off}px`}`
+    )
+  }
   console.log(`  sideways      column ${p.sidewaysBy}px, document ${p.docSidewaysBy}px`)
 
+  if (p.lane) {
+    win.webContents.debugger.attach('1.3')
+    const normal = await emulate('no-preference')
+    const reduced = await emulate('reduce')
+    const says = (m) =>
+      `strike animation ${m.animation}, stroke-opacity ${m.opacity}, lane fade ${m.fade}`
+    console.log(`  motion        as set: ${says(normal)}`)
+    console.log(
+      `                reduced: ${says(reduced)}  ${
+        reduced.animation === 'none' &&
+        reduced.opacity === normal.opacity &&
+        parseFloat(reduced.fade) === 0
+          ? 'ok, a still frame of the lane as drawn'
+          : 'STILL MOVES'
+      }`
+    )
+  }
+
   app.exit(0)
+})
+// Without this a `waitFor` that gives up rejects into nothing: the process keeps its offscreen
+// window alive and the run hangs instead of reporting, which is how a broken leg reads as a
+// harness that never finishes.
+process.on('unhandledRejection', (err) => {
+  console.error(err)
+  app.exit(1)
 })

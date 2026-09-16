@@ -130,6 +130,9 @@ const request = {
   title: 'Song',
   artist: 'Artist',
   artUrl: 'https://art.example/x.jpg',
+  // The words, not the keys below: the surface that opens a preview owns the label list, and
+  // this is what the player bar's second line prints.
+  track: 'Expert Guitar',
   source: { kind: 'url' as const, url: 'https://files.enchor.us/abc.sng' },
   instrument: 'guitar',
   difficulty: 'expert'
@@ -212,7 +215,8 @@ describe('preview controller', () => {
     expect(get(ctl.nowPlaying)).toEqual({
       title: 'Song',
       artist: 'Artist',
-      artUrl: 'https://art.example/x.jpg'
+      artUrl: 'https://art.example/x.jpg',
+      track: 'Expert Guitar'
     })
 
     el.fire('player-statechange', { state: 'playing', previousState: 'ready' })
@@ -357,7 +361,8 @@ describe('preview controller', () => {
     expect(get(ctl.nowPlaying)).toEqual({
       title: 'Chart B',
       artist: 'Other',
-      artUrl: request.artUrl
+      artUrl: request.artUrl,
+      track: request.track
     })
     expect(b.appendChild).toHaveBeenCalledWith(elements[1])
   })

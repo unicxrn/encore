@@ -22,6 +22,7 @@
     togglePlay
   } from '../stores/preview-controller'
   import { settings } from '../stores/settings'
+  import Highway from './Highway.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   let { target, instruments }: { target: ChartTarget; instruments: MatrixRow[] } = $props()
@@ -29,16 +30,18 @@
   interface DiffOption {
     value: string
     label: string
+    /** The word on its own, for the player bar, where the matrix letter would be noise. */
+    word: string
     key: DiffKey
   }
 
   // Difficulty labels carry the matrix letter so the select and the E/M/H/X
   // matrix on the Overview tab read as the same vocabulary.
   const DIFFICULTY_OPTIONS: readonly DiffOption[] = [
-    { value: 'expert', label: 'Expert (X)', key: 'X' },
-    { value: 'hard', label: 'Hard (H)', key: 'H' },
-    { value: 'medium', label: 'Medium (M)', key: 'M' },
-    { value: 'easy', label: 'Easy (E)', key: 'E' }
+    { value: 'expert', label: 'Expert (X)', word: 'Expert', key: 'X' },
+    { value: 'hard', label: 'Hard (H)', word: 'Hard', key: 'H' },
+    { value: 'medium', label: 'Medium (M)', word: 'Medium', key: 'M' },
+    { value: 'easy', label: 'Easy (E)', word: 'Easy', key: 'E' }
   ]
 
   // Playable instruments. Remote charts get the API's per-difficulty matrix; local charts
@@ -137,6 +140,14 @@
     return target.chart.albumArtMd5 ? albumArtUrl(target.chart.albumArtMd5) : null
   })
 
+  // What the player bar's second line names the track as. Read off the same two lists these
+  // selects are built from, so the bar cannot name a track this pane does not offer, and built
+  // the same way the rail builds its own.
+  const trackName = $derived(
+    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} ` +
+      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  )
+
   async function buildSource(): Promise<PreviewSource> {
     if (target.kind === 'remote') {
       const chart = target.chart
@@ -165,6 +176,7 @@
         title,
         artist,
         artUrl: coverUrl,
+        track: trackName,
         source,
         instrument,
         difficulty,
@@ -479,6 +491,13 @@
     <div class="stage">
       <div class="screen">
         <div class="viewport" bind:this={viewportEl}></div>
+        <!-- The still lane, over the viewport rather than inside it: `.viewport` is what the
+             controller appends the player element into and Svelte never renders into it, and
+             the player that lands there is opaque anyway. The same lane the rail draws, at the
+             size this pane gives it. -->
+        <div class="rest" class:gone={$nowPlaying !== null}>
+          <Highway state={opening ? 'opening' : 'rest'} />
+        </div>
         {#if currentLyric !== null}
           <!-- Keyed on the line so a new line remounts and replays the fade-in;
              the global reduced-motion rule in tokens.css turns that off. -->
@@ -791,6 +810,26 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* Faded out rather than torn out, and clipped to the viewport's own corners because it sits
+     over it rather than in it. Inert to the pointer throughout, so the player's own clicks and
+     shortcuts land on the player. */
+  .rest {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius);
+    overflow: hidden;
+    pointer-events: none;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear;
+  }
+  .rest.gone {
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear var(--t-med);
   }
 
   .transport {

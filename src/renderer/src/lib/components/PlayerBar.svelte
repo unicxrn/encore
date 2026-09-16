@@ -78,6 +78,11 @@
 </script>
 
 <footer class="playerbar">
+  <!-- The same three-part shape whether a chart is loaded or not: a 40px tile, a name, and a
+       line under it. The bar used to answer the empty case with the word ENCORE, which named the
+       app in the one place nobody needs telling and left the other two thirds of the group
+       blank. What it says instead is what is true (nothing is previewing) and where a preview
+       comes from, in the slots it will use for the chart's own name the moment there is one. -->
   <div class="now">
     {#if $nowPlaying}
       {#if art}
@@ -87,10 +92,30 @@
       {/if}
       <div class="meta">
         <span class="title">{$nowPlaying.title}</span>
-        <span class="artist">{$nowPlaying.artist}</span>
+        <!-- Artist and track on one line, which is the design's arrangement. The artist is the
+             half that ellipsises and the track is pinned beside it, deliberately: the title
+             above already carries the song, so a long artist crowding out which instrument and
+             difficulty are playing would lose the only thing on this line the rest of the bar
+             does not say. -->
+        <span class="line">
+          <span class="artist">{$nowPlaying.artist}</span>
+          <span class="track-name">{$nowPlaying.track}</span>
+        </span>
       </div>
     {:else}
-      <span class="wordmark">ENCORE</span>
+      <div class="art tile" aria-hidden="true">
+        <svg viewBox="0 0 24 24"
+          ><path d="M9 17V6.2l9-2v10.6" /><circle cx="6.6" cy="17.2" r="2.6" /><circle
+            cx="15.6"
+            cy="14.9"
+            r="2.6"
+          /></svg
+        >
+      </div>
+      <div class="meta">
+        <span class="title resting">Nothing previewing</span>
+        <span class="line"><span class="artist">Press play on a chart</span></span>
+      </div>
     {/if}
   </div>
 
@@ -132,6 +157,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="seek" class:disabled={idle} onclick={onSeekClick}>
       <div class="track"><div class="fill" style:--p={percent / 100}></div></div>
+      <div class="knob" style:--p={percent / 100}></div>
     </div>
     <span class="time">{totalMs > 0 ? msToTime(totalMs) : '0:00'}</span>
   </div>
@@ -229,12 +255,33 @@
   .art {
     width: 40px;
     height: 40px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     object-fit: cover;
     flex-shrink: 0;
   }
   .art.placeholder {
     background: var(--surface-2);
+  }
+  /* The resting tile. Outlined rather than filled flat, so the empty group reads as a box
+     waiting for a cover rather than as a grey smudge, and a glyph rather than a play triangle:
+     a triangle in the slot beside a real play button is a second button that does nothing. */
+  .art.tile {
+    background: var(--ground-2);
+    border: 1px solid var(--border-1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-3);
+  }
+  .art.tile svg {
+    width: 17px;
+    height: 17px;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1.7;
+  }
+  .art.tile path {
+    fill: none;
   }
   .meta {
     display: flex;
@@ -252,15 +299,47 @@
     font-weight: 600;
     color: var(--text-1);
   }
+  /* An absence is not a name: the resting line takes the second text level, so the bar with
+     nothing in it does not sit at the same weight of voice as the bar with a song in it. */
+  .title.resting {
+    color: var(--text-2);
+  }
+  .line {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+  }
   .artist {
+    min-width: 0;
     font-size: var(--fs-caption);
     color: var(--text-2);
   }
-  .wordmark {
-    font-family: var(--font-mono);
+  /* Never shrinks under the artist, but never takes more than half the line either.
+     Measured with `scripts/measure-player-bar.mjs`: the two lines share 190px at every width the
+     shell supports, "Expert Guitar" comes to 80px of it and the longest track this app can name,
+     "Medium Rhythm (GHL)", to 133px. Left to itself that leaves a long artist 57px, which is
+     about nine characters. Half the line is the floor: the common track still draws whole, and
+     the artist is never cut below the point where it stops being a name at all.
+
+     The separator belongs to the track and not to the artist, so a chart whose artist is empty
+     gets the track with nothing in front of it rather than a middot floating at the start.
+
+     Named `.track-name` and not `.track`, which is what it was for an afternoon: the scrubber's
+     4px bar three rules down is `.track` too, and one `max-width: 50%` meant for a label halved
+     the seek bar in every window. `scripts/measure-player-bar.mjs` is what said so, by reporting
+     the handle hanging 26px past the end of a track that had no business being 26px wide. */
+  .track-name {
+    flex: none;
+    max-width: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
     color: var(--text-3);
+    white-space: nowrap;
+  }
+  .artist:not(:empty) + .track-name::before {
+    content: ' · ';
+    white-space: pre;
   }
   .transport {
     flex: 1;
@@ -383,6 +462,7 @@
     text-align: center;
   }
   .seek {
+    position: relative;
     flex: 1;
     max-width: 480px;
     padding: 8px 0;
@@ -393,19 +473,48 @@
   }
   .track {
     height: 4px;
-    border-radius: 2px;
+    border-radius: 999px;
     background: var(--surface-2);
     overflow: hidden;
   }
   /* Driven by `--p` (0 to 1) through a transform rather than by an animated width: a width change
-     re-lays out the track on every progress tick, while scaleX is composited. Same visual. */
+     re-lays out the track on every progress tick, while scaleX is composited. Same visual.
+     The gradient is painted before the scale, so it runs across the filled part rather than
+     across the whole track, which is the design's own arrangement. */
   .fill {
     height: 100%;
     width: 100%;
-    background: var(--accent);
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-hi));
     transform-origin: left;
     transform: scaleX(var(--p, 0));
     transition: transform var(--t-fast) linear;
+  }
+  /* The handle the design draws, and the thing that says this bar can be dragged rather than
+     merely watched. A zero-height box the width of the track, translated by a percentage of its
+     own width and therefore of the track: the same composited move as the fill, with no
+     arithmetic that needs to know how wide the bar is. The dot hangs off the box's left edge so
+     that edge is the position and the dot is centred on it. */
+  .knob {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 0;
+    pointer-events: none;
+    transform: translateX(calc(var(--p, 0) * 100%));
+    transition: transform var(--t-fast) linear;
+  }
+  .knob::after {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--elev-1);
   }
   .right {
     display: flex;

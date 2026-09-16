@@ -12,6 +12,16 @@ export interface NowPlaying {
   title: string
   artist: string
   artUrl: string | null
+  /**
+   * The track the open preview loaded, in the words a reader uses: "Expert Guitar".
+   *
+   * Carried rather than derived from `instrument` and `difficulty` below, because those are the
+   * keys the chart format uses ('guitarghl', 'expert') and turning them into words means owning
+   * the label list a second time. The surface that opened the preview already has that list, and
+   * both of them build this string from it, so the player bar names the track in the same words
+   * the rail's badge and the pane's selects do.
+   */
+  track: string
 }
 
 export interface PreviewRequest extends NowPlaying {
@@ -119,7 +129,12 @@ export async function openPreview(req: PreviewRequest): Promise<void> {
   const token = ++openToken
   const target = container
 
-  nowPlaying.set({ title: req.title, artist: req.artist, artUrl: req.artUrl })
+  nowPlaying.set({
+    title: req.title,
+    artist: req.artist,
+    artUrl: req.artUrl,
+    track: req.track
+  })
   playerState.set('loading')
 
   const h = await createPreview()

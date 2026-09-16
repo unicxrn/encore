@@ -32,6 +32,7 @@
   } from '../stores/preview-controller'
   import type { ChartTarget } from './Home.svelte'
   import type { PreviewSource } from '../preview/player'
+  import Highway from './Highway.svelte'
 
   /**
    * `onOpenDetail` is the rail's way through to the chart page, and the only one Explore has.
@@ -165,10 +166,17 @@
 
   // What the badge over the highway says the preview would play. Read off the same two lists the
   // selects are built from, so it cannot name a track the selects do not offer.
-  const trackLabel = $derived(
-    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} · ` +
-      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  const diffWord = $derived(
+    DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty
   )
+  const instLabel = $derived(
+    instrumentList.find((o) => o.value === instrument)?.label ?? instrument
+  )
+  const trackLabel = $derived(`${diffWord} · ${instLabel}`)
+  // The same two words for the player bar, without the separator: the badge sits over the lane
+  // with nothing else in it and can afford one, and the bar's second line already has a middot
+  // between the artist and this.
+  const trackName = $derived(`${diffWord} ${instLabel}`)
 
   // Keep the two selections answerable by the chart in front of us. Written the way the chart
   // page's preview pane writes them, for the same reason: switching instrument can drop the
@@ -593,6 +601,7 @@
         title,
         artist,
         artUrl: coverUrl,
+        track: trackName,
         source,
         instrument,
         difficulty
@@ -708,6 +717,13 @@
       <div class="hw">
         <!-- The controller appends `<chart-preview-player>` here; Svelte never renders into it. -->
         <div class="viewport" bind:this={viewportEl}></div>
+        <!-- The still lane, and the answer to what this box shows with nothing playing. It is
+             drawn AFTER the viewport, which is to say over it: the player element that lands in
+             there is opaque, and a picture underneath an opaque player is a picture nobody
+             sees. -->
+        <div class="rest" class:gone={live}>
+          <Highway state={opening ? 'opening' : 'rest'} />
+        </div>
         <span class="hwt mono" aria-hidden="true">{trackLabel}</span>
       </div>
       <div class="transport">
@@ -730,12 +746,14 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5 17.5 12 9 17.5Z" /></svg>
           {/if}
         </button>
+        <span class="time mono">{msToTime(currentMs)}</span>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="seek" onclick={onSeekClick}>
-          <div class="seek-fill" style="width:{percent}%"></div>
+          <div class="track"><div class="fill" style:--p={percent / 100}></div></div>
+          <div class="knob" style:--p={percent / 100}></div>
         </div>
-        <span class="time mono">{msToTime(currentMs)} / {msToTime(totalMs)}</span>
+        <span class="time mono">{msToTime(totalMs)}</span>
       </div>
       <p class="state mono" role="status">{stateLine}</p>
     </section>
@@ -1146,6 +1164,25 @@
     height: 100%;
     display: block;
   }
+  /* Faded out rather than torn out, which is what the player bar does with its transport and
+     for the same reason: the frame is a fixed aspect and nothing in the column may move when
+     the real highway arrives. Inert to the pointer throughout, so the player element's own
+     clicks and shortcuts land on it and not on a picture lying over it. */
+  .rest {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear;
+  }
+  .rest.gone {
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear var(--t-med);
+  }
   .hwt {
     position: absolute;
     left: 8px;
@@ -1192,23 +1229,67 @@
     opacity: 0.5;
     cursor: default;
   }
+  /* The 4px track the design draws, inside a 20px box the pointer can actually hit. Vertical
+     padding only, so the box the click is measured against is still exactly the track's width
+     (`onSeekClick` reads this element's own rect), and the row's height is still set by the
+     28px play button beside it. */
   .seek {
+    position: relative;
     flex: 1;
     min-width: 0;
+    padding: 8px 0;
+    cursor: pointer;
+  }
+  .track {
     height: 4px;
     border-radius: 999px;
     background: var(--ground-4);
-    cursor: pointer;
+    overflow: hidden;
   }
-  .seek-fill {
+  /* Driven by `--p` (0 to 1) through a transform rather than an animated width, which is what
+     the player bar's own fill does: scaleX is composited where a width re-lays out the track on
+     every progress tick. The gradient is painted before the scale, so it runs across the filled
+     part rather than across the whole track, which is the design's own arrangement. */
+  .fill {
     height: 100%;
+    width: 100%;
     border-radius: 999px;
-    background: var(--accent);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hi));
+    transform-origin: left;
+    transform: scaleX(var(--p, 0));
+    transition: transform var(--t-fast) linear;
+  }
+  /* The handle. A zero-height box the width of the track, translated by a percentage of its own
+     width, which is therefore a percentage of the track: the same composited move as the fill,
+     and no arithmetic that needs to know how wide the column is. The dot hangs off its left
+     edge, so the box's left edge is the position and the dot is centred on it. */
+  .knob {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 0;
+    pointer-events: none;
+    transform: translateX(calc(var(--p, 0) * 100%));
+    transition: transform var(--t-fast) linear;
+  }
+  .knob::after {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--elev-1);
   }
   .time {
     font-size: var(--fs-caption);
     color: var(--text-3);
     flex-shrink: 0;
+    min-width: 4ch;
+    text-align: center;
   }
   /* No text, no row, and no gap above it either: an empty element still holds a flex slot, and
      the slot is most of what the line costs. */
