@@ -15,6 +15,11 @@ import type { LibraryCandidate } from '../main/catalog/detect-library'
 import type { ChartIssueRow } from '../main/catalog/issues'
 import type { FixBackup } from '../main/issues/backup-store'
 import type { FixableCode } from '../main/issues/fix'
+import type {
+  ChartMetadataRead,
+  ChartMetadataSaved,
+  ChartMetadataWriteRequest
+} from '../main/metadata/edit'
 import type { LyricsSearchResult } from '../main/assets/lyrics'
 import type { LyricLinesResult } from '../main/catalog/lyric-lines'
 import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
@@ -133,6 +138,19 @@ const api = {
     path: string
     chartType: 'folder' | 'sng'
   }): Promise<LyricLinesResult> => ipcRenderer.invoke(IPC.chartLyricLines, req),
+  // The six editable song.ini fields as the chart really holds them, the seven gameplay keys the
+  // editor shows and will not edit, and a sentence when this chart cannot be edited at all.
+  // Reads, never writes.
+  chartReadMetadata: (req: {
+    path: string
+    chartType: 'folder' | 'sng'
+  }): Promise<ChartMetadataRead> => ipcRenderer.invoke(IPC.chartReadMetadata, req),
+  // Writes what the user typed into the chart, through the one write path, and resolves only
+  // after main has re-scanned it and proved both multiplayer identities are unchanged and every
+  // field reads back as asked. `fields` carries only what changed; a key not in it is a line the
+  // ini editor never looks at. Rejects with a sentence to show.
+  chartWriteMetadata: (req: ChartMetadataWriteRequest): Promise<ChartMetadataSaved> =>
+    ipcRenderer.invoke(IPC.chartWriteMetadata, req),
   sidecarStatus: (name: SidecarName): Promise<SidecarStatus> =>
     ipcRenderer.invoke(IPC.sidecarStatus, name),
   sidecarInstall: (name: SidecarName): Promise<void> =>

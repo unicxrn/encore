@@ -13,6 +13,7 @@ import { isUnderLibrary } from './assets/library-guard'
 import { sweepOrphanArt } from './catalog/art-cache'
 import { readChartFiles } from './catalog/chart-files'
 import { readLyricLines } from './catalog/lyric-lines'
+import { readChartMetadata, writeChartMetadata } from './metadata/edit'
 import { detectChartLibraries } from './catalog/detect-library'
 import { openCatalog, type CatalogDb } from './catalog/db'
 import { findDuplicates } from './catalog/duplicates'
@@ -604,6 +605,41 @@ function wireIpc(): {
     clearFinishedDownloads: () => manager.clearFinished(),
     readChartFiles: (path, chartType) => readChartFiles(path, chartType),
     readLyricLines: (path, chartType) => readLyricLines(path, chartType),
+    readChartMetadata: (path, chartType) => readChartMetadata(path, chartType),
+    // The metadata editor's save. libraryFolders are read at call time, matching every other
+    // writer, so a folder removed in Settings stops being writable without a restart.
+    //
+    // The re-index is here rather than in the writer because it is the catalog's business and the
+    // writer has never heard of the database. It goes through `scanChart`, the same path
+    // `rescanCharts` uses, so one definition of what a row means survives: a hand-patched row
+    // would be Encore's second opinion about a file it has just been told to re-read.
+    // A chart with no row is not an error. The library scan has simply not reached it, and the
+    // edit really did happen; `record: null` says so rather than inventing a row.
+    writeChartMetadata: async (req) => {
+      const written = await writeChartMetadata(
+        req.path,
+        req.fields,
+        loadSettings(settingsPath).libraryFolders
+      )
+      const existing = getChartByPath(db, req.path)
+      if (existing === undefined || existing === null) return { ...written, record: null }
+      try {
+        await scanChart(
+          db,
+          { path: req.path, type: existing.chartType },
+          {
+            dir: artDir,
+            encode: encodeAlbumArt
+          }
+        )
+      } catch (err) {
+        // The write succeeded and was verified; only the re-index failed. Reporting an error here
+        // would tell the user their edit did not happen, which is the one thing that is not true.
+        // The row is stale until the next scan, and the watcher will get to it.
+        console.error(`Re-index of ${req.path} after a metadata edit failed:`, err)
+      }
+      return { ...written, record: getChartByPath(db, req.path) ?? existing }
+    },
     pickFolder: async (sender) => {
       const win =
         BrowserWindow.fromWebContents(sender as Electron.WebContents) ??
