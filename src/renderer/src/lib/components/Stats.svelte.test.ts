@@ -930,3 +930,249 @@ describe('Stats: the lifetime read', () => {
     expect(document.querySelectorAll('.src')).toHaveLength(0)
   })
 })
+
+/**
+ * The block the page opens with, and the rule that keeps it from being a second copy of the
+ * page.
+ *
+ * Its figures are PROMOTED out of the blocks below rather than duplicated into it, which is the
+ * one thing that can quietly go wrong here: a lead that copied would put the same number under
+ * two headings carrying two different source tags, which is exactly the confusion the tags were
+ * added to prevent.
+ *
+ * Not pinnable here, because jsdom applies no CSS and computes no layout: whether the lead is
+ * painted above the rest, whether its source tag survives the narrowest content column the shell
+ * has (509px, at the 1121px window where the rail appears), or whether the reach bars draw the
+ * share the numbers state. That is scripts/measure-stats-page.mjs.
+ */
+describe('Stats: what the page opens with', () => {
+  /** Every figure's label, with the source tag that follows it inside the label stripped off. */
+  function figureLabels(): string[] {
+    return [...document.querySelectorAll('.tile .t-label')].map((el) =>
+      (el.textContent ?? '')
+        .replace(/\s+/g, ' ')
+        .replace(/(ALL TIME|SINCE .*|BOTH RECORDS)$/, '')
+        .trim()
+    )
+  }
+
+  it("leads with Clone Hero's count, not Encore's, when both records answer", async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    const lead = document.querySelector('.standing')
+    expect(lead).not.toBeNull()
+    const leadLabels = [...(lead?.querySelectorAll('.tile .t-label') ?? [])].map((el) =>
+      (el.textContent ?? '').replace(/\s+/g, ' ')
+    )
+    // The older and larger of the two records is what "how much have I played" means.
+    expect(leadLabels[0]).toContain('LIFETIME PLAYS')
+    expect(leadLabels.join(' ')).toContain('ACCURACY')
+  })
+
+  it('draws every figure once, because the lead takes rather than copies', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    const labels = figureLabels()
+    expect(new Set(labels).size, `${labels.join(', ')} repeats a figure`).toBe(labels.length)
+    // And the two it took are gone from the blocks they came from, not merely unique by accident.
+    const lifetimeBlock = [...document.querySelectorAll('h2')]
+      .find((h) => h.textContent?.includes('WHAT CLONE HERO KEPT'))
+      ?.closest('section')
+    expect(lifetimeBlock?.textContent).not.toContain('LIFETIME PLAYS')
+    const observedBlock = [...document.querySelectorAll('h2')]
+      .find((h) => h.textContent?.includes('WHAT ENCORE HAS WATCHED'))
+      ?.closest('section')
+    expect(observedBlock?.textContent).not.toContain('ACCURACY')
+  })
+
+  it('names the record beside each lead figure, since they come from different ones', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    // The heading above the lead cannot say which record its figures came from, because they
+    // came from both. So each figure says it for itself, in the same tag the headings use.
+    const tags = [...document.querySelectorAll('.standing .tile .src')].map((el) =>
+      el.textContent?.trim()
+    )
+    expect(tags).toContain('ALL TIME')
+    expect(tags).toContain(`SINCE ${new Date('2026-03-03T18:04:11.1234567Z').toLocaleDateString()}`)
+  })
+
+  it('leads with what Encore watched when Clone Hero has no table to read', async () => {
+    renderStats(ok, populated, populatedInsights)
+    await pageText()
+
+    const lead = document.querySelector('.standing')
+    expect(lead?.textContent).toContain('PLAYS RECORDED')
+    expect(lead?.textContent).toContain('42')
+    // One record on the page, so nothing is tagged and nothing needs to be.
+    expect(document.querySelectorAll('.src')).toHaveLength(0)
+  })
+
+  it('leads with a best score when there is no log to compute an accuracy from', async () => {
+    // A full score table and an empty log: the state of everyone who installs Encore today
+    // having played for years. Accuracy cannot be drawn at all, because the score files carry
+    // no note counts, so the quality slot takes the only quality figure that record holds.
+    renderStats(status({ available: false, reason: 'ok' }), stats(), insights(), owner)
+    await pageText()
+
+    const lead = document.querySelector('.standing')
+    expect(lead?.textContent).toContain('LIFETIME PLAYS')
+    expect(lead?.textContent).toContain('BEST SCORE')
+    expect(lead?.textContent).toContain('665,629')
+  })
+
+  it('never opens on a dash, and leaves the empty accuracy where it was', async () => {
+    // Accuracy is null whenever no play recorded its notes, which is a real state of this page.
+    // Opening on an empty cell would say nothing in the place the page has decided says the most.
+    renderStats(
+      ok,
+      stats({ totalPlays: 3, notesHit: 0, totalNotes: 0, firstPlayedAt: '2026-03-03T00:00:00Z' })
+    )
+    await pageText()
+
+    const lead = document.querySelector('.standing')
+    expect(lead?.textContent).not.toContain('ACCURACY')
+    expect(lead?.querySelector('.t-value')?.textContent?.trim()).not.toBe('—')
+    // Still on the page, under its own heading, saying why it is empty.
+    expect(document.body.textContent).toContain('no notes recorded')
+  })
+})
+
+/**
+ * The reach block: how much of the library has been played at all, promoted from a paragraph at
+ * the foot of the page to the third figure on it.
+ *
+ * The numbers are the same ones the paragraph states, and that paragraph stays: it is the honest
+ * sentence and a bar cannot carry it.
+ */
+describe('Stats: how much of the library has been played', () => {
+  it('draws a bar per record against one denominator, and names which is which', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    const reach = document.querySelector('.tile.reach')
+    const text = (reach?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('LIBRARY PLAYED')
+    expect(text).toContain('Clone Hero')
+    expect(text).toContain('84')
+    expect(text).toContain('Encore')
+    expect(text).toContain('177')
+    expect(text).toContain('of 4,000 charts Encore can match a play to')
+    // Two bars side by side and never one inside the other: the counts come from tables nothing
+    // joins, and a nested bar would assert the subset claim the paragraph below refuses to make.
+    expect(reach?.querySelectorAll('.r-row')).toHaveLength(2)
+  })
+
+  it('drops the row labels when only one record is on the page', async () => {
+    renderStats(ok, populated, populatedInsights)
+    await pageText()
+
+    const reach = document.querySelector('.tile.reach')
+    expect(reach?.querySelectorAll('.r-row')).toHaveLength(1)
+    expect(reach?.querySelectorAll('.r-key')).toHaveLength(0)
+    expect(reach?.textContent).toContain('177')
+  })
+
+  it('draws no bar at all when nothing in the library can be matched to a play', async () => {
+    // There is no ratio to draw against a zero, and a full-width empty track would read as "you
+    // have played none of your library", which is a claim about the user rather than the scan.
+    renderStats(
+      ok,
+      populated,
+      insights({ coverage: { inLibrary: 900, identified: 0, withPlay: 0, playsOffLibrary: 0 } })
+    )
+    await pageText()
+
+    expect(document.querySelector('.tile.reach')).toBeNull()
+    expect(await pageText()).toContain('Nothing in your library can be matched to a play yet')
+  })
+
+  it('gives a bar its true share, with no minimum stub', async () => {
+    renderStats(ok, populated, populatedInsights, owner)
+    await pageText()
+
+    // 84 of 4,000 is 2.1%, and the page's other bars floor themselves at 2%. Against a
+    // denominator in the thousands that floor would be most of the bar, so this one has none.
+    const fills = [...document.querySelectorAll('.tile.reach .r-fill')] as HTMLElement[]
+    expect(fills[0].style.width).toBe(`${(84 / 4000) * 100}%`)
+    expect(fills[1].style.width).toBe(`${(177 / 4000) * 100}%`)
+  })
+
+  it('keeps the count whole when it runs past its own denominator', async () => {
+    // The two counts come from tables nothing joins, so nothing guarantees the smaller one is
+    // smaller. The bar is what gives: its track hides the overflow, measured in
+    // scripts/measure-stats-page.mjs. The number never gives, which is the whole rule.
+    renderStats(
+      ok,
+      populated,
+      populatedInsights,
+      lifetime({ status: { ...owner.status }, totals: { ...owner.totals, chartsInLibrary: 5200 } })
+    )
+    await pageText()
+
+    const reach = document.querySelector('.tile.reach')
+    expect(reach?.textContent).toContain('5,200')
+    const fill = document.querySelector('.tile.reach .r-fill') as HTMLElement
+    expect(Number.parseFloat(fill.style.width)).toBeGreaterThan(100)
+  })
+})
+
+/**
+ * Colour on this page names an instrument and nothing else, which is the rule tokens.css states
+ * and DiffPips.svelte already follows. Two surfaces disagreeing about what a guitar looks like
+ * is worse than neither being coloured.
+ */
+describe('Stats: the instruments you play', () => {
+  it("draws a bar in its instrument's own colour, the one the difficulty pips use", async () => {
+    renderStats(ok, populated, populatedInsights)
+    await pageText()
+
+    const rows = [...document.querySelectorAll('.breakdown')]
+      .find((b) => b.querySelector('h3')?.textContent === 'Instrument')
+      ?.querySelectorAll('.bd-row')
+    expect([...(rows ?? [])].map((r) => r.getAttribute('style'))).toEqual([
+      '--pip: var(--inst-guitar);',
+      '--pip: var(--inst-drums);'
+    ])
+  })
+
+  it('leaves difficulty uncoloured, because a difficulty is not a part', async () => {
+    renderStats(ok, populated, populatedInsights)
+    await pageText()
+
+    const rows = [...document.querySelectorAll('.breakdown')]
+      .find((b) => b.querySelector('h3')?.textContent === 'Difficulty')
+      ?.querySelectorAll('.bd-row')
+    expect([...(rows ?? [])].map((r) => r.getAttribute('style'))).toEqual([null])
+  })
+
+  it('draws an instrument it has never heard of uncoloured, not as another one', async () => {
+    renderStats(
+      ok,
+      stats({
+        totalPlays: 5,
+        firstPlayedAt: '2026-03-03T00:00:00Z',
+        byInstrument: [
+          { key: 'Guitar', plays: 4 },
+          { key: 'Pro Drums (Real)', plays: 1 }
+        ]
+      }),
+      populatedInsights
+    )
+    await pageText()
+
+    const rows = [...document.querySelectorAll('.breakdown')]
+      .find((b) => b.querySelector('h3')?.textContent === 'Instrument')
+      ?.querySelectorAll('.bd-row')
+    expect([...(rows ?? [])].map((r) => r.getAttribute('style'))).toEqual([
+      '--pip: var(--inst-guitar);',
+      null
+    ])
+    // The name is 90px of track wide at most, so the whole of it is on the hover.
+    const keys = [...document.querySelectorAll('.bd-key')].map((el) => el.getAttribute('title'))
+    expect(keys).toContain('Pro Drums (Real)')
+  })
+})
