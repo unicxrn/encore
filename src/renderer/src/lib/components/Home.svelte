@@ -56,7 +56,14 @@
    */
   const ROW_COUNT = 6
 
-  /** The three parts a row draws, in Explore's order, so the two lists read the same. */
+  /**
+   * The three parts a row draws, in Explore's order, so the two lists read the same.
+   *
+   * Explore draws five and this draws three, for the reason Library.svelte's own list records:
+   * Explore's row folds the difficulty onto a line of its own when its column is narrow and
+   * this one never does, so five groups here come straight off the title at every width. The
+   * price is written down beside the track width below.
+   */
   const ROW_PARTS: readonly { key: string; label: string }[] = [
     { key: 'guitar', label: 'Guitar' },
     { key: 'bass', label: 'Bass' },
@@ -367,6 +374,7 @@
           label={part.label}
           instruments={row.instruments}
           tier={row.tiers[part.key]}
+          icon
         />
       {/each}
     </span>
@@ -761,14 +769,35 @@
      metadata, the charter, the three parts as pips, and a mark only where there is something to
      say. Home carries no checkbox, no index and no per-row action, so its grid is Explore's
      with those tracks taken out: the action a row leads to is the rail's, beside the chart it
-     is showing, which is the arrangement Explore settled on. */
+     is showing, which is the arrangement Explore settled on.
+
+     The cover stays 40px against Explore's 52px, and that is the row height talking rather than
+     a disagreement about covers. Explore's row is 71px because it carries a badge band under the
+     subtitle, so a 52px square sits in it with room either side. This row is two lines and 55px,
+     and `MODE=full scripts/measure-home.mjs` at 52px puts it at 67px: six rows a section, so the
+     artists strip moves from 551px to 623px and "In your library" from 713px to 785px at the
+     default 1280px window, on a page that already runs 410px past its box. The cover is the box
+     the row is built around and the two rows are different shapes; the difficulty display is the
+     information, and that is the part that now matches.
+
+     124px of difficulty: 3 groups of 34px plus 2 gaps of 9px is 120px, and the four spare pixels
+     are Explore's own margin at 210px for five. It was 136px when the three groups were letters,
+     so the ring form gave the title 12px back: measured at 1280, 261px to 273px, and at 960 the
+     name goes from 4 of 12 rows ellipsised to 2 of 12.
+
+     Five groups would want 210px, and this row never folds the difficulty onto a line of its own,
+     so all 74px of the difference comes off the title at every width: 327 to 241 at 960, 487 to
+     401 at 1120, 254 to 168 at the 1121px window the rail appears at, 273 to 187 at 1280, 497 to
+     411 at 1600 and 817 to 731 at 1920. The subtitle crosses at 1120 and at 1600, 6 of 12 rows
+     ellipsised against 12 of 12. A 168px title on the page whose whole job is to show you six
+     charts is the measurement that settled it. */
   .rows {
     display: flex;
     flex-direction: column;
   }
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 150px) 136px 10px 46px;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 150px) 124px 10px 46px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -839,13 +868,12 @@
   .charter {
     color: var(--text-3);
   }
-  /* 6px between the three parts, the gap Explore's row uses, so eighteen bars read as three
-     groups and not as one run. `nowrap` because the width of this thing is the information it
-     carries. */
+  /* 9px between the groups, the gap Explore's row uses, so the pips read as groups and not as
+     one run. `nowrap` because the width of this thing is the information it carries. */
   .diffs {
     display: flex;
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 9px;
   }
   .health {
     display: flex;
@@ -935,7 +963,7 @@
      leaves the title and its metadata a 261px box each. */
   @container home (max-width: 899px) {
     .row {
-      grid-template-columns: 40px minmax(0, 1fr) minmax(0, 110px) 136px 10px;
+      grid-template-columns: 40px minmax(0, 1fr) minmax(0, 110px) 124px 10px;
     }
     .row .len {
       display: none;
@@ -950,7 +978,7 @@
       align-items: stretch;
     }
     .row {
-      grid-template-columns: 40px minmax(0, 1fr) 136px;
+      grid-template-columns: 40px minmax(0, 1fr) 124px;
     }
     .row .charter,
     .row .health {
