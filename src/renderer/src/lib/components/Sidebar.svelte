@@ -69,7 +69,7 @@
       items: [
         {
           view: 'stats',
-          label: 'Stats',
+          label: 'Statistics',
           d: 'M4 19.5h16M7 19V11m5 8V5.5m5 13.5v-6'
         },
         {

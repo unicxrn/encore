@@ -16,7 +16,7 @@ import { defaultSettings } from '../../../../shared/settings-defaults'
  */
 
 /** The heading of each screen, in order. The count is derived from this, not hardcoded twice. */
-const TITLES = ['What Encore does', 'Installed', 'Explore', 'Issues', 'Asset Studio', 'Stats']
+const TITLES = ['What Encore does', 'Installed', 'Explore', 'Issues', 'Asset Studio', 'Statistics']
 
 /** The view each screen from the second on describes, by the id App switches on. */
 const DOORS: readonly [title: string, view: string][] = [
@@ -24,7 +24,7 @@ const DOORS: readonly [title: string, view: string][] = [
   ['Explore', 'browse'],
   ['Issues', 'tools'],
   ['Asset Studio', 'assets'],
-  ['Stats', 'stats']
+  ['Statistics', 'stats']
 ]
 
 type Props = { onclose?: () => void; onopen?: (view: string) => void }
@@ -156,7 +156,7 @@ describe('WelcomeTour contents', () => {
   it('covers Stats, which is where the play data went', async () => {
     // Home drew the plays in 0.3.1 and no longer does. A tour that stopped at the four older
     // views would leave the one screen that answers "where did my play counts go" unnamed.
-    const body = await bodyOf('Stats')
+    const body = await bodyOf('Statistics')
     expect(body).toMatch(/score files/i)
     // The claim src/main/play/read-only.test.ts is the guard for. Nothing in that directory may
     // write, and this is the screen that tells the user so.
@@ -215,7 +215,7 @@ describe('WelcomeTour doors', () => {
     mount()
     await next(TITLES.length - 1)
     expect(screen.getByRole('button', { name: 'Skip tour' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Open Stats' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Statistics' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
     expect(dialog().textContent).toMatch(/any time for shortcuts/i)
   })

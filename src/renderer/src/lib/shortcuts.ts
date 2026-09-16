@@ -105,7 +105,7 @@ const VIEW_LABELS: Record<ShortcutView, string> = {
   browse: 'Explore',
   library: 'Installed',
   assets: 'Asset Studio',
-  stats: 'Stats',
+  stats: 'Statistics',
   tools: 'Issues',
   settings: 'Settings'
 }

@@ -91,7 +91,7 @@
         'M12 3v10.5M9.5 12.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM12 6c2 0 3-1 5-1v4c-2 0-3 1-5 1'
     },
     {
-      title: 'Stats',
+      title: 'Statistics',
       view: 'stats',
       body:
         'What Clone Hero says you have played, read from its own score files: how much of your ' +

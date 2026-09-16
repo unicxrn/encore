@@ -304,7 +304,7 @@ describe('App keyboard shortcuts', () => {
     ['Digit2', 'Explore'],
     ['Digit3', 'Installed'],
     ['Digit4', 'Asset Studio'],
-    ['Digit5', 'Stats'],
+    ['Digit5', 'Statistics'],
     ['Digit6', 'Issues'],
     ['Digit7', 'Settings']
   ])('Ctrl+%s goes to %s', async (code, label) => {

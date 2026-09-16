@@ -51,7 +51,14 @@ describe('Sidebar: the page row and the panel row', () => {
     renderSidebar({ view: 'tools' })
     expect(row('Issues').getAttribute('aria-current')).toBe('page')
     expect(row('Issues').classList.contains('active')).toBe(true)
-    for (const other of ['Home', 'Explore', 'Installed', 'Asset Studio', 'Stats', 'Settings']) {
+    for (const other of [
+      'Home',
+      'Explore',
+      'Installed',
+      'Asset Studio',
+      'Statistics',
+      'Settings'
+    ]) {
       expect(row(other).getAttribute('aria-current')).toBeNull()
       expect(row(other).classList.contains('active')).toBe(false)
     }
@@ -87,7 +94,7 @@ describe('Sidebar: the page row and the panel row', () => {
       'Explore',
       'Installed',
       'Asset Studio',
-      'Stats',
+      'Statistics',
       'Issues',
       'Settings'
     ]) {
@@ -131,9 +138,9 @@ describe('Sidebar order and the view shortcuts', () => {
     expect(rows).toEqual(labels)
   })
 
-  it('gives the Stats row the digit its position in that list earns', () => {
+  it('gives the Statistics row the digit its position in that list earns', () => {
     const spec = SHORTCUTS.find((s) => s.id === 'go:stats')
-    expect(spec?.what).toBe('Go to Stats')
+    expect(spec?.what).toBe('Go to Statistics')
     expect(renderKeys(spec?.keys ?? '', 'Linux x86_64')).toEqual(['Ctrl', '5'])
   })
 })

@@ -189,7 +189,7 @@ describe('the sheet is generated from the bindings', () => {
     const what = SHORTCUTS.filter((s) => s.id.startsWith('go:')).map((s) => s.what)
     expect(what).toContain('Go to Issues')
     expect(what).toContain('Go to Explore')
-    expect(what).toContain('Go to Stats')
+    expect(what).toContain('Go to Statistics')
     expect(what).not.toContain('Go to tools')
   })
 })
