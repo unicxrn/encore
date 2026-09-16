@@ -683,8 +683,13 @@
   }
   /* The label gives way, never the figure. `min-width: 0` is what lets it: without it a flex item
      refuses to shrink below its content and the count is pushed past the column's right edge
-     instead. What that costs at the widest label and the largest figure is measured, not guessed:
-     scripts/measure-sidebar.mjs. */
+     instead.
+
+     Measured rather than assumed (scripts/measure-sidebar.mjs): the row track is 213px and the
+     padding, glyph and gap take 46 of them, so a label and a figure share 167px. At the largest
+     figures anyone could reach — 99,999 charts, 9,999 queued — every one of the nine labels is
+     drawn whole, and the tightest, "Asset Studio", still has 87.9px of the 167 spare because it
+     carries no figure at all. The ellipsis this rule declares has nothing to do yet. */
   .item .label {
     min-width: 0;
     overflow: hidden;
