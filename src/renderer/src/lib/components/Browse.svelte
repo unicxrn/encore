@@ -31,9 +31,16 @@
     DIFFICULTIES,
     SORT_OPTIONS,
     albumArtUrl,
-    type ChartData
+    type ChartData,
+    type FilterOption
   } from '../api/enchor'
-  import { INTENSITY_CEILINGS, INTENSITY_FLOORS } from '../api/advanced'
+  import {
+    ADVANCED_RANGES,
+    INTENSITY_CEILINGS,
+    INTENSITY_FLOORS,
+    type AdvancedNumberField,
+    type AdvancedTextField
+  } from '../api/advanced'
   import { msToTime, stripRichText } from '../../../../shared/format'
   import { issueSummary, issueTitle } from '../issue-summary'
   import { encore } from '../stores/bridge'
@@ -320,6 +327,200 @@
       end === 'max' ? value : numbers.maxIntensity
     )
   }
+
+  /**
+   * The difficulties as a scale, which is what a row of dots is.
+   *
+   * Four dots, because there are four difficulties. The endpoint names its whole enum back in
+   * the 400 it answers a bad value with: `'expert' | 'hard' | 'medium' | 'easy'`, and an array
+   * of two comes back as `received: array` from the same check (measured against the live
+   * service on 2026-09-16). So the control is single-select, and `DIFFICULTIES` was already the
+   * same four. The approved design draws six dots here; six is the intensity scale its own rows
+   * draw six pips of, and two of six toggles over four difficulties would filter nothing.
+   *
+   * Reversed out of `DIFFICULTIES` rather than written out again, so the list stays in one
+   * place. A select puts the most-asked-for option first, which is why that one starts at
+   * expert; a row of dots is read left to right as a scale, and a scale runs upwards.
+   */
+  const named = (opt: FilterOption): opt is FilterOption & { value: string } => opt.value !== null
+  const DIFFICULTY_DOTS = DIFFICULTIES.filter(named).reverse()
+
+  /**
+   * Pressing the lit dot is how "any difficulty" is asked for, now that no option says it.
+   *
+   * `aria-pressed` rather than a radio group: a radio group cannot express none-chosen, and
+   * none-chosen is the state this control is in nearly all the time. The same idiom the List and
+   * Grid pair beside it uses, and the pressed dot is the only lit thing in the group.
+   */
+  function onDifficultyDot(value: string): void {
+    onFilterChange('difficulty', difficulty === value ? '' : value)
+  }
+
+  const difficultyName = $derived(
+    DIFFICULTY_DOTS.find((opt) => opt.value === difficulty)?.label.toLowerCase() ?? ''
+  )
+
+  /**
+   * The chips under the search row: the advanced fields the approved design asks in the header.
+   *
+   * Every one names a field the panel already holds, by the key the panel holds it under, and
+   * writes it through `setAdvancedField`, which sets the applied query and the panel's draft in
+   * one act. A chip is therefore a second view of one filter and never a second filter; the
+   * intensity band beside them has worked that way since it shipped.
+   *
+   * Two of the design's seven are not here. There is no decade field to chip: the endpoint takes
+   * `minYear` and `maxYear` and nothing else, so a Decade chip would be the Year range wearing a
+   * different name, which is exactly the second copy this header may not have. The decades are
+   * inside the Year chip instead, as presets that fill the range they mean. Sort is not here
+   * either: eleven orders already live at the end of the filter row above, and one order needs
+   * one control.
+   */
+  type Chip =
+    | { kind: 'text'; field: AdvancedTextField; label: string }
+    | {
+        kind: 'range'
+        field: string
+        label: string
+        min: AdvancedNumberField
+        max: AdvancedNumberField
+      }
+
+  const CHIPS: readonly Chip[] = [
+    { kind: 'text', field: 'genre', label: 'Genre' },
+    { kind: 'range', field: 'year', label: 'Year', min: 'minYear', max: 'maxYear' },
+    { kind: 'range', field: 'length', label: 'Length', min: 'minLength', max: 'maxLength' },
+    { kind: 'text', field: 'charter', label: 'Charter' },
+    { kind: 'text', field: 'album', label: 'Album' }
+  ]
+
+  /**
+   * The unit the panel labels a range in, read off the panel's own list rather than written here.
+   *
+   * Length is MINUTES. That is the measurement `ADVANCED_RANGES` records and the reason this
+   * reads it rather than restating it: the last time this number was restated it was restated as
+   * seconds, a 60x conversion was built on it, and a 3 to 6 minute search answered with charts 3
+   * to 6 hours long. The chip converts nothing and sends what was typed, as the panel does.
+   */
+  function unitOf(min: AdvancedNumberField): string {
+    return ADVANCED_RANGES.find((range) => range.min === min)?.unit ?? ''
+  }
+
+  /** The decades the Year chip offers, ending at the one we are in. */
+  const DECADES = (() => {
+    const newest = Math.floor(new Date().getFullYear() / 10) * 10
+    const decades: number[] = []
+    for (let start = 1950; start <= newest; start += 10) decades.push(start)
+    return decades.reverse()
+  })()
+
+  /** Which end of a range a chip is bounded at, as three cases rather than four. */
+  function rangeText(min: AdvancedNumberField, max: AdvancedNumberField): string {
+    const lo = $advanced.numbers[min].trim()
+    const hi = $advanced.numbers[max].trim()
+    const unit = unitOf(min)
+    const tail = unit ? ` ${unit}` : ''
+    if (!lo && !hi) return 'Any'
+    if (lo && hi) return lo === hi ? `${lo}${tail}` : `${lo} to ${hi}${tail}`
+    if (lo) return `${lo}${tail} and up`
+    return `up to ${hi}${tail}`
+  }
+
+  /**
+   * What a chip reads, which has to be what the request says and not what the box holds.
+   *
+   * An excluded text field is named as an exclusion, because Exclude inverts what the value
+   * means and a chip reading "Rock" over a search that is refusing Rock would be the one lie
+   * this row can tell. Exact does not change what the word is, so it does not show here; it
+   * stays in the panel with the rest of the per-field modifiers.
+   *
+   * A year range that is exactly one decade is named as that decade, which is the only honest
+   * decade this API can answer for: it is the same two fields either way.
+   */
+  function chipText(chip: Chip): string {
+    if (chip.kind === 'text') {
+      const filter = $advanced.text[chip.field]
+      const value = filter.value.trim()
+      if (!value) return 'Any'
+      return filter.exclude ? `not ${value}` : value
+    }
+    if (chip.field === 'year') {
+      const lo = Number($advanced.numbers.minYear.trim())
+      const hi = Number($advanced.numbers.maxYear.trim())
+      if ($advanced.numbers.minYear.trim() && lo % 10 === 0 && hi === lo + 9) return `${lo}s`
+    }
+    return rangeText(chip.min, chip.max)
+  }
+
+  const chipSet = (chip: Chip): boolean => chipText(chip) !== 'Any'
+
+  /** Which chip has its editor open, by field. One at a time, and none is the resting state. */
+  let openChip = $state<string | null>(null)
+  let pendingText = $state('')
+  let pendingLow = $state('')
+  let pendingHigh = $state('')
+
+  function toggleChip(chip: Chip): void {
+    if (openChip === chip.field) {
+      openChip = null
+      return
+    }
+    // Seeded from the applied query, so the editor opens on what the rows on screen came back
+    // for rather than on whatever the last chip left in these three variables.
+    const applied = get(search.advanced)
+    if (chip.kind === 'text') pendingText = applied.text[chip.field].value
+    else {
+      pendingLow = applied.numbers[chip.min]
+      pendingHigh = applied.numbers[chip.max]
+    }
+    openChip = chip.field
+  }
+
+  function applyChip(chip: Chip): void {
+    if (chip.kind === 'text') {
+      const value = pendingText.trim()
+      search.setAdvancedField((query) => {
+        query.text[chip.field].value = value
+      })
+    } else {
+      const low = pendingLow.trim()
+      const high = pendingHigh.trim()
+      search.setAdvancedField((query) => {
+        query.numbers[chip.min] = low
+        query.numbers[chip.max] = high
+      })
+    }
+    openChip = null
+  }
+
+  function clearChip(chip: Chip): void {
+    pendingText = ''
+    pendingLow = ''
+    pendingHigh = ''
+    applyChip(chip)
+  }
+
+  function pickDecade(chip: Chip, start: number): void {
+    pendingLow = String(start)
+    pendingHigh = String(start + 9)
+    applyChip(chip)
+  }
+
+  /**
+   * A press anywhere else shuts the open editor.
+   *
+   * Without it the only ways out are Apply, Escape and another chip, and an editor left hanging
+   * over the first rows of the list is a popover the user has to work out how to dismiss.
+   * `pointerdown` rather than `click` so it does not race the chip's own press.
+   */
+  $effect(() => {
+    if (openChip === null) return undefined
+    const onDown = (e: PointerEvent): void => {
+      if (e.target instanceof Element && e.target.closest('.fdrops')) return
+      openChip = null
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  })
 
   export function focusSearch(): void {
     inputEl?.focus()
@@ -737,16 +938,33 @@
           <option value={opt.value ?? ''}>{opt.label}</option>
         {/each}
       </select>
-      <select
-        class="chip"
-        aria-label="Filter by difficulty"
-        value={difficulty ?? ''}
-        onchange={(e) => onFilterChange('difficulty', e.currentTarget.value)}
-      >
-        {#each DIFFICULTIES as opt (opt.label)}
-          <option value={opt.value ?? ''}>{opt.label}</option>
+      <!-- Four dots rather than a list, which is the shape the approved design draws and the
+           count the endpoint has: a bad difficulty comes back as a 400 naming the whole enum,
+           `'expert' | 'hard' | 'medium' | 'easy'`, and an array of two is refused by the same
+           check as `received: array` (measured 2026-09-16). So one at a time, easy on the left,
+           and the design's six dots are the intensity scale its rows draw pips of, not this. -->
+      <div class="dots" role="group" aria-label="Filter by difficulty">
+        <span class="band-label">Difficulty</span>
+        {#each DIFFICULTY_DOTS as opt (opt.value)}
+          <button
+            class="dot"
+            aria-label={opt.label}
+            aria-pressed={difficulty === opt.value}
+            title={difficulty === opt.value
+              ? `Charts written at ${opt.label.toLowerCase()}. Press again for any difficulty.`
+              : `Charts written at ${opt.label.toLowerCase()}`}
+            onclick={() => onDifficultyDot(opt.value)}
+          ></button>
         {/each}
-      </select>
+        <!-- The dots carry no visible word, so the chosen one is named here: reading a row of
+             dots and knowing which difficulty the third one is otherwise means counting. Only
+             while one is chosen. Nothing lit under a label reading Difficulty already says no
+             difficulty is being asked for, and this row is at three lines at its narrowest, so a
+             word that says what the control already shows is one the header cannot afford. -->
+        {#if difficulty !== null}
+          <span class="band-to">{difficultyName}</span>
+        {/if}
+      </div>
       <!-- The third control, and a different question from the two above it. Difficulty is which
            charted difficulties exist; intensity is how hard the chart is, the same number the
            row's pips draw. Without it "expert, but not brutal" cannot be asked, which is the
@@ -839,6 +1057,112 @@
           >
         </div>
       </div>
+    </div>
+    <!-- The chip row, which is what the approved design puts under the search row: the advanced
+         fields people actually reach for, each carrying its current value and lit when it is
+         set, so a narrowed list says what narrowed it without the panel being open.
+
+         None of these is a filter of its own. Each writes the panel's own field through
+         `setAdvancedField`, which sets the applied query and the draft together, so opening the
+         panel shows what a chip set and a keystroke in the panel cannot quietly undo it. -->
+    <div class="fdrops">
+      {#each CHIPS as chip (chip.field)}
+        <div class="fd-wrap">
+          <button
+            class="fd"
+            class:set={chipSet(chip)}
+            aria-expanded={openChip === chip.field}
+            aria-controls="chip-{chip.field}"
+            aria-label="{chip.label}: {chipText(chip)}"
+            onclick={() => toggleChip(chip)}
+          >
+            <em>{chip.label}</em>{chipText(chip)}
+          </button>
+          {#if openChip === chip.field}
+            <!-- svelte-ignore a11y_no_static_element_interactions
+                 (Escape on the container, because the key has to work from every control inside
+                 it and a handler per input is four copies of one rule.) -->
+            <div
+              class="pop"
+              id="chip-{chip.field}"
+              onkeydown={(e) => {
+                if (e.key === 'Escape') openChip = null
+              }}
+            >
+              {#if chip.kind === 'text'}
+                <!-- One box, and no Exact or Exclude beside it. Those two change what the word
+                     means rather than what it is, and the panel is where a modifier belongs;
+                     a chip standing over an excluded field says "not Rock" instead. -->
+                <input
+                  class="text-input"
+                  type="text"
+                  autocomplete="off"
+                  aria-label="{chip.label} contains"
+                  value={pendingText}
+                  oninput={(e) => (pendingText = e.currentTarget.value)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') applyChip(chip)
+                  }}
+                />
+              {:else}
+                {@const unit = unitOf(chip.min)}
+                <div class="pop-range">
+                  <!-- Named "from" and "to" rather than "lowest" and "highest", which is what the
+                       panel's own boxes are called: two controls with one accessible name is one
+                       control a screen reader cannot point at, and the panel can be open while
+                       this is. No max on either end, for the reason the panel has none. -->
+                  <input
+                    class="num"
+                    type="number"
+                    step="1"
+                    inputmode="decimal"
+                    placeholder="any"
+                    aria-label="{chip.label} from{unit ? `, in ${unit}` : ''}"
+                    value={pendingLow}
+                    oninput={(e) => (pendingLow = e.currentTarget.value)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') applyChip(chip)
+                    }}
+                  />
+                  <span class="pop-to">to</span>
+                  <input
+                    class="num"
+                    type="number"
+                    step="1"
+                    inputmode="decimal"
+                    placeholder="any"
+                    aria-label="{chip.label} to{unit ? `, in ${unit}` : ''}"
+                    value={pendingHigh}
+                    oninput={(e) => (pendingHigh = e.currentTarget.value)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') applyChip(chip)
+                    }}
+                  />
+                  {#if unit}<span class="pop-to">{unit}</span>{/if}
+                </div>
+                {#if chip.field === 'year'}
+                  <!-- The decades, as the two fields they actually are. The design has a Decade
+                       chip beside Year; the endpoint has `minYear` and `maxYear` and nothing
+                       else, so a second chip over the same pair would be the one thing this
+                       header may not have. Here they are a way to fill the range in one press,
+                       and the chip reads back "2000s" when the range is exactly a decade. -->
+                  <div class="pop-presets">
+                    {#each DECADES as start (start)}
+                      <button class="preset" onclick={() => pickDecade(chip, start)}
+                        >{start}s</button
+                      >
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
+              <div class="pop-actions">
+                <button class="pop-apply" onclick={() => applyChip(chip)}>Apply</button>
+                <button class="pop-clear" onclick={() => clearChip(chip)}>Clear</button>
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/each}
     </div>
     {#if $advancedOpen}
       <AdvancedSearch {search} />
@@ -1342,6 +1666,183 @@
     font-size: var(--fs-caption);
     color: var(--text-3);
     white-space: nowrap;
+  }
+  /* The difficulty scale, drawn as the approved design draws it: a label, four round toggles
+     and the word for whichever one is lit. */
+  .dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .dot {
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1.5px solid var(--hairline);
+    background: var(--surface-1);
+    cursor: pointer;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .dot:hover,
+  .dot:focus-visible {
+    border-color: var(--accent);
+  }
+  .dot[aria-pressed='true'] {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  /* The chip row, under the filter row rather than inside it: these are the same kind of thing
+     as each other and a different kind from the instrument, difficulty and intensity controls
+     above, which are the two the endpoint takes outside the advanced body. It wraps for the
+     reason the row above it does, and at the 509px view it is measured at two lines. */
+  .fdrops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 16px 10px;
+  }
+  /* The anchor the editor hangs off, so the popover is positioned against its own chip rather
+     than against the row. */
+  .fd-wrap {
+    position: relative;
+  }
+  .fd {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+    padding: 4px 12px;
+    cursor: pointer;
+    max-width: 240px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+  .fd:hover,
+  .fd:focus-visible {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  /* The field name, quieter than the value: the value is what changes and what is being read. */
+  .fd em {
+    font-style: normal;
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
+  /* Lit only when the chip is actually narrowing the answer, which is what `chipText` decides. */
+  .fd.set {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  .fd.set em {
+    color: var(--text-2);
+  }
+  /* Over the list rather than pushing it down: the header is already the tallest thing on this
+     view, and an editor that shifted every row under it would cost the list on every press
+     rather than only while it is open. */
+  .pop {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 6px);
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    min-width: 232px;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    box-shadow: var(--elev-3);
+  }
+  .pop .text-input,
+  .pop .num {
+    flex: none;
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 5px 9px;
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+  }
+  .pop .num {
+    width: 74px;
+  }
+  .pop-range {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .pop-to {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
+  .pop-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    max-width: 232px;
+  }
+  .preset {
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    padding: 2px 8px;
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .preset:hover,
+  .preset:focus-visible {
+    color: var(--text-1);
+    border-color: var(--accent);
+  }
+  .pop-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .pop-apply,
+  .pop-clear {
+    border-radius: 6px;
+    border: 1px solid var(--hairline);
+    background: none;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 4px 12px;
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .pop-apply {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  .pop-clear:hover,
+  .pop-clear:focus-visible {
+    color: var(--text-1);
+    border-color: rgba(255, 255, 255, 0.2);
   }
   /* A tier is one or two characters, so this select is sized for its contents rather than for
      its longest label the way the instrument one is. */
