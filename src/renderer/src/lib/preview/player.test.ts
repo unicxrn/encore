@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildChartMap, createPreview } from './player'
+import { FAKE_TOKENS, makeFakeCanvas } from '../../../../../test/helpers/fake-canvas'
+import type { FakeCanvas } from '../../../../../test/helpers/fake-canvas'
 
 // The wrapper lazily imports 'chart-preview' (the real module extends
 // HTMLElement at import time and crashes in node). Mock the three loader
@@ -20,7 +22,15 @@ const prepareChartData = vi.fn<
     textureOptions?: Record<string, unknown>
   ) => Promise<typeof preparedChart>
 >(async () => preparedChart)
+/**
+ * The package's own instrument-type mapping, which it exports and `load` asks it for rather than
+ * keeping a table of. Repeated here because the module is mocked, not because it is Encore's.
+ */
+const getInstrumentType = vi.fn((instrument: string) =>
+  instrument === 'drums' ? 2 : instrument.endsWith('ghl') ? 0 : 1
+)
 vi.mock('chart-preview', () => ({
+  getInstrumentType: (instrument: string) => getInstrumentType(instrument),
   fetchSngFile: (url: string, signal?: AbortSignal) => fetchSngFile(url, signal),
   extractSngFile: (data: Uint8Array) => extractSngFile(data),
   prepareChartData: (
@@ -48,7 +58,10 @@ const preparedChart = {
       { instrument: 'bass', difficulty: 'hard', noteEventGroups: [[{ msTime: 10_000 }]] }
     ]
   },
-  textures: null,
+  textures: {
+    highwayTexture: { image: { tagName: 'IMG' }, needsUpdate: false },
+    strikelineTexture: { image: { tagName: 'IMG' }, needsUpdate: false }
+  },
   audioFiles: [],
   instrument: 'guitar',
   difficulty: 'expert',
@@ -103,13 +116,38 @@ const makeFakeElement = (): FakeElement => {
 
 let fakeElement: ReturnType<typeof makeFakeElement>
 let createElement: ReturnType<typeof vi.fn>
+let canvases: FakeCanvas[]
 let observers: { target: unknown; notify: () => void }[]
+/** Answers for the four colour tokens the lane skin reads. Empty makes every build of it fail. */
+let tokens: Record<string, string>
 
 beforeEach(() => {
   fakeElement = makeFakeElement()
   observers = []
-  createElement = vi.fn((tag: string) => (tag === 'style' ? { textContent: '' } : fakeElement))
-  ;(globalThis as { document?: unknown }).document = { createElement }
+  canvases = []
+  tokens = { ...FAKE_TOKENS }
+  preparedChart.textures = {
+    highwayTexture: { image: { tagName: 'IMG' }, needsUpdate: false },
+    strikelineTexture: { image: { tagName: 'IMG' }, needsUpdate: false }
+  }
+  createElement = vi.fn((tag: string) => {
+    if (tag === 'style') return { textContent: '' }
+    // The lane skin draws its two pictures on canvases it asks the document for; nothing else
+    // here does, so this is the whole of it. See `test/helpers/fake-canvas.ts`.
+    if (tag === 'canvas') {
+      const canvas = makeFakeCanvas()
+      canvases.push(canvas)
+      return canvas
+    }
+    return fakeElement
+  })
+  ;(globalThis as { document?: unknown }).document = {
+    createElement,
+    documentElement: {},
+    defaultView: {
+      getComputedStyle: () => ({ getPropertyValue: (name: string) => tokens[name] ?? '' })
+    }
+  }
   // Node has no MutationObserver; the wrapper watches the element's `volume`
   // attribute with one because the element publishes no volume event.
   ;(globalThis as { MutationObserver?: unknown }).MutationObserver = class {
@@ -214,6 +252,57 @@ describe('createPreview', () => {
     const handle = await createPreview()
     await handle.load(urlConfig)
     expect(prepareChartData.mock.calls[0][4]).not.toHaveProperty('animationsEnabled')
+  })
+
+  /**
+   * The seam the whole lane skin lives on: the textures the element is handed are the ones Encore
+   * drew, not the ones the package downloaded. Nothing in this project can see the lane itself
+   * (node has no canvas, jsdom has no WebGL), so what is pinned here is that the swap reaches
+   * `loadChart` and that it reaches it for every instrument the package has a highway for.
+   */
+  it("hands loadChart Encore's lane rather than the package's", async () => {
+    const handle = await createPreview()
+    await handle.load(urlConfig)
+
+    const loaded = fakeElement.loadChart.mock.calls[0][0] as typeof preparedChart
+    expect(loaded.textures.highwayTexture.image).toBe(canvases[0])
+    expect(loaded.textures.strikelineTexture.image).toBe(canvases[1])
+    expect(loaded.textures.highwayTexture.needsUpdate).toBe(true)
+    expect(loaded.textures.strikelineTexture.needsUpdate).toBe(true)
+  })
+
+  it('asks the package which kind of highway it is about to draw, and skins that one', async () => {
+    // One ring per lane, so the count is what says the right layout was used: five frets, four
+    // drums, three for the six-fret guitars.
+    for (const [instrument, rings] of [
+      ['guitar', 5],
+      ['bass', 5],
+      ['keys', 5],
+      ['drums', 4],
+      ['guitarghl', 3]
+    ] as const) {
+      canvases.length = 0
+      const handle = await createPreview()
+      await handle.load({ ...urlConfig, instrument })
+      expect(getInstrumentType).toHaveBeenLastCalledWith(instrument)
+      expect(canvases[1].ops.filter((op) => op.op === 'ellipse')).toHaveLength(rings)
+    }
+  })
+
+  /**
+   * And the fallback, which is the reason the skin is best effort at all. A document with no
+   * stylesheet in it is the realistic version of this: the lane cannot be painted in Encore's
+   * colours because there are none to read. The preview still opens, on the package's own art.
+   */
+  it("plays the package's own highway rather than failing when the lane cannot be built", async () => {
+    tokens = {}
+    const handle = await createPreview()
+    await expect(handle.load(urlConfig)).resolves.toBeDefined()
+
+    const loaded = fakeElement.loadChart.mock.calls[0][0] as typeof preparedChart
+    expect((loaded.textures.highwayTexture.image as { tagName: string }).tagName).toBe('IMG')
+    expect(loaded.textures.highwayTexture.needsUpdate).toBe(false)
+    expect(fakeElement.setVolume).toHaveBeenCalledWith(80)
   })
 
   it('load returns the chart map for the requested track', async () => {
