@@ -6,7 +6,7 @@ import { globalQuery } from '../stores/global-search'
 import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
 import { DIFFICULTIES, type ChartData, type SearchResult } from '../api/enchor'
-import type { AdvancedQuery } from '../api/advanced'
+import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 import {
   EIGHT_TAG_CHARTER,
   EIGHT_TAG_CHARTER_TEXT
@@ -1598,6 +1598,185 @@ describe('Explore filter header', () => {
     await fireEvent.click(within(difficultyDots()).getByRole('button', { name: 'Expert' }))
     await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
     expect(lastParams().sort ?? null).toBeNull()
+  })
+})
+
+/**
+ * The chip row the approved design puts under the search row.
+ *
+ * Every chip is a second view of a field the advanced panel holds, never a second field. What
+ * these pin is that one property in both directions, the unit the length chip sends, and the two
+ * chips the design has that this header does not.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says how wide the row is or how
+ * many lines it wraps to. `scripts/measure-explore-header.mjs` answers that in a real engine.
+ */
+describe('Explore filter chips', () => {
+  const show = async (): Promise<void> => {
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    renderBrowse()
+    await screen.findByLabelText('Filter by instrument')
+  }
+
+  const lastAdvanced = (): AdvancedQuery =>
+    (searchCharts.mock.calls.at(-1)?.[0] as { advanced: AdvancedQuery }).advanced
+
+  const chip = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}:`) })
+
+  const openChip = async (name: string): Promise<void> => {
+    await fireEvent.click(chip(name))
+  }
+
+  const type = async (label: string, value: string): Promise<void> => {
+    await fireEvent.input(screen.getByLabelText(label), { target: { value } })
+  }
+
+  const apply = async (): Promise<void> => {
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+  }
+
+  it('carries the chips this API has a field for, and says Any until one is set', async () => {
+    // Genre, Year, Length, Charter and Album are five of the design's seven. Decade is not a
+    // field: the endpoint takes minYear and maxYear and nothing else, so a Decade chip would be
+    // the Year chip under a second name, which is the one thing this header may not have. Sort
+    // is not a filter and already has eleven orders in the row above.
+    await show()
+    const chips = [...document.querySelectorAll('.fdrops .fd')].map((el) =>
+      el.getAttribute('aria-label')
+    )
+    expect(chips).toEqual(['Genre: Any', 'Year: Any', 'Length: Any', 'Charter: Any', 'Album: Any'])
+    expect(chips.some((label) => label?.startsWith('Decade'))).toBe(false)
+    expect(chips.some((label) => label?.startsWith('Sort'))).toBe(false)
+  })
+
+  it('sends the advanced field a chip names, and reads the value back on the chip', async () => {
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+    expect(screen.getByRole('button', { name: 'Genre: Rock' })).toBeTruthy()
+  })
+
+  it('sends the length chip in minutes, which is what this API counts', async () => {
+    // The trap this view was burned by: a brief said seconds, a 60x conversion was built and
+    // pinned, and a 3 to 6 minute search answered with charts 3 to 6 hours long. The chip
+    // converts nothing, and the unit it names is read off ADVANCED_RANGES rather than restated.
+    await show()
+    await openChip('Length')
+    await type('Length from, in min', '3')
+    await type('Length to, in min', '6')
+    await apply()
+
+    await waitFor(() => expect(lastAdvanced().numbers.minLength).toBe('3'))
+    expect(lastAdvanced().numbers.maxLength).toBe('6')
+    expect(screen.getByRole('button', { name: 'Length: 3 to 6 min' })).toBeTruthy()
+  })
+
+  it('fills the year range from a decade, which is the only decade this API can answer', async () => {
+    await show()
+    await openChip('Year')
+    await fireEvent.click(screen.getByRole('button', { name: '2000s' }))
+
+    await waitFor(() => expect(lastAdvanced().numbers.minYear).toBe('2000'))
+    expect(lastAdvanced().numbers.maxYear).toBe('2009')
+    // Read back as the decade it is, because a range that is exactly a decade is one.
+    expect(screen.getByRole('button', { name: 'Year: 2000s' })).toBeTruthy()
+  })
+
+  it('is the same filter the panel holds, not a second copy of it', async () => {
+    // The same property the intensity band has to have, for the same reason. The chip writes
+    // the panel's own field through the store, so an open panel reads back what a chip set.
+    await show()
+    await openChip('Charter')
+    await type('Charter contains', 'Neversoft')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.charter.value).toBe('Neversoft'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Advanced search, 1 filter applied' }))
+    expect((screen.getByLabelText('Charter') as HTMLInputElement).value).toBe('Neversoft')
+  })
+
+  it('reads back what the panel applied, lit, without being told', async () => {
+    // The other direction, and the one that says the chip holds no value of its own: this query
+    // never went through a chip at all.
+    await show()
+    const query = emptyAdvanced()
+    query.text.album.value = 'Toxicity'
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+
+    const set = await screen.findByRole('button', { name: 'Album: Toxicity' })
+    expect(set.classList.contains('set')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Genre: Any' }).classList.contains('set')).toBe(false)
+  })
+
+  it('names an excluded field as an exclusion, because Exclude inverts what it means', async () => {
+    // A chip reading "Rock" over a search that is refusing Rock is the one lie this row could
+    // tell. Exclude stays in the panel; what it does shows here.
+    await show()
+    const query = emptyAdvanced()
+    query.text.genre = { value: 'Rock', exact: false, exclude: true }
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+
+    await screen.findByRole('button', { name: 'Genre: not Rock' })
+  })
+
+  it('empties the field it names, and nothing else', async () => {
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Metal')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Metal'))
+
+    await openChip('Album')
+    await type('Album contains', 'Toxicity')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.album.value).toBe('Toxicity'))
+
+    await openChip('Genre')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe(''))
+    expect(lastAdvanced().text.album.value).toBe('Toxicity')
+  })
+
+  it('leaves typing that was never searched standing in the panel', async () => {
+    // A chip applies its own field. The draft takes the same edit on top of what it is holding
+    // rather than being replaced by the applied query, so a form filled in and not yet searched
+    // is still there afterwards.
+    await show()
+    const draft = emptyAdvanced()
+    draft.text.name.value = 'Everlong'
+    browseSearch.setAdvancedDraft(draft)
+
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+
+    expect(get(browseSearch.advancedDraft).text.name.value).toBe('Everlong')
+    // And not applied: the chip asked about genre, not about the name nobody searched for.
+    expect(lastAdvanced().text.name.value).toBe('')
+  })
+
+  it('spends no request on a chip that was opened and applied unchanged', async () => {
+    // 50 requests a minute, and an Apply that changes no field would be one of them spent on the
+    // rows already on screen.
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+    const spent = searchCharts.mock.calls.length
+
+    await openChip('Genre')
+    await apply()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(searchCharts.mock.calls.length).toBe(spent)
   })
 })
 
