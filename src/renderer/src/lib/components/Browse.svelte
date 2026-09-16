@@ -1,3 +1,24 @@
+<script lang="ts" module>
+  import { writable } from 'svelte/store'
+
+  /**
+   * Whether the list leaves out the charts already installed.
+   *
+   * Module-scoped for the reason `browseSearch` is: this view is remounted by every navigation,
+   * and a toggle held per instance would come back off every time the user looked at a chart and
+   * came back. It is not in the search store because it narrows nothing that was asked of Chorus:
+   * the answer is the same either way, and what changes is which of its rows are drawn.
+   *
+   * Not persisted either. It is the answer to "what is left for me here", which is a question
+   * about this visit, and a filter that silently outlives the session is a list that looks wrong
+   * the next time it is opened.
+   *
+   * Exported for the same reason `browseSearch` is reachable from outside: a singleton one test
+   * leaves set is the next test's first paint, so the suite has to be able to put it back.
+   */
+  export const hideOwned = writable(false)
+</script>
+
 <script lang="ts">
   import { tick } from 'svelte'
   import { get } from 'svelte/store'
@@ -365,6 +386,61 @@
   // would be a second place for it to be wrong. What the queue cannot know is
   // what an earlier session downloaded, which is exactly what `inLibraryIds`
   // answers, so that is the one thing left out here.
+  /**
+   * The groups as the list draws them, which is all of them until Hide owned is on.
+   *
+   * A group is a song and its alternate versions, and ownership is per chart, so hiding cannot
+   * work a group at a time: the case that matters is owning one version of a song and wanting
+   * the others. What is dropped is the owned charts, and the first version left standing becomes
+   * the one the row is drawn for. A group with nothing left disappears.
+   *
+   * `songId` is what the {#each} keys on and every chart in a group shares it, so promoting an
+   * alternate does not re-key the row; it re-draws it.
+   */
+  const shownGroups = $derived(
+    $hideOwned
+      ? $groups.flatMap((group) => {
+          const kept = [group.primary, ...group.others].filter((c) => !inLibraryIds.has(c.chartId))
+          return kept.length === 0 ? [] : [{ primary: kept[0], others: kept.slice(1) }]
+        })
+      : $groups
+  )
+
+  /** How many loaded charts Hide owned is keeping off the screen, for the line that says so. */
+  const hiddenCount = $derived(
+    $hideOwned ? $results.length - shownGroups.reduce((n, g) => n + 1 + g.others.length, 0) : 0
+  )
+
+  /**
+   * Every chart the user can currently point at: the shown primaries, and the alternates of the
+   * groups that are open. A collapsed group's alternates are not on screen, which is the same
+   * rule `deselectAlternates` enforces in the store.
+   */
+  const onScreen = $derived(
+    new Set(
+      shownGroups.flatMap((g) => [
+        g.primary.chartId,
+        ...(g.primary.songId !== null && $expanded.has(g.primary.songId)
+          ? g.others.map((c) => c.chartId)
+          : [])
+      ])
+    )
+  )
+
+  /**
+   * Hiding a chart takes its checkbox off the screen, so anything ticked among the hidden ones
+   * would leave the selection bar counting rows nobody can see and a bulk download fetching a
+   * chart the user cannot point at. The same rule collapsing a group already follows, arrived at
+   * from the other direction. Every chart this drops is one Encore had already refused to
+   * download, so nothing that would have been fetched is lost.
+   */
+  $effect(() => {
+    if (!$hideOwned) return
+    for (const chartId of $selected) {
+      if (!onScreen.has(chartId)) search.toggleSelected(chartId)
+    }
+  })
+
   const picked = $derived($results.filter((c) => $selected.has(c.chartId)))
   const toQueue = $derived(picked.filter((c) => !inLibraryIds.has(c.chartId)))
   const alreadyOwned = $derived(picked.length - toQueue.length)
@@ -600,6 +676,8 @@
   // requests anything, and during that window an unasked question looks exactly like one that
   // came back empty. `error` has its own card above the table and speaks for itself.
   const showEmpty = $derived($searched && !$loading && !$error && $results.length === 0)
+  /** Rows came back and Hide owned left none of them on screen; see the note beside the markup. */
+  const allHidden = $derived(!$error && $results.length > 0 && shownGroups.length === 0)
   const activeQuery = $derived($globalQuery.trim())
 </script>
 
@@ -613,9 +691,6 @@
         aria-label="Search charts"
         oninput={(e) => onQueryInput(e.currentTarget.value)}
       />
-      <span class="count">
-        {#if $loading}SEARCHING…{:else if $found}{$found.toLocaleString()} RESULTS{/if}
-      </span>
     </div>
     <!-- The box used to be disabled while filters were applied, with a paragraph here explaining
          the takeover. It is not any more: typing drops the filters instead (see `setQuery`), so
@@ -762,21 +837,48 @@
     {#if $advancedOpen}
       <AdvancedSearch {search} />
     {/if}
-    <!-- Only while there is a selection: an empty selection is the state this
-         list is in nearly all the time, and a bar that is always there would
-         charge every visit for an occasional action. -->
-    {#if $selected.size > 0}
-      <div class="selbar">
-        <span class="sel-count">{$selected.size} selected</span>
-        {#if alreadyOwned > 0}
-          <!-- Named rather than quietly dropped: a batch that downloads fewer
-               charts than were ticked has to say so, and re-fetching a chart
-               the user already owns is the alternative nobody asked for. -->
-          <span class="sel-note"
-            >{alreadyOwned} already in your library, so left out of the download</span
-          >
+    <!-- The bar over the list: how many charts came back, what is being left out of the drawing,
+         and what to do with the ones that are ticked. It is about the answer, where everything
+         above it is about the question.
+
+         There is no "direct downloads only" here, which the design has. Every one of the 66
+         fields a search result carries was dumped on 2026-09-16 and none of them distinguishes
+         one kind of download from another: Encore fetches every chart from the same
+         files.enchor.us address, by md5, so on this source the toggle would be on or off over
+         the same list. It is a RhythmVerse idea, where an entry can point at somebody else's
+         file host, and Encore does not query RhythmVerse. A control that cannot change the
+         answer is worse than a missing one. -->
+    <div class="rbar">
+      <span class="found" aria-live="polite">
+        {#if $loading && $results.length === 0}
+          Searching…
+        {:else if $found}
+          <b>{$found.toLocaleString()}</b> results
         {/if}
-        <div class="sel-actions">
+      </span>
+      <!-- A button with aria-pressed rather than a checkbox: it is not a field in a form that
+           gets submitted, it takes effect on the press, and the pressed state is the thing a
+           screen reader has to hear. -->
+      <button
+        class="cbx"
+        aria-pressed={$hideOwned}
+        onclick={() => hideOwned.update((on) => !on)}
+        title="Leaves out the charts whose song, artist and charter match one already installed."
+      >
+        <i aria-hidden="true"></i>Hide owned
+      </button>
+      {#if hiddenCount > 0}
+        <!-- Counted over the rows that are loaded, not over the answer: Chorus was not asked
+             about the library and its total does not know about it. Saying so is the difference
+             between a number and a claim nobody can check. -->
+        <span class="hidden-note">{hiddenCount} of the loaded charts hidden</span>
+      {/if}
+      <!-- Only while there is a selection: an empty selection is the state this
+           list is in nearly all the time, and a bar that is always there would
+           charge every visit for an occasional action. -->
+      {#if $selected.size > 0}
+        <div class="selbar">
+          <span class="sel-count">{$selected.size} selected</span>
           <button
             class="sel-btn primary"
             disabled={toQueue.length === 0 || queueing}
@@ -790,11 +892,20 @@
             onclick={() => search.clearSelected()}>Clear</button
           >
         </div>
-        {#if bulkError}
-          <span class="sel-error">{bulkError}</span>
-        {/if}
-      </div>
-    {/if}
+      {/if}
+      {#if alreadyOwned > 0}
+        <!-- Named rather than quietly dropped: a batch that downloads fewer charts than were
+             ticked has to say so, and re-fetching a chart the user already owns is the
+             alternative nobody asked for. On a line of its own under the bar, because it is a
+             sentence and the bar is a row of chips. -->
+        <span class="sel-note"
+          >{alreadyOwned} already in your library, so left out of the download</span
+        >
+      {/if}
+      {#if bulkError}
+        <span class="sel-error">{bulkError}</span>
+      {/if}
+    </div>
     <!-- One line for the whole list rather than one inside each row: a download that could not
          be queued has a sentence's worth of reason, and a row has no space for a sentence. It
          sits above the results because that is where the rest of the list's news is.
@@ -964,7 +1075,7 @@
     <div class="table selectable" bind:this={tableEl}>
       {#if $mode === 'grid'}
         <div class="grid">
-          {#each $groups as group (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
+          {#each shownGroups as group (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
             {@const chart = group.primary}
             {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
             {@render card(chart, group.others.length, isExpanded, false)}
@@ -981,7 +1092,7 @@
           {/each}
         </div>
       {:else}
-        {#each $groups as group, i (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
+        {#each shownGroups as group, i (group.primary.songId !== null ? group.primary.songId : `c:${group.primary.chartId}`)}
           {@const chart = group.primary}
           {@const hasVersions = group.others.length > 0}
           {@const isExpanded = chart.songId !== null && $expanded.has(chart.songId)}
@@ -1121,6 +1232,15 @@
             Chorus Encore returned no charts at all. It may be having trouble.
             <button class="retry" onclick={() => search.retry()}>Retry</button>
           {/if}
+        </p>
+      {/if}
+      <!-- Charts came back and every one of them is already installed. Without this the list is
+           blank with a result count over it, which reads as a bug rather than as an answer, and
+           the way out is not the search box but the toggle that emptied it. -->
+      {#if allHidden}
+        <p class="empty">
+          Every chart loaded here is already in your library. Turn off Hide owned to see them, or
+          load more.
         </p>
       {/if}
     </div>
@@ -1277,13 +1397,6 @@
     background: var(--accent-dim);
     border-color: var(--accent);
     color: var(--text-1);
-  }
-  .count {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
   }
   /* Error is a quiet card, not accent-coloured text: the accent budget is spent
      on primary actions and active states, not on status copy. */
@@ -1442,20 +1555,90 @@
   .row .pick {
     justify-self: center;
   }
-  /* Sits above the results, not in the filter row: it is about the rows the
-     user has picked, not about which rows are shown. */
+  /* The bar over the list. One line of the things that are about the answer rather than about
+     the question: the count, what is being hidden, and what to do with what is ticked. It wraps
+     rather than clips, because two of its children are sentences that only appear sometimes. */
+  .rbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 13px;
+    padding: 8px 16px;
+    flex: none;
+    border-top: 1px solid var(--hairline);
+  }
+  .found {
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+  }
+  .found b {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-1);
+  }
+  .hidden-note {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
+  /* A tick box drawn rather than an <input>, because this is a button: the control is 14px of
+     mark with its word beside it, and the whole thing is the target. */
+  .cbx {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+    cursor: pointer;
+    transition: color var(--t-fast) var(--ease);
+  }
+  .cbx:hover,
+  .cbx:focus {
+    color: var(--text-1);
+  }
+  .cbx i {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid var(--border-2);
+    border-radius: 4px;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .cbx[aria-pressed='true'] {
+    color: var(--text-1);
+  }
+  .cbx[aria-pressed='true'] i {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  /* The tick itself: two borders of a box, rotated. Drawn rather than a glyph so it is the same
+     mark at the same weight whatever font the platform falls back to. */
+  .cbx[aria-pressed='true'] i::after {
+    content: '';
+    width: 6px;
+    height: 3px;
+    border-left: 1.8px solid #fff;
+    border-bottom: 1.8px solid #fff;
+    transform: rotate(-45deg) translate(1px, -1px);
+  }
+  /* Pushed to the far end of the bar, and lit, because it is the one thing in the row that is
+     an action rather than a reading. */
   .selbar {
     display: flex;
     align-items: center;
-    /* Wraps so the error, which is a sentence rather than a chip, drops to its
-       own line instead of squeezing the buttons off the end. */
-    flex-wrap: wrap;
-    gap: 10px;
-    margin: 0 16px 10px;
-    padding: 7px 12px;
+    gap: 8px;
+    margin-left: auto;
+    padding: 3px 4px 3px 11px;
     background: var(--accent-dim);
     border: 1px solid var(--accent);
-    border-radius: var(--radius);
+    border-radius: 9px;
   }
   .sel-count {
     font-family: var(--font-mono);
@@ -1463,22 +1646,19 @@
     letter-spacing: var(--ls-caps);
     color: var(--text-1);
   }
+  /* Both of these are sentences rather than chips, so they take the whole line under the bar
+     instead of squeezing the buttons off the end of it. */
   .sel-note {
+    flex-basis: 100%;
     font-size: var(--fs-secondary);
     color: var(--text-2);
   }
-  /* Full width, so it always lands under the row it explains. */
   .sel-error {
     flex-basis: 100%;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     line-height: var(--lh-prose);
     color: var(--text-2);
-  }
-  .sel-actions {
-    display: flex;
-    margin-left: auto;
-    gap: 8px;
   }
   .sel-btn {
     background: none;
