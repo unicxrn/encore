@@ -20,8 +20,10 @@
  *              has quietly become "Recently upda...".
  *   clipped    Anything that declares an ellipsis and ran out of room, the way the row script
  *              counts it.
- *   lines      How many lines the filter row wraps to. Wrapping is the design; wrapping to four
- *              lines at 509px would not be.
+ *   lines      How many lines the filter row wraps to, and how many the chip row under it wraps
+ *              to. Wrapping is the design; wrapping to four lines at 509px would not be.
+ *   rows       How many result rows fit in what is left of an 800px window. The header is paid
+ *              for out of the list, so this is the price of every line the header grows by.
  *   sideways   The header pushing the view or the document wider than its box.
  *   room       What is left for the results underneath. A header that grew into the list is a
  *              header that cost more than it is worth, and the number here is what it left.
@@ -33,6 +35,10 @@
  *
  *     BAND=on   choose an instrument first, which is what turns the intensity band live and
  *               swaps its "pick an instrument" hint for two working selects
+ *     CHIP=year open the Year chip's editor, which is the tallest of the five (it carries the
+ *               decade presets) and the one that can reach past the bottom of the header
+ *     SET=<text> with CHIP, type that into the open editor and apply it, which is how a chip
+ *               carrying a long value (a charter's name, say) gets measured
  *
  * Both states are worth measuring and neither is the worse one everywhere: off carries the hint,
  * on carries two enabled selects and a longer accessible name.
@@ -170,8 +176,14 @@ const SHAPE = `(() => {
     el.getAttribute('aria-label') ||
     (el.className.toString().split(' ')[0] || el.tagName.toLowerCase())
 
+  const chips = document.querySelector('.fdrops')
+
   const controls = []
-  for (const el of [...bar.querySelectorAll('input'), ...filters.querySelectorAll('select, button')]) {
+  for (const el of [
+    ...bar.querySelectorAll('input'),
+    ...filters.querySelectorAll('select, button'),
+    ...chips.querySelectorAll(':scope > .fd-wrap > .fd')
+  ]) {
     if (el.closest('.modes') && el.tagName === 'BUTTON' && controls.some((c) => c.what === 'modes')) continue
     const text =
       el.tagName === 'SELECT'
@@ -191,8 +203,10 @@ const SHAPE = `(() => {
   }
 
   // Everything in the header that declares an ellipsis, counted the way the row script counts it.
+  // The chips are in here because each one is capped at 240px and carries a value it did not
+  // choose the length of: a charter's name is whatever the charter called themselves.
   const clipped = []
-  for (const el of main.querySelectorAll('.searchbar *, .filters *, .dropped *')) {
+  for (const el of main.querySelectorAll('.searchbar *, .filters *, .fdrops *, .dropped *')) {
     if (getComputedStyle(el).textOverflow !== 'ellipsis') continue
     if (el.scrollWidth - el.clientWidth > 1) {
       clipped.push({
@@ -203,16 +217,50 @@ const SHAPE = `(() => {
     }
   }
 
-  // How many lines the filter row wrapped to, by the distinct tops of its own children.
-  const tops = [...new Set([...filters.children].map((el) => Math.round(el.getBoundingClientRect().top)))]
+  // How many lines a wrapping row took, by walking its children in visual order and starting a
+  // new line at the first one that clears the bottom of the line so far.
+  //
+  // Not by distinct tops, which is what this counted first and got wrong: the row is centred, so
+  // a 20px group of difficulty dots and a 27px select sitting side by side have different tops
+  // and counted as two lines. Overlap is the question, and overlap is what this asks.
+  const lines = (el) => {
+    const boxes = [...el.children]
+      .map((child) => child.getBoundingClientRect())
+      .sort((a, b) => a.top - b.top || a.left - b.left)
+    let count = 0
+    let bottom = -Infinity
+    for (const box of boxes) {
+      if (box.top >= bottom - 1) {
+        count += 1
+        bottom = box.bottom
+      } else {
+        bottom = Math.max(bottom, box.bottom)
+      }
+    }
+    return count
+  }
 
-  const headerBottom = filters.getBoundingClientRect().bottom
+  // What one result row costs, measured rather than assumed: the rows are variable height, so
+  // this is the first one and the count below is what fits beside it.
+  const firstRow = document.querySelector('.table .row, .table .card')
+  const rowHeight = firstRow ? Math.round(firstRow.getBoundingClientRect().height) : 0
+
+  // An open chip editor hangs over the list rather than pushing it down, so it is measured
+  // against the header it escapes rather than added to it.
+  const open = document.querySelector('.fdrops .pop')
+  const headerBottom = chips.getBoundingClientRect().bottom
   return {
     viewWidth: Math.round(main.getBoundingClientRect().width),
     headerHeight: Math.round(headerBottom - main.getBoundingClientRect().top),
     listHeight: Math.round(table.getBoundingClientRect().height),
     rows: document.querySelectorAll('.table .row, .table .card').length,
-    filterLines: tops.length,
+    rowHeight,
+    rowsThatFit: rowHeight > 0 ? Math.floor(table.getBoundingClientRect().height / rowHeight) : 0,
+    filterLines: lines(filters),
+    chipLines: lines(chips),
+    popOverhang: open
+      ? Math.round(open.getBoundingClientRect().bottom - headerBottom)
+      : null,
     controls,
     clipped,
     // Positive means the header is pushing its own column wider than the frame around it.
@@ -259,15 +307,65 @@ app.whenReady().then(async () => {
     )
     await waitFor(win, `document.querySelector('.band select:not([disabled])')`)
   }
+  // The list, not the grid the store opens in: a result row is what the header is paid for out
+  // of, and `rowsThatFit` below is only a number anyone can use if the things being counted are
+  // rows. The grid's cards are a different height and `measure-explore-row.mjs` is where they
+  // are measured.
+  await evalIn(win, `${named('List')}.click(), 1`)
+  await waitFor(win, `document.querySelector('.table .row')`)
+
+  const chipToOpen = process.env.CHIP
+  if (chipToOpen) {
+    // The editors are drawn only while one is open, and the Year one is the tall case: it is the
+    // only chip carrying the decade presets.
+    await evalIn(
+      win,
+      `(() => {
+        const el = document.querySelector('#chip-${chipToOpen}') ||
+          [...document.querySelectorAll('.fdrops .fd')]
+            .find(b => (b.getAttribute('aria-controls') || '') === 'chip-${chipToOpen}')
+        if (el && el.tagName === 'BUTTON') el.click()
+        return 1
+      })()`
+    )
+    await waitFor(win, `document.querySelector('#chip-${chipToOpen}')`)
+    // A chip carries a value it did not choose the length of: a charter's name is whatever the
+    // charter called themselves. SET is how the long case gets on screen, so `clipped` can say
+    // whether the 240px cap ellipsises it or the row is pushed sideways instead.
+    if (process.env.SET) {
+      await evalIn(
+        win,
+        `(() => {
+          const box = document.querySelector('#chip-${chipToOpen} input')
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+          setter.call(box, ${JSON.stringify(process.env.SET)})
+          box.dispatchEvent(new Event('input', { bubbles: true }))
+          ;[...document.querySelectorAll('#chip-${chipToOpen} button')]
+            .find(b => b.textContent.trim() === 'Apply').click()
+          return 1
+        })()`
+      )
+      await sleep(1500)
+    }
+  }
   await waitFor(win, `document.querySelectorAll('.row, .card').length > 0`)
   await sleep(3000)
 
   const shape = await evalIn(win, SHAPE)
-  console.log(`window ${width}x${height}  view ${shape.viewWidth}px  band ${band ? 'on' : 'off'}`)
+  console.log(
+    `window ${width}x${height}  view ${shape.viewWidth}px  band ${band ? 'on' : 'off'}${chipToOpen ? `  chip ${chipToOpen} open` : ''}`
+  )
   console.log(
     `  header        ${shape.headerHeight}px tall over a ${shape.listHeight}px list of ${shape.rows}`
   )
+  console.log(
+    `  rows left     ${shape.rowsThatFit} whole rows of ${shape.rowHeight}px in what the header left`
+  )
   console.log(`  filter row    ${shape.filterLines} line${shape.filterLines === 1 ? '' : 's'}`)
+  console.log(`  chip row      ${shape.chipLines} line${shape.chipLines === 1 ? '' : 's'}`)
+  if (shape.popOverhang !== null) {
+    console.log(`  open editor   ${shape.popOverhang}px past the bottom of the header`)
+  }
   console.log(`  sideways      view ${shape.sidewaysBy}px, document ${shape.docSidewaysBy}px`)
   console.log('  controls')
   for (const c of shape.controls) {
