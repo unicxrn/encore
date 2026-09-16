@@ -126,6 +126,7 @@ const answers = {
     return keys.map(() => STATE === 'empty')
   },
   downloadList: () => [],
+  favouritesList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' })
 }

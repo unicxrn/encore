@@ -114,6 +114,7 @@ const answers = {
     totalCharts: LIBRARY,
     unidentifiedCharts: 0
   }),
+  favouritesList: () => [],
   downloadList: () =>
     Array.from({ length: QUEUED }, (_, i) => ({
       md5: String(i).padStart(32, '0'),

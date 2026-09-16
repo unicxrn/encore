@@ -50,6 +50,7 @@ const answers = {
   catalogCount: () => 0,
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
+  favouritesList: () => [],
   // The real PlayDataStatus shape. Home's play panel asks this before it draws anything, and
   // an unavailable answer is the branch that costs nothing: no aggregate is fetched behind it.
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),

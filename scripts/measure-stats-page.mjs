@@ -107,6 +107,7 @@ const answers = {
   catalogFacets: () => ({ artists: [], genres: [], charters: [], years: [] }),
   existsByMeta: () => [],
   downloadList: () => [],
+  favouritesList: () => [],
   updatesLast: () => [],
   appUpdateStatus: () => ({
     currentVersion: '0.3.1',

@@ -165,6 +165,7 @@ const answers = {
     throw new Error('Refusing to open a path outside the library folders: ' + path)
   },
   downloadList: () => [],
+  favouritesList: () => [],
   updatesLast: () => [],
   // The real shape main pushes: state is an object with a kind, not a bare string. It was a
   // bare string here until the sidebar started drawing this, and the footer measured empty.

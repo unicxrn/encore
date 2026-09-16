@@ -35,6 +35,7 @@
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
   import { initDuplicates } from './lib/stores/duplicates'
+  import { loadFavourites } from './lib/stores/favourites'
   import { appUpdate, downloadAppUpdate, initAppUpdate } from './lib/stores/app-update'
   import { offeredUpdate } from '../../shared/app-update'
   import { globalQuery } from './lib/stores/global-search'
@@ -446,6 +447,9 @@
     // Read once for the launch rather than once per visit to the view, because the sidebar draws
     // a count off it and the sidebar is always mounted. See the store for what one read costs.
     const offDuplicates = initDuplicates()
+    // Once for the launch, for the reason the store gives: the rail asks which chart is hearted
+    // on every navigation, and App destroys the rail's neighbours on each one.
+    void loadFavourites()
     // Subscribed here rather than in Settings, because the two states that arrive unasked (the
     // startup check's result, and download progress) land while that tab is closed as often as
     // not, and a subscription that only exists while the panel is mounted would miss them.
