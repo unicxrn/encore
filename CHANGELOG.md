@@ -35,6 +35,10 @@ release.
   two quick actions, which chart source Explore searches, and whether a newer Encore exists. Two
   of those offer more than Encore can do yet, and say so on the control rather than looking live:
   there is no YARG library support, and Chorus Encore is the only source it searches.
+- The download folder template says what it would produce, on the settings the queue would
+  actually run with, so the one control in Settings written in a syntax no longer has to be
+  proved by a download. The example follows the field as you type; the setting itself is still
+  stored when you leave the field, not on every keystroke.
 
 ### Changed
 
@@ -88,6 +92,18 @@ release.
   pink-violet they were, the wash behind a selected row is a flat colour rather than a tint that
   changed with whatever it sat on, and hairlines are violet cast rather than white at low
   opacity. Scrollbar thumbs moved with the hairlines.
+- Settings answers four questions rather than listing seven sections: where your songs are, what
+  happens when Encore downloads, which Encore this is and where a new one comes from, and what
+  the repairs are costing you on disk. yt-dlp and ffmpeg moved out of the update section and in
+  with the downloading they serve, since one fetches video backgrounds and the other converts
+  them. Each group says in a sentence what it is for. The library folders sit in a well of their
+  own and their paths wrap rather than being cut off in the middle, because three folders that
+  differ only in their last segment are three identical rows once a path is ellipsised, and that
+  list is the highest-consequence setting in the app: Encore scans those folders, downloads into
+  the one you pick, and refuses to write to a chart outside them. Removing one now says so.
+  Measured at every width the window supports with the chart column both drawn and hidden,
+  including a 100 character library path at the 509px the view has at a 1121px window, where it
+  wraps to four lines and nothing is clipped or pushed sideways.
 
 ### Fixed
 
