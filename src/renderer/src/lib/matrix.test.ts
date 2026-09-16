@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countInstruments, diffMatrix, instrumentColorVar } from './matrix'
+import { countInstruments, diffMatrix, instrumentColorVar, partMatrix } from './matrix'
 import type { MatrixRow } from './matrix'
 
 describe('diffMatrix', () => {
@@ -276,5 +276,113 @@ describe('instrumentColorVar', () => {
   // as nothing: the colour would be a claim about which instrument it is.
   it('refuses to guess for a key it has never heard of', () => {
     expect(instrumentColorVar('theremin')).toBeNull()
+  })
+})
+
+describe('partMatrix', () => {
+  const counts = [
+    { instrument: 'guitar', difficulty: 'hard', count: 902 },
+    { instrument: 'guitar', difficulty: 'expert', count: 1408 },
+    { instrument: 'bass', difficulty: 'expert', count: 800 }
+  ]
+
+  it('gives an instrument a row when it carries notes, rated or not', () => {
+    const rows = partMatrix({ noteCounts: counts })
+    expect(rows.map((row) => row.instrument)).toEqual(['guitar', 'bass'])
+    expect(rows[0].state).toEqual({ kind: 'unrated' })
+    expect(rows[0].rating).toBeNull()
+  })
+
+  it('carries the note count and the peak of every charted square', () => {
+    const rows = partMatrix({
+      noteCounts: counts,
+      maxNps: [{ instrument: 'guitar', difficulty: 'expert', nps: 9.4 }]
+    })
+    expect(rows[0].cells.X).toEqual({ kind: 'charted', count: 1408, nps: 9.4 })
+    // Charted, and nobody measured a peak for it. Null rather than 0: a chart with 902 notes
+    // does not have a peak of zero notes a second.
+    expect(rows[0].cells.H).toEqual({ kind: 'charted', count: 902, nps: null })
+    expect(rows[0].cells.E).toEqual({ kind: 'uncharted' })
+  })
+
+  it('keeps the rating whole, however far past the scale it runs', () => {
+    const rows = partMatrix({ noteCounts: counts, ratings: { guitar: 73 } })
+    expect(rows[0].state).toEqual({ kind: 'rated', tier: 73 })
+    expect(rows[0].rating).toBe(73)
+  })
+
+  // song.ini's "unset" sentinel reaches the renderer raw from the Encore API and normalized to
+  // null by the scanner. Both are the same answer and neither is a tier.
+  it('reads -1 and null as no rating at all', () => {
+    expect(partMatrix({ noteCounts: counts, ratings: { guitar: -1 } })[0].state).toEqual({
+      kind: 'unrated'
+    })
+    expect(partMatrix({ noteCounts: counts, ratings: { guitar: null } })[0].state).toEqual({
+      kind: 'unrated'
+    })
+  })
+
+  /**
+   * The notes win, and the row still appears. This is scan-chart's `extraValue`: measured
+   * against api.enchor.us, six charts in a hundred rate a part their notes do not contain.
+   * `diffMatrix` has no row for it at all, which is right for a list of previewable tracks and
+   * wrong for a page reporting what a chart claims.
+   */
+  it('reports a rated part with no notes as absent rather than dropping it', () => {
+    const rows = partMatrix({ noteCounts: counts, ratings: { keys: 3 } })
+    const keys = rows.find((row) => row.instrument === 'keys')
+    expect(keys?.state).toEqual({ kind: 'absent' })
+    expect(keys?.rating).toBe(3)
+    expect(keys?.cells.X).toEqual({ kind: 'uncharted' })
+    expect(diffMatrix(counts).some((row) => row.instrument === 'keys')).toBe(false)
+  })
+
+  /**
+   * An empty noteCounts is "nobody has read this chart", not "this chart is empty". Every
+   * catalog row carries one until a scan fills it in, and the ratings beside it are all that is
+   * known; drawing them as `uncharted` would turn "not counted" into "counted and empty".
+   */
+  it('falls back to the ratings when nothing has counted the notes', () => {
+    const rows = partMatrix({ noteCounts: [], ratings: { guitar: 4, drums: 5 } })
+    expect(rows.map((row) => row.instrument)).toEqual(['guitar', 'drums'])
+    expect(rows[0].state).toEqual({ kind: 'rated', tier: 4 })
+    expect(rows[0].cells.X).toEqual({ kind: 'unread' })
+    expect(rows[0].cells.E).toEqual({ kind: 'unread' })
+  })
+
+  it('has nothing to say about a chart with neither notes nor ratings', () => {
+    expect(partMatrix({})).toEqual([])
+    expect(partMatrix({ noteCounts: null, ratings: null })).toEqual([])
+  })
+
+  // A zero count is a measurement, and it marks nothing present: same rule diffMatrix keeps.
+  it('leaves out an instrument whose only counts are zero and which nobody rated', () => {
+    const rows = partMatrix({
+      noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 0 }]
+    })
+    expect(rows).toEqual([])
+  })
+
+  it('keeps the canonical instrument order rather than the order the counts arrived in', () => {
+    const rows = partMatrix({
+      noteCounts: [
+        { instrument: 'bassghl', difficulty: 'expert', count: 1 },
+        { instrument: 'drums', difficulty: 'expert', count: 1 },
+        { instrument: 'guitar', difficulty: 'expert', count: 1 }
+      ]
+    })
+    expect(rows.map((row) => row.instrument)).toEqual(['guitar', 'drums', 'bassghl'])
+  })
+
+  it('ignores an instrument key and a difficulty name it has never heard of', () => {
+    const rows = partMatrix({
+      noteCounts: [
+        { instrument: 'theremin', difficulty: 'expert', count: 50 },
+        { instrument: 'guitar', difficulty: 'impossible', count: 50 },
+        { instrument: 'guitar', difficulty: 'expert', count: 10 }
+      ]
+    })
+    expect(rows.map((row) => row.instrument)).toEqual(['guitar'])
+    expect(rows[0].cells.X).toEqual({ kind: 'charted', count: 10, nps: null })
   })
 })
