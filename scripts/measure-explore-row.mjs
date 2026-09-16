@@ -95,10 +95,22 @@ const records = Array.from({ length: 30 }, (_, i) => ({
   hasAlbumArt: false,
   hasLyrics: false
 }))
+// What Installed's health mark reads: the rows Encore's own issue scan left in main's memory,
+// keyed by chart path. Two charts in three are clean, which is roughly the proportion measured
+// against api.enchor.us, so the column is measured as it is actually drawn rather than as a
+// column of thirty dots.
+const issues = records.flatMap((row, i) =>
+  i % 3 === 1
+    ? [{ chartPath: row.path, kind: 'folder', code: 'noChart', description: 'no chart file' }]
+    : i % 3 === 2
+      ? [{ chartPath: row.path, kind: 'folder', code: 'albumArtSize', description: 'cover 2000px' }]
+      : []
+)
 const answers = {
   settingsGet: () => settings,
   catalogQuery: () => records,
   catalogCount: () => records.length,
+  issuesLast: () => issues,
   // Installed asks for these on its way to a first paint and reads into the answer without
   // checking, so an undefined here is the whole view crashing rather than a missing filter.
   catalogFacets: () => ({ artists: [], genres: [], charters: [], years: [] }),
@@ -197,6 +209,18 @@ const SHAPE = `(() => {
     byHeight[h] = tallest
   }
 
+  // The health marks actually drawn. Nothing on a clean chart is the rule, so what is checked is
+  // that the ones with something to say got a mark and that the empty track still holds its
+  // column open: a health cell that collapsed would step every row after it sideways.
+  const health = rows.map((row) => {
+    const cell = row.querySelector('.health')
+    if (!cell) return null
+    return {
+      track: Math.round(cell.getBoundingClientRect().width),
+      marked: !!cell.querySelector('.dot')
+    }
+  }).filter(Boolean)
+
   // The difficulty column against its own track. The pips are fixed at 3px with 2px gaps and
   // 6px between the three parts, so a track that shrank under them would clip silently.
   const pips = rows.map((row) => {
@@ -209,13 +233,30 @@ const SHAPE = `(() => {
     return { track: Math.round(cell.getBoundingClientRect().width), drawn, parts: parts.length }
   }).filter(Boolean)
 
+  // Installed's row is a button and its two actions cannot sit inside it, so they are siblings
+  // under .row-wrap and every pixel they take comes off the row's own grid. That is invisible in
+  // the track list and is the first thing to look at when the title is tighter than the tracks
+  // say it should be. No backticks in this comment: it is inside a template literal.
+  const wrap = document.querySelector('.row-wrap')
+  const actions = wrap
+    ? [...wrap.children].filter((el) => el !== wrap.querySelector('.row')).map((el) => ({
+        cls: el.className.toString().split(' ')[0],
+        width: Math.round(el.getBoundingClientRect().width)
+      }))
+    : []
+
   return {
     viewWidth: Math.round(main.getBoundingClientRect().width),
+    rowWidth: rows.length ? Math.round(rows[0].getBoundingClientRect().width) : null,
+    actions,
     rows: rows.length,
     rowHeights: heights,
     pipTrack: pips.length ? Math.min(...pips.map(p => p.track)) : null,
     pipDrawn: pips.length ? Math.max(...pips.map(p => p.drawn)) : null,
     pipGroups: [...new Set(pips.map(p => p.parts))],
+    healthTracks: [...new Set(health.map(h => h.track))],
+    healthMarked: health.filter(h => h.marked).length,
+    healthOf: health.length,
     boxes: Object.values(boxes).sort((a, b) => a.narrowest - b.narrowest),
     byHeight,
     // Positive means the list is wider than the box it is in, which is Explore scrolling
@@ -299,11 +340,21 @@ app.whenReady().then(async () => {
 
   const shape = await evalIn(win, SHAPE)
   console.log(`window ${width}x${height}  view ${shape.viewWidth}px  ${view}`)
-  console.log(`  rows          ${shape.rows}`)
+  console.log(
+    `  rows          ${shape.rows}${shape.rowWidth === null ? '' : `, each ${shape.rowWidth}px wide`}`
+  )
+  if (shape.actions.length) {
+    console.log(`  beside a row  ${shape.actions.map((a) => `.${a.cls} ${a.width}px`).join(', ')}`)
+  }
   console.log(`  row heights   ${JSON.stringify(shape.rowHeights)}`)
   console.log(
     `  pips          ${shape.pipDrawn}px drawn in a ${shape.pipTrack}px track, ${JSON.stringify(shape.pipGroups)} groups per row`
   )
+  if (shape.healthOf) {
+    console.log(
+      `  health        ${shape.healthMarked}/${shape.healthOf} marked, track ${JSON.stringify(shape.healthTracks)}px`
+    )
+  }
   console.log(`  sideways      list ${shape.sidewaysBy}px, document ${shape.docSidewaysBy}px`)
   for (const [h, tallest] of Object.entries(shape.byHeight)) {
     console.log(`    ${h}px tall, set by .${tallest.cls} at ${tallest.box}px`)

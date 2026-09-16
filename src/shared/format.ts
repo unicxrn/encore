@@ -74,26 +74,6 @@ export function partState(
 }
 
 /**
- * Render one instrument's difficulty cell for the library list.
- *
- * Three distinct states the old single-number column could not tell apart: rated, charted but
- * unrated, and not charted. An empty string means "this chart has no such track". Showing a
- * dash there would claim the instrument exists with no rating.
- *
- * Reads `partState` rather than deciding again, so the text cell and the pips drawn by
- * `DiffPips.svelte` cannot come to different conclusions about the same chart.
- */
-export function instrumentDiff(
-  instruments: readonly string[],
-  instrument: string,
-  diff: number | null | undefined
-): string {
-  const state = partState(instruments, instrument, diff)
-  if (state.kind === 'absent') return ''
-  return state.kind === 'unrated' ? '–' : String(state.tier)
-}
-
-/**
  * A readable stand-in for a chart with no parsed title.
  *
  * The full path is technically accurate and useless to read: a library list of forty

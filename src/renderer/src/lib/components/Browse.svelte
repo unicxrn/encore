@@ -490,7 +490,9 @@
 
   function healthOf(chart: ChartData): { summary: ReturnType<typeof issueSummary>; title: string } {
     const summary = issueSummary(chart, platform)
-    return { summary, title: issueTitle(summary) ?? '' }
+    // Chorus Encore is who looked: these issues arrived with the search result, and nothing
+    // local has read the chart.
+    return { summary, title: issueTitle(summary, 'Chorus') ?? '' }
   }
 
   /** Artist, album and year on one line, with the separators of the empty fields dropped. */
