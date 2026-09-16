@@ -1,10 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { tick } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Rail from './Rail.svelte'
 import type { ChartRecord } from '../../../../shared/schemas'
 import type { ChartData } from '../api/enchor'
 import { get } from 'svelte/store'
-import { closePreview, viewportMounted, viewportOwner } from '../stores/preview-controller'
+import {
+  closePreview,
+  progress,
+  viewportMounted,
+  viewportOwner
+} from '../stores/preview-controller'
 import { favourites } from '../stores/favourites'
 import { setlists } from '../stores/setlists'
 
@@ -1081,5 +1087,55 @@ describe('Rail: the highway with nothing playing', () => {
     })
     // Faded rather than removed, so the frame cannot change size when the real highway arrives.
     expect(document.querySelector('.rail .hw .rest')).toBeTruthy()
+  })
+})
+
+/**
+ * The rail's transport is the one the user actually reaches: the player bar cedes its own
+ * whenever a viewport is registered, and a preview can only exist inside one.
+ *
+ * Widths and clipping are `scripts/measure-rail-panel.mjs`'s business. What is pinnable here is
+ * the shape of the row and that both numbers and both moving parts read one value.
+ */
+describe('Rail: the scrubber and its times', () => {
+  afterEach(() => {
+    closePreview()
+    viewportMounted.set(false)
+    viewportOwner.set(null)
+  })
+
+  it('puts a time either side of the track, with a fill and a handle on it', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    const transport = document.querySelector('.rail .transport') as HTMLElement
+
+    expect([...transport.children].map((el) => el.className.split(' ')[0])).toEqual([
+      'play',
+      'time',
+      'seek',
+      'time'
+    ])
+    const times = [...transport.querySelectorAll('.time')].map((el) => el.textContent)
+    expect(times).toEqual(['0:00', '0:00'])
+    expect(transport.querySelector('.seek .track .fill')).toBeTruthy()
+    expect(transport.querySelector('.seek .knob')).toBeTruthy()
+  })
+
+  it('moves the fill and the handle off the same number, so they cannot disagree', async () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+    await waitFor(() => {
+      if (!get(viewportMounted)) throw new Error('viewport not claimed')
+    })
+
+    progress.set({ percent: 42, currentMs: 42_000, totalMs: 100_000 })
+    await tick()
+
+    const fill = document.querySelector('.rail .seek .fill') as HTMLElement
+    const knob = document.querySelector('.rail .seek .knob') as HTMLElement
+    expect(fill.style.getPropertyValue('--p')).toBe('0.42')
+    expect(knob.style.getPropertyValue('--p')).toBe('0.42')
+    expect(
+      [...document.querySelectorAll('.rail .transport .time')].map((e) => e.textContent)
+    ).toEqual(['0:42', '1:40'])
   })
 })

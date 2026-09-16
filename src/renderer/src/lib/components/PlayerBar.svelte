@@ -157,6 +157,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="seek" class:disabled={idle} onclick={onSeekClick}>
       <div class="track"><div class="fill" style:--p={percent / 100}></div></div>
+      <div class="knob" style:--p={percent / 100}></div>
     </div>
     <span class="time">{totalMs > 0 ? msToTime(totalMs) : '0:00'}</span>
   </div>
@@ -447,6 +448,7 @@
     text-align: center;
   }
   .seek {
+    position: relative;
     flex: 1;
     max-width: 480px;
     padding: 8px 0;
@@ -457,19 +459,48 @@
   }
   .track {
     height: 4px;
-    border-radius: 2px;
+    border-radius: 999px;
     background: var(--surface-2);
     overflow: hidden;
   }
   /* Driven by `--p` (0 to 1) through a transform rather than by an animated width: a width change
-     re-lays out the track on every progress tick, while scaleX is composited. Same visual. */
+     re-lays out the track on every progress tick, while scaleX is composited. Same visual.
+     The gradient is painted before the scale, so it runs across the filled part rather than
+     across the whole track, which is the design's own arrangement. */
   .fill {
     height: 100%;
     width: 100%;
-    background: var(--accent);
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-hi));
     transform-origin: left;
     transform: scaleX(var(--p, 0));
     transition: transform var(--t-fast) linear;
+  }
+  /* The handle the design draws, and the thing that says this bar can be dragged rather than
+     merely watched. A zero-height box the width of the track, translated by a percentage of its
+     own width and therefore of the track: the same composited move as the fill, with no
+     arithmetic that needs to know how wide the bar is. The dot hangs off the box's left edge so
+     that edge is the position and the dot is centred on it. */
+  .knob {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 0;
+    pointer-events: none;
+    transform: translateX(calc(var(--p, 0) * 100%));
+    transition: transform var(--t-fast) linear;
+  }
+  .knob::after {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--elev-1);
   }
   .right {
     display: flex;

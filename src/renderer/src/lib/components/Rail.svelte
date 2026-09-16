@@ -746,12 +746,14 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5 17.5 12 9 17.5Z" /></svg>
           {/if}
         </button>
+        <span class="time mono">{msToTime(currentMs)}</span>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="seek" onclick={onSeekClick}>
-          <div class="seek-fill" style="width:{percent}%"></div>
+          <div class="track"><div class="fill" style:--p={percent / 100}></div></div>
+          <div class="knob" style:--p={percent / 100}></div>
         </div>
-        <span class="time mono">{msToTime(currentMs)} / {msToTime(totalMs)}</span>
+        <span class="time mono">{msToTime(totalMs)}</span>
       </div>
       <p class="state mono" role="status">{stateLine}</p>
     </section>
@@ -1227,23 +1229,67 @@
     opacity: 0.5;
     cursor: default;
   }
+  /* The 4px track the design draws, inside a 20px box the pointer can actually hit. Vertical
+     padding only, so the box the click is measured against is still exactly the track's width
+     (`onSeekClick` reads this element's own rect), and the row's height is still set by the
+     28px play button beside it. */
   .seek {
+    position: relative;
     flex: 1;
     min-width: 0;
+    padding: 8px 0;
+    cursor: pointer;
+  }
+  .track {
     height: 4px;
     border-radius: 999px;
     background: var(--ground-4);
-    cursor: pointer;
+    overflow: hidden;
   }
-  .seek-fill {
+  /* Driven by `--p` (0 to 1) through a transform rather than an animated width, which is what
+     the player bar's own fill does: scaleX is composited where a width re-lays out the track on
+     every progress tick. The gradient is painted before the scale, so it runs across the filled
+     part rather than across the whole track, which is the design's own arrangement. */
+  .fill {
     height: 100%;
+    width: 100%;
     border-radius: 999px;
-    background: var(--accent);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hi));
+    transform-origin: left;
+    transform: scaleX(var(--p, 0));
+    transition: transform var(--t-fast) linear;
+  }
+  /* The handle. A zero-height box the width of the track, translated by a percentage of its own
+     width, which is therefore a percentage of the track: the same composited move as the fill,
+     and no arithmetic that needs to know how wide the column is. The dot hangs off its left
+     edge, so the box's left edge is the position and the dot is centred on it. */
+  .knob {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 0;
+    pointer-events: none;
+    transform: translateX(calc(var(--p, 0) * 100%));
+    transition: transform var(--t-fast) linear;
+  }
+  .knob::after {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--elev-1);
   }
   .time {
     font-size: var(--fs-caption);
     color: var(--text-3);
     flex-shrink: 0;
+    min-width: 4ch;
+    text-align: center;
   }
   /* No text, no row, and no gap above it either: an empty element still holds a flex slot, and
      the slot is most of what the line costs. */

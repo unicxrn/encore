@@ -462,3 +462,26 @@ describe('PlayerBar: the name group', () => {
     )
   })
 })
+
+/**
+ * The scrubber. Reachable only while nothing is playing, which is the whole of the second fact
+ * this bar is built around: a preview can only live inside a registered viewport, and the
+ * transport is ceded for as long as one is registered. It is still drawn the way the design draws
+ * it, because it is the same control the rail and the chart page carry, where it IS reached.
+ */
+describe('PlayerBar: the scrubber', () => {
+  it('draws a fill and a handle, both off the same number', async () => {
+    nowPlaying.set(playing())
+    progress.set({ percent: 42, currentMs: 42_000, totalMs: 100_000 })
+    const { container } = render(PlayerBar)
+    await tick()
+
+    const fill = container.querySelector('.seek .fill') as HTMLElement
+    const knob = container.querySelector('.seek .knob') as HTMLElement
+    expect(fill.style.getPropertyValue('--p')).toBe('0.42')
+    expect(knob.style.getPropertyValue('--p')).toBe('0.42')
+    expect([...container.querySelectorAll('.transport .time')].map((el) => el.textContent)).toEqual(
+      ['0:42', '1:40']
+    )
+  })
+})
