@@ -51,11 +51,20 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-/** The state word beside one health row, read off the row that carries the label. */
-function healthState(label: string): string {
-  const row = screen.getByText(label).closest('.health-row')
-  if (row === null) throw new Error(`no health row for ${label}`)
-  return row.querySelector('.health-state')?.textContent?.trim() ?? ''
+/**
+ * One health row, addressed by the asset it is about rather than by its words.
+ *
+ * The words are the thing under test: the row says "Album art", "No album art" or "Album art
+ * unknown", so a helper that found the row BY its text could only ever find the state it was
+ * already looking for. `data-key` is the asset kind, which does not move.
+ */
+function healthRow(key: string): { state: string; says: string } {
+  const row = document.querySelector(`.health-row[data-key="${key}"]`)
+  if (row === null) throw new Error(`no health row for ${key}`)
+  return {
+    state: row.getAttribute('data-state') ?? '',
+    says: row.querySelector('.health-label')?.textContent?.trim() ?? ''
+  }
 }
 
 describe('Rail: nothing selected', () => {
@@ -87,8 +96,8 @@ describe('Rail: a chart from the library', () => {
   it('reports each asset the scan read, as read', () => {
     const target = { kind: 'local' as const, record: record({ hasAlbumArt: true }) }
     render(Rail, { props: { onOpenDetail: () => {}, target } })
-    expect(healthState('Album art')).toBe('OK')
-    expect(healthState('Lyrics')).toBe('MISSING')
+    expect(healthRow('albumArt')).toEqual({ state: 'present', says: 'Album art' })
+    expect(healthRow('lyrics')).toEqual({ state: 'missing', says: 'No lyrics' })
   })
 
   it('offers the instruments the chart actually carries', () => {
@@ -130,10 +139,83 @@ describe('Rail: a chart from Chorus', () => {
         target: { kind: 'remote', chart: chart({ hasVideoBackground: true }) }
       }
     })
-    expect(healthState('Video')).toBe('OK')
-    expect(healthState('Album art')).toBe('MISSING')
-    expect(healthState('Background')).toBe('UNKNOWN')
-    expect(healthState('Lyrics')).toBe('UNKNOWN')
+    expect(healthRow('video')).toEqual({ state: 'present', says: 'Video' })
+    expect(healthRow('albumArt')).toEqual({ state: 'missing', says: 'No album art' })
+    expect(healthRow('background')).toEqual({ state: 'unknown', says: 'Background unknown' })
+    expect(healthRow('lyrics')).toEqual({ state: 'unknown', says: 'Lyrics unknown' })
+  })
+})
+
+/**
+ * The ring, which is the half of the health card a list cannot do.
+ *
+ * jsdom computes no layout, so nothing here sees a ring: what it sees is the arc's own numbers
+ * and the label a screen reader is handed. Both can be wrong while the circle still looks
+ * round, which is why they are pinned here and the geometry is measured in
+ * `scripts/measure-rail-panel.mjs` instead.
+ */
+describe('Rail: the health ring', () => {
+  const ring = (): SVGCircleElement => {
+    const arc = document.querySelectorAll('.ring circle')[1] as SVGCircleElement | undefined
+    if (!arc) throw new Error('no health ring')
+    return arc
+  }
+  /** How much of the circle the arc covers, as a fraction, read off the dash attributes. */
+  const swept = (): number => {
+    const arc = ring()
+    const length = Number(arc.getAttribute('stroke-dasharray'))
+    const offset = Number(arc.getAttribute('stroke-dashoffset'))
+    return (length - offset) / length
+  }
+
+  it('draws a full circle for a chart with nothing missing', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({
+        hasAlbumArt: true,
+        hasBackground: true,
+        hasVideo: true,
+        hasLyrics: true,
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 9 }]
+      })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(document.querySelector('.ring-value')?.textContent?.trim()).toBe('100')
+    expect(swept()).toBeCloseTo(1, 6)
+  })
+
+  // Four of five is 80 and the arc is four fifths of the way round. A ring that printed the
+  // number without moving the arc, or moved the arc without the number, is the failure here.
+  it('moves the arc with the number', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({
+        hasAlbumArt: true,
+        hasBackground: true,
+        hasVideo: true,
+        hasLyrics: false,
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 9 }]
+      })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(document.querySelector('.ring-value')?.textContent?.trim()).toBe('80')
+    expect(swept()).toBeCloseTo(0.8, 6)
+  })
+
+  // The number alone cannot say what it is a fraction of, and for a chart on Chorus it is a
+  // fraction of two. The heading carries the denominator and the ring's own label repeats it,
+  // because a ring reading 50 with no denominator invites "half the assets are missing".
+  it('says what the number is a fraction of, for a chart nobody has read', () => {
+    const target = {
+      kind: 'remote' as const,
+      chart: chart({ albumArtMd5: 'a'.repeat(32), hasVideoBackground: false })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(document.querySelector('.ring-value')?.textContent?.trim()).toBe('50')
+    expect(screen.getByText('1 of 2 checks')).toBeTruthy()
+    expect(document.querySelector('.ring')?.getAttribute('aria-label')).toBe(
+      '50 out of 100: 1 of 2 checks passed'
+    )
   })
 })
 
@@ -199,9 +281,9 @@ describe('Rail: what the selected track is made of', () => {
       record: record({ noteCounts: COUNTS, maxNps: NPS, songLength: 273_000 })
     }
     render(Rail, { props: { onOpenDetail: () => {}, target } })
-    expect(stat('NOTES')).toBe('1,420')
-    expect(stat('PEAK NPS')).toBe('12.3')
-    expect(stat('LENGTH')).toBe('4:33')
+    expect(stat('Notes')).toBe('1,420')
+    expect(stat('NPS peak')).toBe('12.3')
+    expect(stat('Length')).toBe('4:33')
   })
 
   it('follows the instrument pick rather than totalling the chart', async () => {
@@ -212,8 +294,8 @@ describe('Rail: what the selected track is made of', () => {
     render(Rail, { props: { onOpenDetail: () => {}, target } })
     const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
     await fireEvent.change(instrument, { target: { value: 'drums' } })
-    expect(stat('NOTES')).toBe('2,317')
-    expect(stat('PEAK NPS')).toBe('9.0')
+    expect(stat('Notes')).toBe('2,317')
+    expect(stat('NPS peak')).toBe('9.0')
   })
 
   it('follows the difficulty pick too', async () => {
@@ -224,24 +306,24 @@ describe('Rail: what the selected track is made of', () => {
     render(Rail, { props: { onOpenDetail: () => {}, target } })
     const difficulty = document.querySelectorAll('.picks select')[1] as HTMLSelectElement
     await fireEvent.change(difficulty, { target: { value: 'hard' } })
-    expect(stat('NOTES')).toBe('900')
+    expect(stat('Notes')).toBe('900')
     // Nothing measured a peak rate for Hard, and a chart with 900 notes on it plainly has one.
     // The dash is the only honest answer; a 0 would be a number nobody took.
-    expect(stat('PEAK NPS')).toBe('—')
+    expect(stat('NPS peak')).toBe('—')
   })
 
   it('answers with a dash where the scan read nothing, never with a zero', () => {
     const target = { kind: 'local' as const, record: record({ noteCounts: [], maxNps: [] }) }
     render(Rail, { props: { onOpenDetail: () => {}, target } })
-    expect(stat('NOTES')).toBe('—')
-    expect(stat('PEAK NPS')).toBe('—')
-    expect(stat('LENGTH')).toBe('—')
+    expect(stat('Notes')).toBe('—')
+    expect(stat('NPS peak')).toBe('—')
+    expect(stat('Length')).toBe('—')
   })
 
   it("reads a remote chart's length from the field the API names it with", () => {
     const target = { kind: 'remote' as const, chart: chart({ song_length: 187_000 }) }
     render(Rail, { props: { onOpenDetail: () => {}, target } })
-    expect(stat('LENGTH')).toBe('3:07')
+    expect(stat('Length')).toBe('3:07')
   })
 
   // The flag is about the drum chart, so it is shown against the drum chart and nowhere else.
@@ -267,6 +349,203 @@ describe('Rail: what the selected track is made of', () => {
     const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
     await fireEvent.change(instrument, { target: { value: 'drums' } })
     expect(screen.queryByText('2X KICK')).toBeNull()
+  })
+})
+
+/**
+ * The statistics card, which is eight cells and has to stay eight.
+ *
+ * The design's own eight included sustains, chords, HOPO share and star power, none of which
+ * Encore records. What went in instead has to be true of every chart the card can be shown for,
+ * which is the half of it these pin: a cell with nothing behind it reads as a zero, and a zero
+ * is a measurement.
+ */
+describe('Rail: the eight statistics', () => {
+  const cellLabels = (): string[] =>
+    [...document.querySelectorAll('.kv .stat-label')].map((el) => el.textContent?.trim() ?? '')
+
+  const EIGHT = [
+    'Notes',
+    'Intensity',
+    'NPS avg',
+    'Difficulties',
+    'NPS peak',
+    'Tracks',
+    'Length',
+    'Solos'
+  ]
+
+  it('draws eight cells for a library chart', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    expect(cellLabels()).toEqual(EIGHT)
+  })
+
+  // The same eight, so the card does not change shape when the user clicks from a search result
+  // to a chart they own. Every one of them is answerable from both sources or dashes on both.
+  it('draws the same eight for a chart from Chorus', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'remote', chart: chart() } } })
+    expect(cellLabels()).toEqual(EIGHT)
+  })
+
+  // Nothing stores an average, so it is notes divided by the SONG's length: 1,420 over 273
+  // seconds is 5.2. Over the charted span it would be higher, and the label says "of song"
+  // nowhere, which is what the comment on `avgNps` is for.
+  it('divides the selected track by the song length for the average', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({ noteCounts: COUNTS, maxNps: NPS, songLength: 273_000 })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('NPS avg')).toBe('5.2')
+  })
+
+  it('has no average for a chart with no length, rather than dividing by zero', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({ noteCounts: COUNTS, songLength: null })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('NPS avg')).toBe('—')
+  })
+
+  // song.ini's rating for the part on screen and no other part. The catalog carries ten of
+  // these and the API five, so a rhythm track on a Chorus chart has none and must dash out
+  // rather than borrowing the guitar's.
+  it('shows the intensity of the selected instrument only', async () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({
+        noteCounts: COUNTS,
+        instruments: ['guitar', 'drums'],
+        diffGuitar: 4,
+        diffDrums: 2
+      })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('Intensity')).toBe('4/6')
+    const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
+    await fireEvent.change(instrument, { target: { value: 'drums' } })
+    expect(stat('Intensity')).toBe('2/6')
+  })
+
+  // -1 is song.ini's "nobody wrote one down", and a chart rated 0 is a different claim. Both
+  // are a dash here: the cell has one line and cannot hold the difference, and printing -1
+  // would be the sentinel leaking onto the screen.
+  it('dashes an unrated part rather than printing the sentinel', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({ noteCounts: COUNTS, instruments: ['guitar'], diffGuitar: -1 })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('Intensity')).toBe('—')
+  })
+
+  it('counts the tracks the chart has and the difficulties the selected one has', async () => {
+    const target = { kind: 'local' as const, record: record({ noteCounts: COUNTS }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    // COUNTS holds guitar at two difficulties and drums at one.
+    expect(stat('Tracks')).toBe('2')
+    expect(stat('Difficulties')).toBe('2')
+    const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
+    await fireEvent.change(instrument, { target: { value: 'drums' } })
+    expect(stat('Difficulties')).toBe('1')
+  })
+
+  /**
+   * `hasSoloSections` defaults to false on a record, so a chart nothing has read carries the
+   * same false as a chart with no solos in it. The note counts are what separate the two, the
+   * same test `chart-health` applies to the note counts themselves, and without it this cell
+   * would tell every unscanned chart in the library that it has no solos.
+   */
+  it('does not report "No" for solos on a chart whose notes were never read', () => {
+    render(Rail, {
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'local', record: record({ noteCounts: [], hasSoloSections: false }) }
+      }
+    })
+    expect(stat('Solos')).toBe('—')
+  })
+
+  it('reports no solos once the notes have been read and there are none', () => {
+    const target = { kind: 'local' as const, record: record({ noteCounts: COUNTS }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('Solos')).toBe('No')
+  })
+
+  it('reports solos when the notes carry them', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({ noteCounts: COUNTS, hasSoloSections: true })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(stat('Solos')).toBe('Yes')
+  })
+
+  // The API leaves notesData off an unprocessed chart altogether, and undefined is "nobody
+  // counted", not "none".
+  it('dashes every counted cell for a Chorus chart nothing has processed', () => {
+    render(Rail, {
+      props: {
+        onOpenDetail: () => {},
+        target: { kind: 'remote', chart: chart({ notesData: null }) }
+      }
+    })
+    expect(stat('Notes')).toBe('—')
+    expect(stat('NPS avg')).toBe('—')
+    expect(stat('NPS peak')).toBe('—')
+    expect(stat('Tracks')).toBe('—')
+    expect(stat('Solos')).toBe('—')
+  })
+})
+
+/**
+ * The line of context under the artist, which the design carries and the rail did not.
+ *
+ * Joined from the three fields that are present, so a chart with no album does not start its
+ * third line with a separator, and a chart with none of the three has no third line at all.
+ */
+describe('Rail: album, year and genre', () => {
+  it('joins the three the chart has', () => {
+    const target = {
+      kind: 'local' as const,
+      record: record({ album: 'Moving Pictures', year: 1981, genre: 'Rock' })
+    }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(screen.getByText('Moving Pictures · 1981 · Rock')).toBeTruthy()
+  })
+
+  it('leaves out the ones it does not have, separators included', () => {
+    const target = { kind: 'local' as const, record: record({ album: null, year: 1981 }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(screen.getByText('1981')).toBeTruthy()
+  })
+
+  it('draws nothing at all for a chart with none of the three', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    expect(document.querySelector('.context')?.textContent).toBe('')
+  })
+
+  // A remote chart's year is a string the API sends and a record's is a number the scanner
+  // parsed. Both reach the same line.
+  it("reads a remote chart's year from the field the API names it with", () => {
+    const target = { kind: 'remote' as const, chart: chart({ album: 'Hemispheres', year: '1978' }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(screen.getByText('Hemispheres · 1978')).toBeTruthy()
+  })
+})
+
+// The badge over the highway names the track Play would open, so it has to follow both picks.
+// Nothing in the corner opposite it: the design draws a score and a multiplier there, and
+// Encore's preview has no scoring engine to produce either.
+describe('Rail: the badge over the highway', () => {
+  it('names the instrument and difficulty the preview would play', async () => {
+    const target = { kind: 'local' as const, record: record({ noteCounts: COUNTS }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    expect(document.querySelector('.hwt')?.textContent?.trim()).toBe('Expert · Guitar')
+    const instrument = document.querySelectorAll('.picks select')[0] as HTMLSelectElement
+    await fireEvent.change(instrument, { target: { value: 'drums' } })
+    expect(document.querySelector('.hwt')?.textContent?.trim()).toBe('Expert · Drums')
   })
 })
 
