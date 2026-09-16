@@ -108,6 +108,7 @@ const answers = {
   playLifetime: () => ({ available: false, reason: 'noFile', entries: [] }),
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
+  favouritesList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' })
 }

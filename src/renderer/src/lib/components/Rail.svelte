@@ -14,6 +14,8 @@
   import { diffMatrix, instrumentColorVar, type DiffKey } from '../matrix'
   import { partState } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
+  import { favouriteId, favouriteKey, isFavouritable } from '../../../../shared/favourites'
+  import { favouriteIds, toggleFavourite } from '../stores/favourites'
   import {
     nowPlaying,
     playerError,
@@ -319,13 +321,16 @@
     { label: 'Solos', value: soloSections === null ? '—' : soloSections ? 'Yes' : 'No' }
   ])
 
-  // ─── the three actions that exist ─────────────────────────────────────────
+  // ─── the actions that exist ───────────────────────────────────────────────
   /**
    * The rail offers the ones its subject can answer, and no more.
    *
    * A chart on Chorus can be downloaded and nothing else: reveal and remove both take a path on
    * disk, and it has none. A chart in the library is the other way round, so it gets Show in
-   * folder. There is no favourite and no setlist anywhere behind the app, so neither is drawn.
+   * folder. The heart is the one control here that both kinds of subject can answer, because a
+   * favourite is attached to the chart rather than to a copy of one (shared/favourites.ts): the
+   * same press on a Chorus result and on the chart it becomes once downloaded is the same row.
+   * There is still no setlist anywhere behind the app, so none is drawn.
    *
    * Removal is deliberately not here, and it is the one of the three that was turned down rather
    * than being unavailable. Installed's own Remove does bookkeeping the rail cannot: it drops the
@@ -342,6 +347,57 @@
     actionError = null
     try {
       await encore().chartReveal(r.path)
+    } catch (err) {
+      actionError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  /**
+   * The three fields the heart attaches to, from whichever kind of subject the rail is showing.
+   *
+   * The raw values rather than the stripped ones already computed above for display: main
+   * normalises, and it has to be the one that does, or a chart hearted from Explore and the same
+   * chart hearted from Installed could end up as two rows. `favouriteKey` is only applied here to
+   * answer the two questions this component asks of the value, which is whether the chart can be
+   * hearted at all and whether it already is.
+   */
+  const favSubject = $derived({
+    name: chart?.name ?? record?.name ?? null,
+    artist: chart?.artist ?? record?.artist ?? null,
+    charter: chart?.charter ?? record?.charter ?? null
+  })
+  /**
+   * A chart with no name of its own cannot be hearted, and says so rather than pretending.
+   *
+   * The title on screen for such a chart is its folder name, which is a display fallback and not
+   * an identity: two unnamed charts in two folders would be one favourite between them, and
+   * renaming a folder would move it. Refusing is the smaller harm, and Encore's metadata editor
+   * is the way out of it. See `isFavouritable`.
+   */
+  const favouritable = $derived(target !== null && isFavouritable(favouriteKey(favSubject)))
+  /**
+   * Why the heart is refused, said where the user pressed it rather than in a tooltip.
+   *
+   * The button carries `aria-disabled` and not `disabled`, which is the whole reason this string
+   * exists: Chromium suppresses every event on a disabled control, its own tooltip included, so a
+   * `title` there is a reason nobody can read and the button is a dead square with no explanation.
+   * This way the press lands, and the sentence goes to the line a refused reveal already uses.
+   */
+  const UNNAMED_CHART =
+    'This chart sets no name of its own, so there is nothing for a favourite to hold on to. ' +
+    'Give it one in the metadata editor and the heart will keep.'
+  const favourited = $derived(
+    favouritable && $favouriteIds.has(favouriteId(favouriteKey(favSubject)))
+  )
+
+  async function favourite(): Promise<void> {
+    if (!favouritable) {
+      actionError = UNNAMED_CHART
+      return
+    }
+    actionError = null
+    try {
+      await toggleFavourite(favSubject, !favourited)
     } catch (err) {
       actionError = err instanceof Error ? err.message : String(err)
     }
@@ -631,10 +687,18 @@
       </label>
     </section>
 
-    <!-- One row: the action this kind of chart has, and the way through to its full page. The
-         action takes the width left over rather than being sized to its word, because a button
-         floating at the left of a 374px column reads as the leftover of a row that lost its
-         second control. -->
+    <!-- One row: the action this kind of chart has, the heart, and the way through to its full
+         page. The action takes the width left over rather than being sized to its word, because a
+         button floating at the left of a 374px column reads as the leftover of a row that lost its
+         second control.
+
+         The heart sits between them, which is the design's order: the action, then the icon
+         buttons that do something to the chart, then the way out of the column. Measured with
+         `scripts/measure-rail-panel.mjs` at 1280x800: the action goes from 239px to 196px, so the
+         heart costs it 43px and the column no height at all, the row being one flex line whose
+         tallest control is still 36px. The same script clones a second icon button into the row
+         and measures again ("with setlist"), which puts the add-to-setlist button at another 43px
+         and the action at 153px, still short of clipping its own word. -->
     <div class="actions">
       {#if chart}
         <button class="act primary" onclick={() => void download()}>
@@ -651,6 +715,28 @@
           >Show in folder
         </button>
       {/if}
+      <!-- The heart. Drawn for both kinds of subject, unlike the action above it, because that
+           is what a favourite keyed on the chart rather than on a path buys: hearting a chart on
+           Chorus and finding it already hearted once it is downloaded is one row, not two.
+
+           `aria-pressed` rather than two labels, so the state is announced as the state of one
+           control instead of as a button whose name changes under the reader. -->
+      <button
+        class="act icon fav"
+        aria-pressed={favourited}
+        aria-label="Favourite"
+        aria-disabled={!favouritable}
+        title={favouritable
+          ? favourited
+            ? 'Remove from favourites'
+            : 'Add to favourites'
+          : UNNAMED_CHART}
+        onclick={() => void favourite()}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"
+          ><path d="M12 20s-7-4.4-7-9.3A4 4 0 0 1 12 8a4 4 0 0 1 7 2.7C19 15.6 12 20 12 20z" /></svg
+        >
+      </button>
       <!-- Sized to its own word and quiet, which is the whole of its design. This column is
            where a chart is judged; the page carries the things it cannot, the full difficulty
            matrix, the version check, the ABOUT table and the chips that search on a charter or
@@ -1092,6 +1178,30 @@
   }
   .act.primary:hover {
     filter: brightness(1.12);
+  }
+  /* Square, and sized to the row rather than to a word: the design's icon button is the action's
+     own height with no padding, so a row of them reads as one strip of controls. */
+  .act.icon {
+    flex: 0 0 36px;
+    width: 36px;
+    padding: 0;
+  }
+  .act[aria-disabled='true'] {
+    opacity: 0.45;
+  }
+  .act[aria-disabled='true']:hover {
+    color: var(--text-2);
+    border-color: var(--border-2);
+  }
+  /* Filled and accented when it is on, outlined when it is off. Both states are drawn, which is
+     the point: an icon button whose only signal is a colour is one a reader has to have seen the
+     other state of to read. */
+  .act.fav[aria-pressed='true'] {
+    color: var(--accent-tint);
+    border-color: var(--accent);
+  }
+  .act.fav[aria-pressed='true'] svg {
+    fill: currentColor;
   }
   /**
    * The way through to the chart page: as wide as its word, and no wider.

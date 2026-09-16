@@ -202,6 +202,7 @@ const answers = {
   playLifetime: () => ({ available: false, reason: 'noFile', entries: [] }),
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
+  favouritesList: () => [],
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
   appUpdateStatus: () => ({ state: 'idle' })
 }
@@ -342,12 +343,31 @@ const PANEL = `(() => {
   })
 
   const titleEl = rail.querySelector('.title')
-  const actions = [...rail.querySelectorAll('.actions button')].map((b) => ({
-    label: (b.textContent || '').trim(),
-    width: round(b.getBoundingClientRect().width),
-    height: round(b.getBoundingClientRect().height),
-    clipped: b.scrollWidth > b.clientWidth + 1
-  }))
+  // aria-label, then the text: the heart carries no word, and a row reported as an empty string
+  // is a row nobody can read the widths of.
+  const measureActions = () =>
+    [...rail.querySelectorAll('.actions button')].map((b) => ({
+      label: (b.getAttribute('aria-label') || b.textContent || '').trim(),
+      width: round(b.getBoundingClientRect().width),
+      height: round(b.getBoundingClientRect().height),
+      clipped: b.scrollWidth > b.clientWidth + 1
+    }))
+  const actions = measureActions()
+
+  // The room the add-to-setlist button is going to want. A second icon button is cloned in
+  // beside the heart and the row is measured again, then the clone is removed: the question is
+  // what the action's width falls to and whether its own word survives it, and that is layout,
+  // which is exactly the thing no jsdom test can answer. The clone is the heart, so it is the
+  // real width of a real icon button rather than a guess at one.
+  let room = null
+  const heart = rail.querySelector('.actions .icon')
+  if (heart) {
+    const clone = heart.cloneNode(true)
+    clone.setAttribute('aria-label', 'Add to setlist')
+    heart.after(clone)
+    room = measureActions()
+    clone.remove()
+  }
 
   return {
     railDisplay: style.display,
@@ -365,6 +385,7 @@ const PANEL = `(() => {
     context: (rail.querySelector('.context') || { textContent: '' }).textContent.trim(),
     badge: (rail.querySelector('.hwt') || { textContent: '' }).textContent.trim(),
     actions,
+    room,
     statColumns: lefts.length,
     statCount: cells.length,
     stats,
@@ -392,8 +413,12 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
+  // The sidebar draws a count inside the row it belongs to, so "Installed" is "Installed 4" as
+  // far as textContent is concerned. Matching the word and whatever follows it is what keeps this
+  // harness working when a row gains or loses a badge; an exact match timed out for 40 seconds
+  // and reported it as the rail never appearing.
   const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
+    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}' || b.textContent.trim().startsWith('${label} '))`
 
   if (state === 'remote') {
     await waitFor(win, named('Explore'))
@@ -430,9 +455,10 @@ app.whenReady().then(async () => {
       `    ${String(b.top).padStart(4)}..${String(b.bottom).padStart(4)}  ${b.label.padEnd(16)} ${String(b.height).padStart(4)}px${over ? '   BELOW THE FOLD' : ''}`
     )
   }
-  console.log(
-    `  actions       ${p.actions.map((a) => `${a.label} ${a.width}x${a.height}${a.clipped ? ' CLIPPED' : ''}`).join(', ')}`
-  )
+  const actionLine = (list) =>
+    list.map((a) => `${a.label} ${a.width}x${a.height}${a.clipped ? ' CLIPPED' : ''}`).join(', ')
+  console.log(`  actions       ${actionLine(p.actions)}`)
+  if (p.room) console.log(`  with setlist  ${actionLine(p.room)}`)
   console.log(`  statistics    ${p.statCount} cells in ${p.statColumns} column(s)`)
   for (const s of p.stats) {
     console.log(

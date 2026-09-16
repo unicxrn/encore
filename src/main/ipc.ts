@@ -13,6 +13,7 @@ import {
   SettingsSchema
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
+import type { Favourite } from '../shared/favourites'
 import { EDITABLE_INI_KEYS } from '../shared/metadata-fields'
 import type {
   ChartMetadataRead,
@@ -53,6 +54,17 @@ export interface IpcDeps {
   queryCharts: (f: CatalogFilter) => ChartRecord[]
   countCharts: (f: CatalogFilter) => number
   chartsExistByMeta: (keys: { name: string; artist: string; charter: string }[]) => boolean[]
+  /** Every chart the user hearted, newest first. See shared/favourites.ts on what that keys on. */
+  listFavourites: () => Favourite[]
+  /**
+   * Heart a chart or un-heart it, answering with the list as it now stands.
+   *
+   * The key arrives as the three fields a chart names itself by and is normalised in main, so a
+   * renderer that sent the raw `song.ini` text and one that stripped it first store the same row.
+   * Idempotent both ways: the row is a PRIMARY KEY, and un-hearting what was never hearted is not
+   * an error to report to anybody.
+   */
+  setFavourite: (req: FavouriteWriteRequest) => Favourite[]
   /** Distinct values for the Installed view's filter pickers. Takes no arguments by design:
    * the lists describe the whole catalog, so narrowing them by the filter currently applied
    * would take options away as soon as they were used. */
@@ -323,6 +335,24 @@ const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
 const ExistsByMetaSchema = z
   .array(z.object({ name: z.string(), artist: z.string(), charter: z.string() }))
   .max(250)
+/**
+ * A heart, as the renderer is allowed to name it.
+ *
+ * The same 400-character cap the metadata write uses, and here for the same reason: this is the
+ * one channel that writes text of the renderer's choosing into the catalog, and a chart's three
+ * names are nowhere near that long (96 characters is the longest `name` in the reference library).
+ * The fields are nullish because a chart record carries null for a field its `song.ini` does not
+ * set, and a chart with no artist and no charter is ordinary and still favouritable. What is not
+ * optional is a name, and `isFavouritable` is where that is refused, after normalisation, because
+ * a name of nothing but markup strips to '' and is the same case.
+ */
+const FavouriteWriteSchema = z.object({
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  favourite: z.boolean()
+})
+export type FavouriteWriteRequest = z.infer<typeof FavouriteWriteSchema>
 const ChartTypeSchema = z.enum(['folder', 'sng'])
 const ChartReadFilesSchema = z.object({
   path: z.string(),
@@ -457,6 +487,10 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     deps.chartsExistByMeta(ExistsByMetaSchema.parse(raw))
   )
   ipcMain.handle(IPC.catalogFacets, () => deps.chartFacets())
+  // No payload: the list describes the whole table, and a renderer holding it as a set has
+  // nothing to narrow it by.
+  ipcMain.handle(IPC.favouritesList, () => deps.listFavourites())
+  ipcMain.handle(IPC.favouritesSet, (_e, raw) => deps.setFavourite(FavouriteWriteSchema.parse(raw)))
   // No payload: the report describes the whole catalog. There is nothing here for the renderer
   // to name and so nothing to validate.
   ipcMain.handle(IPC.catalogDuplicates, () => deps.duplicateCharts())

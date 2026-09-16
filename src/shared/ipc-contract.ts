@@ -20,6 +20,14 @@ export const IPC = {
   // including what each copy holds around the notes, which is what a user needs before removing
   // one of two charts the checksum calls identical.
   catalogDuplicates: 'catalog:duplicates',
+  // The charts the user hearted, and the one write that changes that. Keyed by what the chart is
+  // rather than by a path (see shared/favourites.ts), which is what lets one favourite cover a
+  // chart on Chorus and the same chart once it has been downloaded. Both answer with the whole
+  // list: it is a few short strings per chart, the renderer holds it as a set so the rail can draw
+  // the heart without a round trip per chart, and handing the list back from the write is what
+  // stops the renderer having to guess what main stored.
+  favouritesList: 'favourites:list',
+  favouritesSet: 'favourites:set',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
   downloadRetry: 'download:retry',

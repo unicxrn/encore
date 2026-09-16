@@ -5,6 +5,7 @@ import type { ChartRecord } from '../../../../shared/schemas'
 import type { ChartData } from '../api/enchor'
 import { get } from 'svelte/store'
 import { closePreview, viewportMounted, viewportOwner } from '../stores/preview-controller'
+import { favourites } from '../stores/favourites'
 
 /**
  * What these can and cannot check.
@@ -575,16 +576,16 @@ describe('Rail: the actions a chart can actually answer', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  // The design drew a favourite and an add-to-setlist button. Neither exists behind the app:
-  // the contract has three chart actions and none of them is either of those. The row holds
-  // the one this chart can answer and the way through to its page, in that order, and nothing
-  // else; the order is what keeps the action the row's first button.
-  it('draws no control for a feature the app does not have', () => {
+  // The design drew a favourite and an add-to-setlist button. The first exists now; the second
+  // still has nothing behind it and is therefore still not drawn. The order is what keeps the
+  // action the row's first button and the way out its last.
+  it('draws the action, the heart and the way out, and no control for what the app lacks', () => {
     render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
     const labels = [...document.querySelectorAll('.actions button')].map((b) =>
-      (b.textContent ?? '').trim()
+      (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
     )
-    expect(labels).toEqual(['Show in folder', 'All details'])
+    expect(labels).toEqual(['Show in folder', 'Favourite', 'All details'])
+    expect(screen.queryByRole('button', { name: /setlist/i })).toBeNull()
   })
 
   // `chartReveal` rejects for a path outside the configured library folders, which is a real
@@ -598,6 +599,110 @@ describe('Rail: the actions a chart can actually answer', () => {
       'textContent',
       'Path is outside your library'
     )
+  })
+})
+
+/**
+ * The heart, which is the one control here both kinds of subject can answer.
+ *
+ * A favourite is attached to the chart rather than to a copy of it (shared/favourites.ts), so
+ * the rail can offer it over a Chorus result as readily as over a chart on disk, and the two
+ * presses are the same row. What jsdom can check is exactly that: which chart the press names,
+ * what state the button reports, and that a chart with no name of its own is refused rather
+ * than attached to its folder name.
+ */
+describe('Rail: the heart', () => {
+  afterEach(() => favourites.set([]))
+
+  it('reads as off for a chart nothing has hearted', () => {
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    expect(screen.getByRole('button', { name: 'Favourite' }).getAttribute('aria-pressed')).toBe(
+      'false'
+    )
+  })
+
+  it('reads as on for a chart the store already holds, whatever case it is spelled in', () => {
+    favourites.set([{ name: 'yyz', artist: 'RUSH', charter: 'SomeOne', addedAt: 'now' }])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    expect(screen.getByRole('button', { name: 'Favourite' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+  })
+
+  it('hearts a library chart by the three fields it names itself by', async () => {
+    const favouritesSet = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { favouritesSet })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
+    expect(favouritesSet).toHaveBeenCalledWith({
+      name: 'YYZ',
+      artist: 'Rush',
+      charter: 'someone',
+      favourite: true
+    })
+  })
+
+  it('hearts a chart on Chorus the same way, which is the whole point of the key', async () => {
+    const favouritesSet = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { favouritesSet })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'remote', chart: chart() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
+    expect(favouritesSet).toHaveBeenCalledWith({
+      name: 'YYZ',
+      artist: 'Rush',
+      charter: 'someone',
+      favourite: true
+    })
+  })
+
+  it('un-hearts a chart that is already hearted', async () => {
+    const favouritesSet = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('encore', { favouritesSet })
+    favourites.set([{ name: 'YYZ', artist: 'Rush', charter: 'someone', addedAt: 'now' }])
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
+    expect(favouritesSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'YYZ', favourite: false })
+    )
+  })
+
+  it('takes the answer from main rather than guessing at it', async () => {
+    const favouritesSet = vi
+      .fn()
+      .mockResolvedValue([{ name: 'YYZ', artist: 'Rush', charter: 'someone', addedAt: 'now' }])
+    vi.stubGlobal('encore', { favouritesSet })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Favourite' }).getAttribute('aria-pressed')).toBe(
+        'true'
+      )
+    )
+  })
+
+  // A chart with no name is drawn from its folder name, which is a display fallback and not an
+  // identity: two of them would be one favourite between them, and renaming a folder would move
+  // it. Refused rather than attached to something that cannot hold it.
+  it('refuses a chart that sets no name of its own, and says why where it was pressed', async () => {
+    const favouritesSet = vi.fn()
+    vi.stubGlobal('encore', { favouritesSet })
+    const target = { kind: 'local' as const, record: record({ name: null }) }
+    render(Rail, { props: { onOpenDetail: () => {}, target } })
+    const heart = screen.getByRole('button', { name: 'Favourite' })
+    expect(heart.getAttribute('aria-disabled')).toBe('true')
+    // aria-disabled rather than disabled, so the press still lands and the reason is a sentence
+    // on screen: Chromium suppresses the tooltip on a disabled control along with everything else.
+    await fireEvent.click(heart)
+    expect(favouritesSet).not.toHaveBeenCalled()
+    expect((await screen.findByRole('alert')).textContent).toContain('no name of its own')
+  })
+
+  it('says why a heart was refused, where the user pressed it', async () => {
+    const favouritesSet = vi.fn().mockRejectedValue(new Error('The catalog is closed'))
+    vi.stubGlobal('encore', { favouritesSet })
+    render(Rail, { props: { onOpenDetail: () => {}, target: { kind: 'local', record: record() } } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourite' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The catalog is closed')
   })
 })
 
