@@ -94,7 +94,7 @@ const records = Array.from({ length: 30 }, (_, i) => ({
   album: 'An Album Title That Is Also Long',
   genre: 'Metal',
   year: 2011,
-  charter: 'SomeCharterName',
+  charter: 'SomeCharterWithALongName',
   diffGuitar: (i % 7) - 1,
   diffBass: i % 2 === 0 ? 3 : -1,
   diffDrums: 5,
@@ -350,6 +350,12 @@ const SHAPE = `(() => {
     actions,
     rows: rows.length,
     rowHeights: heightCounts,
+    // How much list the window actually shows. A taller row buys presence and is paid for in
+    // rows on screen, and that price is only readable as a count: 63px against 70px is a number
+    // nobody feels, and twelve rows against ten is the same fact in the unit the user meets it
+    // in. Whole rows only, because half a row is not a row you can read.
+    listHeight: Math.round(table.clientHeight),
+    rowsVisible: rows.length ? Math.floor(table.clientHeight / Math.round(rows[0].getBoundingClientRect().height)) : null,
     covers,
     songNarrowest: songs.length ? Math.min(...songs) : null,
     songWidest: songs.length ? Math.max(...songs) : null,
@@ -460,6 +466,7 @@ app.whenReady().then(async () => {
     console.log(`  beside a row  ${shape.actions.map((a) => `.${a.cls} ${a.width}px`).join(', ')}`)
   }
   console.log(`  row heights   ${JSON.stringify(shape.rowHeights)}`)
+  console.log(`  rows visible  ${shape.rowsVisible} whole rows in a ${shape.listHeight}px list`)
   console.log(`  cover         ${shape.covers.join(', ')}`)
   if (shape.songNarrowest !== null) {
     console.log(`  song column   ${shape.songNarrowest}px to ${shape.songWidest}px`)
