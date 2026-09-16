@@ -71,8 +71,14 @@ export const SCAN_VERSION = 7
  *    favourite is something the user did, not something a chart says, so there is no chart on disk
  *    a rescan could read one out of. Bumping would re-read every user's whole library to recompute
  *    values that were already correct and learn nothing new about a single chart.
+ *
+ * 9: `setlists` and `setlist_entries`. No SCAN_VERSION bump, and this one is not even a close
+ *    call. Clone Hero has no setlist format (shared/setlists.ts lays out what was checked), so
+ *    there is not only no chart on disk a rescan could read one out of, there is no file in the
+ *    format that could ever hold one. A bump would re-read every user's whole library to learn
+ *    nothing at all.
  */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 /**
  * The text columns stored twice: once as the chart says it, once as a reader sees it.
@@ -452,6 +458,49 @@ export function openCatalog(filePath: string): CatalogDb {
 			addedAt TEXT NOT NULL,
 			PRIMARY KEY (name, artist, charter)
 		);
+		-- The setlists the user built. Encore's own: Clone Hero has no setlist format to write to,
+		-- and shared/setlists.ts records what was checked before that was believed.
+		--
+		-- The id is opaque and generated in main rather than being the name, because renaming a
+		-- setlist must not detach its entries and two setlists are two setlists while both are still
+		-- called "Untitled". The name is UNIQUE COLLATE NOCASE all the same: the id is the identity,
+		-- but a sidebar listing "Friday night" twice is a list the user cannot tell apart, and
+		-- refusing the second is cheaper than a screen that explains it.
+		CREATE TABLE IF NOT EXISTS setlists (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			createdAt TEXT NOT NULL
+		);
+		-- One row per chart in a setlist, keyed by the chart the same way a favourite is, through
+		-- the same functions. See shared/setlists.ts.
+		--
+		-- The PRIMARY KEY carries setlistId, and that is the difference from favourites rather
+		-- than a detail of it. Favourites are one list, so the three names alone are its key; a
+		-- chart has to be able to sit in two setlists at once, and the same key without the id
+		-- would make the second add collide with the first. Inside ONE setlist the three names
+		-- are the key again, so a chart cannot be added to the same setlist twice, and the same
+		-- song by two charters is two rows because the charter differs.
+		--
+		-- NOT a foreign key in either direction, and both halves are deliberate. Against charts,
+		-- for every reason favourites gives: a setlist may hold a chart from Chorus the user has
+		-- not downloaded, and a chart moved to the Trash must not take the user's own list with it.
+		-- Against setlists, because SQLite leaves PRAGMA foreign_keys off unless a connection
+		-- turns it on and this one does not; a declared ON DELETE CASCADE would read as a promise
+		-- nothing keeps. Deleting a setlist deletes its entries explicitly, in one transaction, in
+		-- catalog/setlists.ts.
+		--
+		-- position is dense and zero-based within a setlist, renumbered by every write, so the
+		-- order is the rows themselves rather than a claim about them that can drift.
+		CREATE TABLE IF NOT EXISTS setlist_entries (
+			setlistId TEXT NOT NULL,
+			name TEXT NOT NULL COLLATE NOCASE,
+			artist TEXT NOT NULL COLLATE NOCASE,
+			charter TEXT NOT NULL COLLATE NOCASE,
+			position INTEGER NOT NULL,
+			addedAt TEXT NOT NULL,
+			PRIMARY KEY (setlistId, name, artist, charter)
+		);
+		CREATE INDEX IF NOT EXISTS setlist_entries_list ON setlist_entries(setlistId, position);
 		${SEARCH_VIEW_SQL}
 		${FTS_SQL}
 		${FTS_TRIGGERS_SQL}

@@ -124,6 +124,80 @@ describe('openCatalog', () => {
     expect(db.prepare('SELECT count(*) AS n FROM favourites').get()).toEqual({ n: 1 })
     db.close()
   })
+  it('creates the setlist tables', () => {
+    const db = openCatalog(tmpDb())
+    const names = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+    expect(names).toContain('setlists')
+    expect(names).toContain('setlist_entries')
+    db.close()
+  })
+  it('refuses two setlists by one name, whatever their capitals', () => {
+    // The UNIQUE COLLATE NOCASE on `setlists.name`, read off the constraint rather than off the
+    // DDL. catalog/setlists.ts checks first so the user gets a sentence, but this is what holds
+    // if a second writer ever appears, and a sidebar listing one name twice is unreadable.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(`INSERT INTO setlists (id, name, createdAt) VALUES (?, ?, ?)`)
+    insert.run('a', 'Friday night', 'now')
+    expect(() => insert.run('b', 'FRIDAY NIGHT', 'now')).toThrow()
+    db.close()
+  })
+  it('keys a setlist entry case-insensitively, so one chart cannot be added twice', () => {
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO setlist_entries
+			 (setlistId, name, artist, charter, position, addedAt) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    insert.run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    insert.run('a', 'EVERLONG', 'foo fighters', 'NEVERSOFT', 1, 'later')
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('lets two setlists hold the same chart, which the favourites key alone could not', () => {
+    // The setlistId in the PRIMARY KEY, proved at the table rather than above it: without it the
+    // second of these two INSERTs is the one the first already wrote.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO setlist_entries
+			 (setlistId, name, artist, charter, position, addedAt) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    insert.run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    insert.run('b', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 2 })
+    db.close()
+  })
+  it('adds the setlist tables to a database that predates them, keeping its rows', () => {
+    // Created outside `migrate` by the CREATE block that runs on every open, exactly as the score
+    // and favourites tables are. The version bump is what records the shape.
+    const file = tmpDb()
+    makeV1Db(file)
+    const db = openCatalog(file)
+    expect(() => db.prepare('SELECT count(*) FROM setlists').get()).not.toThrow()
+    expect(() => db.prepare('SELECT count(*) FROM setlist_entries').get()).not.toThrow()
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    expect(db.prepare('SELECT count(*) AS n FROM charts').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('keeps setlists across a close and a re-open', () => {
+    const file = tmpDb()
+    const first = openCatalog(file)
+    first
+      .prepare(`INSERT INTO setlists (id, name, createdAt) VALUES (?, ?, ?)`)
+      .run('a', 'F', 'now')
+    first
+      .prepare(
+        `INSERT INTO setlist_entries (setlistId, name, artist, charter, position, addedAt)
+				 VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    first.close()
+    const db = openCatalog(file)
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 1 })
+    db.close()
+  })
   it('enables WAL mode', () => {
     const db = openCatalog(tmpDb())
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal')

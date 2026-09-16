@@ -621,3 +621,45 @@ export function chartsExistByMeta(
   const stmt = db.prepare(EXISTS_BY_META_SQL)
   return keys.map((k) => stmt.get(k.name, k.artist, k.charter) !== undefined)
 }
+
+/**
+ * The library's row for each of these charts, in the order asked, or null where it holds none.
+ *
+ * What a setlist is drawn from. A setlist entry is three names and no path (shared/setlists.ts says
+ * why), so the screen that lists one has to ask the catalog what it currently has under those
+ * names: which entries the user can actually play, how long each runs, and what art to draw.
+ *
+ * Compares the READABLE columns, which is what `favouritesClause` compares and what the entry
+ * itself stores, rather than the raw ones `chartsExistByMeta` above compares. The two are not the
+ * same test: a chart whose Chorus copy carries colour markup in its title and whose local copy has
+ * had it edited out is one chart to a setlist and two to `chartsExistByMeta`. That difference is
+ * deliberate here. An entry is stored as the words on screen, so it has to be matched by them, or
+ * a setlist would lose a chart the user can see in their own library.
+ *
+ * `COALESCE(..., '')` for the same reason the favourites clause needs it: a chart that credits
+ * nobody stores '' and a NULL column compares equal to nothing in SQL, itself included. `COLLATE
+ * NOCASE` is stated rather than inherited, because neither side of this comparison is a column
+ * declared with it; it folds A-Z and nothing else, which is exactly what `setlistEntryId` folds.
+ *
+ * One row even when several match. Two copies of one charter's chart of one song are one chart,
+ * which is what `catalog:duplicates` calls an exact duplicate, and a setlist naming it twice would
+ * be the list reporting on the filesystem instead of on the music. `ORDER BY path` makes which
+ * copy comes back the same answer twice running rather than whatever the query planner reached
+ * first.
+ */
+const CHART_BY_META_SQL = `SELECT * FROM charts
+	 WHERE COALESCE(${readableColumn('name')}, '') = ? COLLATE NOCASE
+		 AND COALESCE(${readableColumn('artist')}, '') = ? COLLATE NOCASE
+		 AND COALESCE(${readableColumn('charter')}, '') = ? COLLATE NOCASE
+	 ORDER BY path LIMIT 1`
+
+export function chartsByMeta(
+  db: CatalogDb,
+  keys: { name: string; artist: string; charter: string }[]
+): (ChartRecord | null)[] {
+  const stmt = db.prepare(CHART_BY_META_SQL)
+  return keys.map((k) => {
+    const row = stmt.get(k.name, k.artist, k.charter)
+    return row ? fromRow(row as Record<string, unknown>) : null
+  })
+}
