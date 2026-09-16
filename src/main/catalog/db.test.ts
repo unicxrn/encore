@@ -79,6 +79,51 @@ describe('openCatalog', () => {
     expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     db.close()
   })
+  it('creates the favourites table', () => {
+    const db = openCatalog(tmpDb())
+    const names = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+    expect(names).toContain('favourites')
+    db.close()
+  })
+  it('keys favourites case-insensitively, so one chart cannot be hearted twice', () => {
+    // The COLLATE NOCASE on the three key columns, read back off the PRIMARY KEY itself rather
+    // than off the DDL: an index that compares case-sensitively is a table where the same chart
+    // met on Chorus and in the library is two rows, and one press un-hearts only one of them.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO favourites (name, artist, charter, addedAt) VALUES (?, ?, ?, ?)`
+    )
+    insert.run('Everlong', 'Foo Fighters', 'Neversoft', 'now')
+    insert.run('EVERLONG', 'foo fighters', 'NEVERSOFT', 'later')
+    expect(db.prepare('SELECT count(*) AS n FROM favourites').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('adds the favourites table to a database that predates it, keeping its rows', () => {
+    // Created outside `migrate` by the CREATE block that runs on every open, exactly as the score
+    // tables are: a new table needs no ALTER, and the version bump is what records the shape.
+    const file = tmpDb()
+    makeV1Db(file)
+    const db = openCatalog(file)
+    expect(() => db.prepare('SELECT count(*) FROM favourites').get()).not.toThrow()
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    expect(db.prepare('SELECT count(*) AS n FROM charts').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('keeps favourites across a close and a re-open', () => {
+    const file = tmpDb()
+    const first = openCatalog(file)
+    first
+      .prepare(`INSERT INTO favourites (name, artist, charter, addedAt) VALUES (?, ?, ?, ?)`)
+      .run('Everlong', 'Foo Fighters', 'Neversoft', 'now')
+    first.close()
+    const db = openCatalog(file)
+    expect(db.prepare('SELECT count(*) AS n FROM favourites').get()).toEqual({ n: 1 })
+    db.close()
+  })
   it('enables WAL mode', () => {
     const db = openCatalog(tmpDb())
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal')

@@ -286,6 +286,37 @@ function neverPlayedClause(filter: CatalogFilter, prefix = ''): Clause {
 }
 
 /**
+ * `AND` this chart is one the user hearted (empty when the filter does not ask).
+ *
+ * The join is on the readable form of the three fields a favourite is keyed by, which is what the
+ * favourites table stores: see shared/favourites.ts for why a favourite is attached to the chart
+ * rather than to a path or to either chart hash. `COALESCE(..., '')` on this side is the other
+ * half of the same rule the writer applies, where a chart with no charter is favourited as a chart
+ * whose charter is '': a NULL column compares equal to nothing in SQL, so without it every chart
+ * missing one of the three would be unfavouritable in practice while the heart claimed otherwise.
+ *
+ * The comparison's case rule comes from the favourites columns, which are declared COLLATE NOCASE:
+ * in SQLite a binary comparison takes the collation of its left operand's column, so putting the
+ * favourite on the left is what makes this case-insensitive, and it is the same rule the PRIMARY
+ * KEY dedupes by. Written as EXISTS rather than a join so it composes onto both query shapes
+ * without touching either one's column list, exactly as `neverPlayedClause` does.
+ *
+ * One favourite can match several rows, and that is the definition working rather than a leak: two
+ * copies of one charter's chart of one song are one chart hearted twice over, which is what
+ * `catalog:duplicates` already calls an exact duplicate.
+ */
+function favouritesClause(filter: CatalogFilter, prefix = ''): Clause {
+  if (!filter.favouritesOnly) return NO_CLAUSE
+  const field = (column: StrippedSource): string =>
+    `COALESCE(${readableColumn(column, prefix)}, '')`
+  return {
+    sql: ` AND EXISTS (SELECT 1 FROM favourites WHERE favourites.name = ${field('name')}
+		AND favourites.artist = ${field('artist')} AND favourites.charter = ${field('charter')})`,
+    params: []
+  }
+}
+
+/**
  * `AND LOWER(col) = LOWER(?)`, or nothing for an absent or blank value.
  *
  * Blank counts as absent so a picker reset to its "any" option (which posts an empty string)
@@ -354,6 +385,7 @@ function constraintClause(filter: CatalogFilter, prefix = ''): Clause {
   return joinClauses([
     missingClause(filter, prefix),
     neverPlayedClause(filter, prefix),
+    favouritesClause(filter, prefix),
     exactTextClause(readableColumn('artist', prefix), filter.artist),
     exactTextClause(`${prefix}genre`, filter.genre),
     exactTextClause(readableColumn('charter', prefix), filter.charter),

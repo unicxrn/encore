@@ -191,6 +191,21 @@ export const CatalogFilterSchema = z.object({
    */
   neverPlayed: z.boolean().optional(),
   /**
+   * When true, keep only charts the user hearted.
+   *
+   * Applied in SQL like every other constraint here, and for the sharpest version of the reason
+   * the sort carries: the Installed view is paged, and picking the favourites out of the hundred
+   * rows that came back is not picking them out of the library.
+   *
+   * This is a filter over what the library HOLDS, so it can only ever show favourites that match
+   * a chart on disk. A favourite of a chart that was hearted on Chorus and not downloaded, or one
+   * whose chart has since gone to the Trash, is still stored and still draws a filled heart in
+   * the rail when the user meets that chart again; it simply is not a row in a list of installed
+   * charts. Any UI offering this filter should say so, because a list that silently omits part of
+   * the thing it is named after is the misleading half of the feature.
+   */
+  favouritesOnly: z.boolean().optional(),
+  /**
    * Exact artist, case-insensitively. Exact rather than a substring because the value comes from
    * a picker over the artists the catalog actually holds (see `catalog:facets`), so "Rush" must
    * not also drag in "Rush Hour". Free-text matching across artist is what `search` already is.

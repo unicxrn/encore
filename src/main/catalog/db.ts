@@ -66,8 +66,13 @@ export const SCAN_VERSION = 7
  *    SCAN_VERSION bump goes with this one, and that is not an oversight: nothing in either table
  *    comes from reading a chart, so a rescan could not fill them and asking every user for one
  *    would re-read their whole library to learn nothing. The import fills them instead.
+ *
+ * 8: `favourites`. No SCAN_VERSION bump either, for a stronger version of the same reason: a
+ *    favourite is something the user did, not something a chart says, so there is no chart on disk
+ *    a rescan could read one out of. Bumping would re-read every user's whole library to recompute
+ *    values that were already correct and learn nothing new about a single chart.
  */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 /**
  * The text columns stored twice: once as the chart says it, once as a reader sees it.
@@ -422,6 +427,30 @@ export function openCatalog(filePath: string): CatalogDb {
 			score INTEGER NOT NULL,
 			scoreWithoutCleanPlayBonus INTEGER NOT NULL,
 			PRIMARY KEY (checksum, variant)
+		);
+		-- One row per chart the user hearted, keyed by what the chart IS rather than by where a
+		-- copy of it sits. See shared/favourites.ts for the three keys that were weighed and why
+		-- name/artist/charter is the one that survives a move, a re-download and a rebuilt catalog.
+		--
+		-- DELIBERATELY NOT A FOREIGN KEY TO charts, and this is the whole design rather than a
+		-- detail. Encore's rail draws the heart over Chorus results as well as over the library, so
+		-- a favourite of a chart the user has not downloaded yet has to be storable; and a chart
+		-- moved to the Trash, or a catalog deleted and scanned again from nothing, must not take
+		-- the user's own list with it. The join happens at read time, in favouritesClause, and a
+		-- favourite that matches no row today matches again the moment the chart arrives.
+		--
+		-- COLLATE NOCASE on all three key columns is what makes the PRIMARY KEY the rule "one
+		-- favourite per chart": the same chart met once on Chorus and once in the library differs
+		-- in case often enough that without it a user could heart one chart twice and un-heart it
+		-- once. It is the same case rule catalog:exists-by-meta and catalog:facets already compare
+		-- these fields by. The stored text is the readable form (shared/favourites.ts strips the
+		-- markup), so it compares against the stripped columns rather than against the raw ones.
+		CREATE TABLE IF NOT EXISTS favourites (
+			name TEXT NOT NULL COLLATE NOCASE,
+			artist TEXT NOT NULL COLLATE NOCASE,
+			charter TEXT NOT NULL COLLATE NOCASE,
+			addedAt TEXT NOT NULL,
+			PRIMARY KEY (name, artist, charter)
 		);
 		${SEARCH_VIEW_SQL}
 		${FTS_SQL}
