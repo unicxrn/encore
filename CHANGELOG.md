@@ -88,6 +88,34 @@ release.
   pink-violet they were, the wash behind a selected row is a flat colour rather than a tint that
   changed with whatever it sat on, and hairlines are violet cast rather than white at low
   opacity. Scrollbar thumbs moved with the hairlines.
+- Home opens on the state of your library rather than on a title. The top of the window says how
+  many charts you have, how many of them are still missing album art, a background, a video or
+  lyrics, and how many charts Chorus Encore has to search; the middle figure is a link into the
+  Asset Studio, which is the view that acts on it. A scan running says so there, with its percent
+  and the way to stop it. The figures are counts the catalog can answer from SQL, so they cost
+  two counts however large the library is.
+- Home's chart rows are the row Explore draws: a cover, the name over its artist, album and year,
+  the charter, a difficulty reading per instrument as pips, a mark on a chart Chorus found
+  problems in, and the length. Six charts a row rather than ten, with See all for the rest. The
+  library rows carry no problem mark, because nothing has looked inside those charts: the Issues
+  report is not kept between launches, so a mark there would be missing more often than it was
+  right.
+- Clicking a chart on Home fills the chart column instead of opening the chart page, which is
+  what clicking a result in Explore now does. Home is the other screen where charts are looked
+  over rather than read, so the two answer a click the same way. Below the 1120px window width
+  where the column is not drawn, a click opens the chart page as it always did.
+- Home with nothing in it reads as a step not taken rather than as a failure, and says which step:
+  no folder yet points at Settings, a folder with nothing read yet offers the scan, and a scan
+  that came back empty says what a chart folder has to contain. The sentence naming the folder
+  and the scan stays in the row it is about.
+- The first-run screen leads with what it is asking for rather than with the app's name, and when
+  no Clone Hero folder is found on the machine it is headed "Choose your songs folder" rather
+  than "No Clone Hero folder found". Nothing has gone wrong at that point, and it is the one
+  screen a new user cannot walk past.
+- The welcome tour has a screen for Stats, which is where the play data went when it left Home.
+  Its Installed and Explore screens describe the views as they are now: Installed has filters
+  rather than one filter box, and an Explore result is heard and judged where it lands rather
+  than opened.
 
 ### Fixed
 
