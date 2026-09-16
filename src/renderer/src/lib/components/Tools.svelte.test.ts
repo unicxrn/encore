@@ -1,19 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartIssueRow } from '../../../../main/catalog/issues'
-import type { DuplicateReport } from '../../../../shared/duplicates'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import type { FixableCode } from '../../../../main/issues/fix'
 import type { JobProgress } from '../../../../shared/schemas'
 import { assetJobs } from '../stores/assets'
+import type { DuplicateCopy } from '../../../../shared/duplicates'
+import { get } from 'svelte/store'
+import { duplicates } from '../stores/duplicates'
+import { issueTally } from '../stores/issue-tally'
 import Tools from './Tools.svelte'
 
-/**
- * Tools mounts the duplicates panel, which reads the catalogue on mount, so every stub in this
- * file has to answer it. An empty report is the right answer for all of them: these tests are
- * about the issue report, and a panel with findings would put extra buttons and paths on screen
- * for each of them to step around. Duplicates.svelte.test.ts is where the panel itself is tested.
- */
 /**
  * Which machine the view thinks it is on.
  *
@@ -25,16 +22,26 @@ import Tools from './Tools.svelte'
  */
 const ON_LINUX = { platform: 'linux' }
 
-const NO_DUPLICATES = {
-  catalogDuplicates: (): Promise<DuplicateReport> =>
-    Promise.resolve({
-      identical: [],
-      versions: [],
-      alternates: [],
-      totalCharts: 0,
-      unidentifiedCharts: 0
-    })
-}
+/** Where the view sends the user. Only the pointer at Duplicates uses it. */
+const onNavigate = vi.fn()
+
+/** A duplicate copy, in the fields the spare-copy count reads. */
+const copyOf = (path: string): DuplicateCopy => ({
+  path,
+  chartType: 'folder',
+  name: 'YYZ',
+  artist: 'Rush',
+  charter: 'Ann',
+  album: null,
+  songLength: 300_000,
+  modifiedTime: 1,
+  cloneHeroChecksum: 'a'.repeat(32),
+  hasAlbumArt: false,
+  hasVideo: false,
+  hasBackground: false,
+  hasLyrics: false,
+  sizeBytes: null
+})
 
 /**
  * `encore()` reads `window.encore`, and under jsdom `globalThis` *is* `window`, so
@@ -43,7 +50,6 @@ const NO_DUPLICATES = {
  */
 function stubEncore(rows: ChartIssueRow[]): void {
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
@@ -58,7 +64,7 @@ function stubEncore(rows: ChartIssueRow[]): void {
  */
 async function renderWithRows(rows: ChartIssueRow[]): Promise<void> {
   stubEncore(rows)
-  render(Tools)
+  render(Tools, { onNavigate })
   await screen.findByText('SHOW')
 }
 
@@ -82,6 +88,10 @@ const PORTABILITY_CARD = /: Plays here, not everywhere$/
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  onNavigate.mockClear()
+  // Module state, read by the pointer card's label and by the sidebar's warning pill.
+  duplicates.set(null)
+  issueTally.set(null)
 })
 
 /**
@@ -316,7 +326,6 @@ function stubFixes(
     install: vi.fn(() => Promise.resolve())
   }
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     platform,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
@@ -340,7 +349,7 @@ async function renderFixable(
   freshRows?: (row: ChartIssueRow) => ChartIssueRow[]
 ): Promise<FixStub> {
   const stub = stubFixes(rows, fixable, freshRows)
-  render(Tools)
+  render(Tools, { onNavigate })
   // The summary is the last thing to arrive: it needs both the report and issues:fixable.
   await screen.findByText(/Encore can fix/)
   return stub
@@ -421,14 +430,13 @@ describe('Tools: finding the repairs the filters are hiding', () => {
     // issuesFixable rejecting leaves availability unknown, and an unknown availability is not an
     // offer. The report itself still renders.
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
       issuesFixable: (): Promise<FixableCode[]> => Promise.reject(new Error('no ipc'))
     })
-    render(Tools)
+    render(Tools, { onNavigate })
 
     expect(await screen.findByText('No audio')).toBeTruthy()
     expect(screen.queryByText(/Encore can fix/)).toBeNull()
@@ -491,7 +499,6 @@ describe('Tools: confirming a repair', () => {
   it('reports a repair that failed instead of quietly dropping it', async () => {
     stubFixes(repairable)
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -500,7 +507,7 @@ describe('Tools: confirming a repair', () => {
       issuesFix: (): Promise<ChartIssueRow[]> =>
         Promise.reject(new Error('no longer has a video Encore can convert'))
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
 
     await fireEvent.click(screen.getByRole('button', { name: /^Fix Video won't play/ }))
@@ -605,7 +612,6 @@ describe('Tools: progress and cancel while a conversion runs', () => {
     })
     const cancel = vi.fn(() => Promise.resolve())
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -614,7 +620,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       issuesFix: (): Promise<ChartIssueRow[]> => pending,
       issuesFixCancel: cancel
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
 
     await fireEvent.click(screen.getByRole('button', { name: /^Fix Video won't play/ }))
@@ -657,7 +663,6 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       release = resolve
     })
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -666,7 +671,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       issuesFix: (): Promise<ChartIssueRow[]> => pending,
       issuesFixCancel: (): Promise<void> => Promise.resolve()
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
     await openRepairs()
 
@@ -721,7 +726,6 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
   })
   const cancel = vi.fn(() => Promise.resolve())
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(last),
     issuesScan: (): Promise<ChartIssueRow[]> => pending,
@@ -729,7 +733,7 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
     issuesFixable: (): Promise<FixableCode[]> => Promise.resolve([]),
     saveTextFile: (): Promise<string | null> => Promise.resolve(null)
   })
-  render(Tools)
+  render(Tools, { onNavigate })
   await fireEvent.click(screen.getByRole('button', { name: 'Scan library for issues' }))
   return { cancel, rejectScan }
 }
@@ -868,7 +872,6 @@ function stubUndo(
     scan: vi.fn(() => Promise.resolve(repairable))
   }
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
     issuesScan: stub.scan,
@@ -899,7 +902,7 @@ describe('Tools: undoing a repair', () => {
 
   it('offers the undo beside the repairs, naming the chart and what it would take back', async () => {
     stubUndo([backupFor()], () => Promise.resolve({ chartPath: '/library/Rush - YYZ', rows: [] }))
-    render(Tools)
+    render(Tools, { onNavigate })
 
     expect(await screen.findByText('1 fix can be undone')).toBeTruthy()
     await openUndo()
@@ -925,7 +928,7 @@ describe('Tools: undoing a repair', () => {
         ]
       })
     )
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
     await openUndo()
 
@@ -952,7 +955,7 @@ describe('Tools: undoing a repair', () => {
       await pending
       return { chartPath: '/library/Rush - YYZ', rows: [] }
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
     await openUndo()
 
@@ -989,7 +992,7 @@ describe('Tools: undoing a repair', () => {
         new Error('video.webm in /library/Rush - YYZ has been rewritten since this fix')
       )
     )
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
     await openUndo()
 
@@ -1005,7 +1008,7 @@ describe('Tools: undoing a repair', () => {
       backupFor({ id: `kabcd-00112233445566${String(i).padStart(2, '0')}` })
     )
     stubUndo(many, () => Promise.resolve({ chartPath: '/library/Rush - YYZ', rows: [] }))
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('9 fixes can be undone')
     await openUndo()
 
@@ -1103,7 +1106,7 @@ const videoAndFault: ChartIssueRow[] = [
 
 async function renderOn(platform: string, rows = videoAndFault): Promise<FixStub> {
   const stub = stubFixes(rows, ALL_FIXABLE, undefined, platform)
-  render(Tools)
+  render(Tools, { onNavigate })
   await screen.findByText('SHOW')
   return stub
 }
@@ -1134,24 +1137,70 @@ const refused: ChartIssueRow[] = [
 
 describe('Tools: what sits above the rows', () => {
   /**
-   * jsdom computes no layout, so this pins where the duplicate report is in the document and not
-   * how tall it is. The height is the part that mattered and it was measured:
-   * `scripts/measure-issue-cards.mjs`.
+   * The duplicate report left this view for a destination of its own, and what it left behind is
+   * the thing being pinned: a view that simply stopped answering a question it used to answer
+   * would send the user hunting for a card that is not there any more.
    */
-  it('draws the duplicate report as one of the cards rather than a panel above them', async () => {
+  it('points at Duplicates where it used to hold the report, and says why', async () => {
     await renderFixable()
 
-    expect(document.querySelector('.cards .dupes')).not.toBeNull()
-    // And after the offers, so reading down the cards meets what is wrong, then what Encore can
-    // do, then the second report.
+    expect(document.querySelector('.cards .dupes')).toBeNull()
+    expect(screen.getByText('Charts installed more than once')).toBeTruthy()
+    // The reason is the same one that kept duplicates out of the rows: two of the three kinds
+    // are not faults, so a scan for what is wrong was never going to report them.
+    expect(
+      screen.getByText(/a song you own two charts of is not wrong with anything/i)
+    ).toBeTruthy()
+
+    // And still last of the cards, so reading down meets what is wrong, then what Encore can do,
+    // then where the other report went.
     const cards = [...(document.querySelector('.cards')?.children ?? [])]
     expect(cards[cards.length - 1]?.className).toContain('fx-refusal')
-    expect(cards[cards.length - 2]?.className).toContain('dupes')
+    expect(cards[cards.length - 2]?.className).toContain('elsewhere')
+  })
+
+  it('navigates rather than expanding anything in place', async () => {
+    await renderFixable()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Duplicates' }))
+
+    expect(onNavigate).toHaveBeenCalledWith('duplicates')
+  })
+
+  /**
+   * The count on the button is the store's, not a second reading.
+   *
+   * It is drawn only when there is something to do about it: a button offering "0 spare copies"
+   * is a button reporting that this view looked, which it did not. Nothing at all is what the
+   * sidebar draws in that case too.
+   */
+  it('names the spare copies on the button once the report has them', async () => {
+    duplicates.set({
+      identical: [
+        {
+          checksum: 'a'.repeat(32),
+          copies: [copyOf('/library/a'), copyOf('/library/a (1)'), copyOf('/library/a (2)')]
+        }
+      ],
+      versions: [],
+      alternates: [],
+      totalCharts: 3,
+      unidentifiedCharts: 0
+    })
+    await renderFixable()
+
+    expect(screen.getByRole('button', { name: 'Open Duplicates · 2 spare copies' })).toBeTruthy()
+  })
+
+  it('says only Open Duplicates while nothing has been read', async () => {
+    await renderFixable()
+
+    expect(screen.getByRole('button', { name: 'Open Duplicates' })).toBeTruthy()
   })
 
   it('leads with the purpose line until there is a report to lead with', async () => {
     stubEncore([])
-    render(Tools)
+    render(Tools, { onNavigate })
 
     expect(await screen.findByText(/Checks every chart in your library for problems/)).toBeTruthy()
   })
@@ -1162,7 +1211,7 @@ describe('Tools: the repairs Encore refuses to make', () => {
     // Not renderFixable: nothing in this report is repairable, so the repair card never arrives
     // and there is nothing for it to wait on.
     stubFixes(refused)
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('SHOW')
 
     expect(screen.getByText('More than one chart file')).toBeTruthy()
@@ -1175,7 +1224,7 @@ describe('Tools: the repairs Encore refuses to make', () => {
 
   it('says a rating Chorus does not have either cannot be filled in', async () => {
     stubFixes(refused)
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('SHOW')
     await clickChip(NOTES_CARD)
 
@@ -1311,14 +1360,13 @@ describe('Tools: a video that only fails on Linux', () => {
    */
   it('still shows the rows when it could not learn whether converting is possible', async () => {
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       platform: 'win32',
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(videoAndFault),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(videoAndFault),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
       issuesFixable: (): Promise<FixableCode[]> => Promise.reject(new Error('no ipc'))
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('SHOW')
 
     await fireEvent.click(screen.getByRole('button', { name: PORTABILITY_CARD }))
@@ -1341,5 +1389,53 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(
       await screen.findByRole('heading', { name: /1 chart has a video Clone Hero cannot play/ })
     ).toBeTruthy()
+  })
+})
+
+/**
+ * The one number this view hands the sidebar, and why it is handed rather than fetched.
+ *
+ * Main's report is a cache that is null until a scan completes in this launch, and reading it
+ * across the boundary to count its rows copies 24,151 of them for one integer. The rows are
+ * already here, so the count is taken here. stores/issue-tally.ts carries the rest.
+ */
+describe('Tools: what it tells the sidebar', () => {
+  it('publishes the charts that are actually broken, not the size of the report', async () => {
+    // Three rows across two charts: two blocking findings on one chart, and a charting note on
+    // the other. Charts, findings and rows are 1, 2 and 3 here, so only one of the three passes.
+    await renderWithRows([
+      ...mixedSeverities,
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'No chart files were found.'
+      }
+    ])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 1 })
+  })
+
+  it('publishes a zero once a scan has looked and found nothing broken', async () => {
+    await renderWithRows([mixedSeverities[1]])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 0 })
+  })
+
+  /**
+   * Null and zero are different answers here. Main has no report, so nothing in this launch has
+   * looked, and the sidebar must draw nothing rather than claim a clean library.
+   */
+  it('publishes nothing at all when no scan has ever run', async () => {
+    vi.stubGlobal('encore', {
+      ...ON_LINUX,
+      issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(null),
+      issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve([]),
+      saveTextFile: (): Promise<string | null> => Promise.resolve(null)
+    })
+    render(Tools, { onNavigate })
+    await screen.findByText(/Checks every chart in your library for problems/)
+
+    expect(get(issueTally)).toBeNull()
   })
 })

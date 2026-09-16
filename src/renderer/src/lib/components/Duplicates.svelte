@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { toCsv } from '../../../../shared/csv'
   import {
     PLAY_HISTORY_PROMISE,
@@ -12,20 +11,20 @@
     assetsOnlyHere,
     DUPLICATE_TIERS,
     type DuplicateCopy,
-    type DuplicateReport,
     type DuplicateTierId
   } from '../../../../shared/duplicates'
   import { fallbackChartName, formatBytes, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
+  import { dropDuplicateCopy, duplicates, duplicatesError } from '../stores/duplicates'
 
   /**
    * What the library holds more than one copy of.
    *
-   * Lives beside the issue report rather than inside it, and is deliberately not one of its
-   * rows: an issue is something wrong with a chart, and two of these three tiers are not wrong
-   * with anything. It also comes from a different place. The issue scan walks the filesystem and
-   * takes seconds; this is two grouped queries over the catalog and takes tens of milliseconds,
-   * so it loads on mount with no button to press and no progress to report.
+   * A destination of its own rather than a card inside the issue report, and deliberately not one
+   * of its rows: an issue is something wrong with a chart, and two of these three tiers are not
+   * wrong with anything. It also comes from a different place. The issue scan walks the filesystem
+   * on a button press and takes seconds; this is two grouped queries over the catalog, read once
+   * per launch by the store below, so there is no button to press and no progress to report.
    *
    * **Removal is offered on tier 1 and nowhere else.** Tier 1 is the only claim here that
    * survives being acted on: those copies hold the same notes byte for byte. Removing a tier 2
@@ -48,9 +47,10 @@
    */
   const GROUPS_SHOWN = 25
 
-  let report = $state.raw<DuplicateReport | null>(null)
-  let loadError = $state<string | null>(null)
-  let open = $state(false)
+  // Both read from the launch-wide store, so the sidebar's count and this page are the same
+  // report and cannot disagree about what is installed twice.
+  const report = $derived($duplicates)
+  const loadError = $derived($duplicatesError)
   /** Which tiers have been expanded past GROUPS_SHOWN. */
   let expanded = $state<DuplicateTierId[]>([])
   /** Why a reveal failed, against the path that failed. Empty is the normal state. */
@@ -79,17 +79,6 @@
   let csvState = $state<CsvState>(null)
 
   const asMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-
-  onMount(() => {
-    void encore()
-      .catalogDuplicates()
-      .then((result) => {
-        report = result
-      })
-      .catch((err: unknown) => {
-        loadError = asMessage(err)
-      })
-  })
 
   /**
    * Copies that could be removed without losing a chart: every copy past the first in each
@@ -188,42 +177,6 @@
   }
 
   /**
-   * Drop one copy from the report in place, once it is really gone.
-   *
-   * Local rather than a second `catalogDuplicates()` call, and not because of the cost. The
-   * library watcher has just seen the folder disappear and will run a scan of its own; re-asking
-   * for the whole report puts this view in a race with that scan for no gain, when the one thing
-   * that changed is a copy this component itself just removed. A group left holding a single
-   * copy is no longer a duplicate of anything, so it goes with it.
-   */
-  function dropCopy(path: string): void {
-    if (report === null) return
-    report = {
-      ...report,
-      identical: report.identical
-        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
-        .filter((group) => group.copies.length > 1),
-      // The same chart can be listed under tiers 2 and 3 as well, and a path that is gone must
-      // not stay on screen under a heading that offers to open it in a file manager.
-      versions: report.versions
-        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
-        .filter((group) => group.copies.length > 1),
-      alternates: report.alternates
-        .map((group) => ({
-          ...group,
-          charters: group.charters
-            .map((charter) => ({
-              ...charter,
-              copies: charter.copies.filter((c) => c.path !== path)
-            }))
-            .filter((charter) => charter.copies.length > 0)
-        }))
-        .filter((group) => group.charters.length > 1),
-      totalCharts: Math.max(0, report.totalCharts - 1)
-    }
-  }
-
-  /**
    * Move one copy to the Trash, after the user has confirmed that copy by name.
    *
    * The failure path is the point: if the trash refuses, nothing about the library has changed,
@@ -237,7 +190,7 @@
     try {
       const result: ChartRemoval = await encore().chartRemove(copy.path)
       removed = removalMessage(result.outcome, copyLabel(copy))
-      dropCopy(copy.path)
+      dropDuplicateCopy(copy.path)
     } catch (err) {
       removeErrors = { ...removeErrors, [copy.path]: asMessage(err) }
     } finally {
@@ -303,14 +256,11 @@
   }
 </script>
 
-<section class="dupes">
+<div class="dupes">
   <div class="d-head">
-    <h2 class="d-title">Duplicate charts</h2>
+    <h1 class="d-title">Duplicate charts</h1>
     {#if report !== null && loadError === null && anything}
       <div class="d-acts">
-        <button class="hairline" aria-expanded={open} onclick={() => (open = !open)}>
-          {open ? 'Hide' : 'Show'}
-        </button>
         <button class="hairline" onclick={() => void exportCsv()}>Export CSV</button>
       </div>
     {/if}
@@ -345,17 +295,20 @@
     </p>
   {/if}
 
-  {#if open && report !== null}
+  <!-- Outside the block below on purpose. Removing the last spare copy empties the lists, and a
+       line reporting that removal that vanished with them would leave the only trace of what just
+       happened being a list that is no longer there. -->
+  {#if removed}
+    <p class="d-progress mono" role="status">{removed}</p>
+  {/if}
+
+  {#if report !== null && anything}
     <p class="d-safety">
       Encore can remove a copy of a chart it found installed twice, and nothing else here. A removal
       goes to your system Trash, so you can put it back from there. Nothing is chosen for you: each
       copy lists what it holds, because two copies of the same chart file can still differ in album
       art, video, background or lyrics.
     </p>
-
-    {#if removed}
-      <p class="d-progress mono" role="status">{removed}</p>
-    {/if}
 
     {#if report.identical.length > 0}
       {@const meta = tierMeta('identical')}
@@ -451,7 +404,7 @@
       </div>
     {/if}
   {/if}
-</section>
+</div>
 
 <!-- `group` is the copies this one sits with when a removal can be offered on it, and null on
      the two tiers where it cannot. Passing the whole group rather than a boolean is what lets
@@ -541,33 +494,24 @@
 {/snippet}
 
 <style>
-  /* A card among the issue cards, and the last of them, because it answers a different question
-     from a different source: the issue scan walks the filesystem on a button press, this reads the
-     catalogue on mount. One line until it is opened, so the view still leads with what the scan
-     found. */
+  /* A page rather than a card, because it is a destination now. There is no Show button: a whole
+     screen whose only content is one line and a button to reveal the rest is a click spent on
+     nothing. The lists are simply here, and the summary above them is what a reader takes if they
+     take one thing. */
   .dupes {
     display: flex;
     flex-direction: column;
     gap: 7px;
-    background: var(--ground-3);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    box-shadow: var(--elev-1);
-    padding: 11px 13px;
-    flex-shrink: 0;
+    padding: 14px 16px 24px;
   }
-  /* The title and the two buttons on one line, the summary under them across the whole card.
-     Measured: with the summary sharing the line, the 430px left beside the buttons wrapped three
-     clauses into four lines and the closed card stood 141px tall. Given the full width it is two,
-     and the 30px that saves is 30px the issue rows below get instead. */
+  /* The title and the export button on one line, the summary under them across the whole width.
+     Measured while this was a card: with the summary sharing the line, the 430px left beside the
+     buttons wrapped three clauses into four lines. Given the full width it is two. */
   .d-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 10px;
-  }
-  .d-title {
-    flex-shrink: 0;
   }
   .d-acts {
     display: flex;
@@ -575,9 +519,11 @@
     flex-shrink: 0;
   }
   .d-title {
+    flex-shrink: 0;
     margin: 0;
-    font-size: var(--fs-emphasis);
-    line-height: var(--lh-tight);
+    font-size: var(--fs-heading);
+    line-height: var(--lh-display);
+    letter-spacing: var(--ls-tight);
     font-weight: 600;
     color: var(--text-1);
   }

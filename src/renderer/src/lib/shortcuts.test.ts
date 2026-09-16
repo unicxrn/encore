@@ -123,7 +123,7 @@ describe('matchShortcut: the bindings', () => {
     expect(matchShortcut(chord({ key: 'k', code: 'KeyK', ctrlKey: true, altKey: true }))).toBeNull()
   })
 
-  it('maps Mod+1…7 onto the seven views in sidebar order', () => {
+  it('maps Mod+1…8 onto the eight views in sidebar order', () => {
     for (const [i, view] of SHORTCUT_VIEWS.entries()) {
       expect(
         matchShortcut(chord({ key: String(i + 1), code: `Digit${i + 1}`, ctrlKey: true }))
@@ -137,12 +137,22 @@ describe('matchShortcut: the bindings', () => {
     expect(matchShortcut(chord({ key: '&', code: 'Digit1', ctrlKey: true }))).toBe('go:home')
   })
 
-  it('reaches the seventh view, which the Stats tab added', () => {
-    expect(matchShortcut(chord({ key: '7', code: 'Digit7', ctrlKey: true }))).toBe('go:settings')
+  /**
+   * Settings moved from the seventh digit to the eighth when Duplicates took its place in the
+   * sidebar. Both are pinned here rather than only the new one: the digits are the sidebar read
+   * top to bottom, and a Duplicates that took the eighth while being drawn seventh would satisfy
+   * the loop above and still be wrong.
+   */
+  it('reaches the seventh view, which Duplicates took from Settings', () => {
+    expect(matchShortcut(chord({ key: '7', code: 'Digit7', ctrlKey: true }))).toBe('go:duplicates')
   })
 
-  it("has no eighth view, so Mod+8 is nobody's", () => {
-    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBeNull()
+  it('reaches the eighth view, which is where Settings went', () => {
+    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBe('go:settings')
+  })
+
+  it("has no ninth view, so Mod+9 is nobody's", () => {
+    expect(matchShortcut(chord({ key: '9', code: 'Digit9', ctrlKey: true }))).toBeNull()
   })
 
   it('opens the sheet on ?', () => {
@@ -189,7 +199,8 @@ describe('the sheet is generated from the bindings', () => {
     const what = SHORTCUTS.filter((s) => s.id.startsWith('go:')).map((s) => s.what)
     expect(what).toContain('Go to Issues')
     expect(what).toContain('Go to Explore')
-    expect(what).toContain('Go to Stats')
+    expect(what).toContain('Go to Statistics')
+    expect(what).toContain('Go to Duplicates')
     expect(what).not.toContain('Go to tools')
   })
 })
