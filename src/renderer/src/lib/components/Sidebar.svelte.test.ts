@@ -230,6 +230,77 @@ describe('Sidebar: the switchers above the nav', () => {
     expect(screen.getByText(/Not connected yet\. Encore searches Chorus Encore\./)).toBeTruthy()
   })
 
+  /**
+   * The three sources are three rows, and each one holds its own name.
+   *
+   * They were three segments sharing one strip, and measured in a real engine
+   * (scripts/measure-sidebar.mjs) that strip gave each about 66px where "Chorus Encore" needs
+   * 82 and "RhythmVerse" 71, so all three arrived ellipsised: the user was picking between
+   * "Chorus Enc...", "RhythmVe..." and "B...". jsdom computes no layout and so cannot see an
+   * ellipsis; what it can see is that the name is in a box of its own, which is the hook the
+   * stylesheet hangs a full-width row on and the element the measurement script reads back.
+   */
+  it('gives each source its own row, with its name in a box the row cannot squeeze', () => {
+    renderSidebar()
+    const segs = [
+      ...screen.getByRole('radiogroup', { name: 'Chart source' }).querySelectorAll('button')
+    ]
+    expect(segs.map((b) => b.querySelector('.seg-label')?.textContent)).toEqual([
+      'Chorus Encore',
+      'RhythmVerse',
+      'Both'
+    ])
+    // The dot is the state, and only the live row's is lit; the class is what lights it.
+    expect(segs.map((b) => b.querySelector('.seg-dot') !== null)).toEqual([true, true, true])
+    expect(segs.map((b) => b.classList.contains('on'))).toEqual([true, false, false])
+  })
+
+  /**
+   * No figures on the source rows, where the design puts 95,299 and 61,402.
+   *
+   * The nav's figures went in deliberately and these deliberately did not: a count beside
+   * RhythmVerse would be sizing a catalogue the download queue cannot fetch a single chart from,
+   * which is the same claim the disabled state exists to avoid making.
+   */
+  it('puts no catalogue size on a source Encore cannot download from', () => {
+    renderSidebar()
+    const group = screen.getByRole('radiogroup', { name: 'Chart source' })
+    expect(group.querySelectorAll('.count').length).toBe(0)
+    for (const seg of group.querySelectorAll('button')) {
+      expect(seg.textContent ?? '').not.toMatch(/[0-9]/)
+    }
+  })
+
+  /**
+   * Both quick actions got a second line, and only one of them may reach a screen reader.
+   *
+   * The row's accessible name is computed from its text, so a description inside it would rename
+   * the button to "Import playlist Not built yet" and every caller that asks for it by name would
+   * stop finding it. `title` already carries the reason as the button's description, so the line
+   * on screen is `aria-hidden` for the reason the nav's figures are: said twice, it is read twice.
+   */
+  it('shows the reason on screen without letting it rename the button', () => {
+    renderSidebar()
+    const dead = screen.getByRole('button', { name: 'Import playlist' })
+    const note = screen.getByText('Not built yet')
+    expect(dead.contains(note)).toBe(true)
+    expect(note.getAttribute('aria-hidden')).toBe('true')
+    // The live row's second line is the same shape and the same rule.
+    const live = screen.getByRole('button', { name: 'Surprise me' })
+    expect(live.contains(screen.getByText('Five charts at random'))).toBe(true)
+  })
+
+  // The tile that is not the library Encore reads says so in words inside the tile, not only in
+  // the tooltip: the pair of tiles is the one place a user can see that YARG is not wired.
+  it('says what the YARG tile is, inside the tile', () => {
+    renderSidebar()
+    const yarg = screen.getByRole('radio', { name: /YARG/ })
+    expect(yarg.querySelector('.game-note')?.textContent).toBe('Not yet')
+    expect(
+      screen.getByRole('radio', { name: /Clone Hero/ }).querySelector('.game-note')?.textContent
+    ).toBe('Your library')
+  })
+
   // Was both quick actions. Surprise me is built now, and the pair is deliberately split rather
   // than dropped: the reason Import playlist is still disabled is the reason it is still drawn.
   it('leaves Import playlist as a control that is not ready, not as a live button', () => {
@@ -311,6 +382,85 @@ describe('Sidebar: the update state in the footer', () => {
     appUpdate.set({ ...base, state: { kind: 'downloading', version: '0.4.0', percent: 42 } })
     renderSidebar()
     expect(screen.getByText('DOWNLOADING 42%')).toBeTruthy()
+  })
+
+  /**
+   * Which of the seven states is worth lighting the card for.
+   *
+   * Three of them are Encore holding a release: one offered, one coming down, one waiting to be
+   * installed. Those three are the ones with something to press, and the design draws that card
+   * with an accent border and an accent wash. The other four have nothing to act on, and a card
+   * lit in all seven states would be lit in none of them.
+   *
+   * jsdom applies no stylesheet, so what the lit card LOOKS like rests on the offscreen capture.
+   * The class is the hook that decides, and a card carrying it in the wrong state is the bug
+   * whether or not a test can see the paint.
+   */
+  const card = (): Element => {
+    const found = document.querySelector('.status-card')
+    if (found === null) throw new Error('no status card')
+    return found
+  }
+  const withState = (state: unknown): void =>
+    appUpdate.set({
+      currentVersion: '0.3.1',
+      target: 'appimage',
+      canApply: true,
+      note: 'note',
+      state
+    } as never)
+
+  it('lights the footer card for the three states holding a release', () => {
+    for (const state of [
+      { kind: 'available', version: '0.4.0' },
+      { kind: 'downloading', version: '0.4.0', percent: 42 },
+      { kind: 'ready', version: '0.4.0' }
+    ]) {
+      withState(state)
+      const { unmount } = render(Sidebar, {
+        props: {
+          view: 'tools' as const,
+          downloadsOpen: false,
+          onNavigate: noop,
+          onToggleDownloads: noop,
+          onShowShortcuts: noop,
+          onSurprise: noop
+        }
+      })
+      expect(card().classList.contains('waiting')).toBe(true)
+      unmount()
+    }
+  })
+
+  it('leaves it quiet for the four states with nothing to press', () => {
+    for (const state of [
+      { kind: 'idle' },
+      { kind: 'checking' },
+      { kind: 'current' },
+      { kind: 'error' },
+      // The cast payload the union does not cover, which reaches this the same way it reaches
+      // `updateLine`. A bare string has no `kind`, which is not one of the three.
+      'idle'
+    ]) {
+      withState(state)
+      const { unmount } = render(Sidebar, {
+        props: {
+          view: 'tools' as const,
+          downloadsOpen: false,
+          onNavigate: noop,
+          onToggleDownloads: noop,
+          onShowShortcuts: noop,
+          onSurprise: noop
+        }
+      })
+      expect(card().classList.contains('waiting')).toBe(false)
+      unmount()
+    }
+  })
+
+  it('leaves it quiet before any state has arrived at all', () => {
+    renderSidebar()
+    expect(card().classList.contains('waiting')).toBe(false)
   })
 
   it('says so rather than going blank on a state it does not recognise', () => {
