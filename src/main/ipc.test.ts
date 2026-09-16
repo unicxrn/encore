@@ -55,6 +55,16 @@ const deps = (): IpcDeps => ({
   clearFinishedDownloads: vi.fn(),
   windowControl: vi.fn(),
   pickFolder: vi.fn().mockResolvedValue('/picked'),
+  pickExecutable: vi.fn().mockResolvedValue('/opt/clonehero/Clone Hero'),
+  gameExecutableReport: vi.fn().mockReturnValue({
+    path: '/opt/clonehero/Clone Hero',
+    platform: 'linux',
+    supported: true,
+    kind: 'file',
+    executable: true,
+    usable: true
+  }),
+  launchGame: vi.fn().mockResolvedValue(undefined),
   readChartFiles: vi.fn().mockResolvedValue([{ fileName: 'song.ini', data: new Uint8Array([1]) }]),
   readLyricLines: vi.fn().mockResolvedValue({ lines: [{ ms: 1000, endMs: 2000, text: 'Hello' }] }),
   sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null, path: '/s/yt-dlp' }),
@@ -1090,6 +1100,53 @@ describe('registerIpc', () => {
     // Not a string is not a folder. The payload crosses the boundary from the renderer like any
     // other and is parsed rather than trusted.
     await expect(ipc.invoke(IPC.playScoreFolder, { folder: 42 })).rejects.toThrow()
+  })
+
+  it('routes the file picker behind the Clone Hero setting', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.dialogPickExecutable)).toBe('/opt/clonehero/Clone Hero')
+    // The sender, so the dialog attaches to the window that asked, exactly as pickFolder does.
+    expect(d.pickExecutable).toHaveBeenCalledWith({ id: 1 })
+  })
+
+  it('routes game:executable, and treats an absent payload as the stored path', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.gameExecutable, { path: '/opt/clonehero/Clone Hero' })
+    expect(d.gameExecutableReport).toHaveBeenCalledWith({ path: '/opt/clonehero/Clone Hero' })
+    // No payload, and an empty path, are the same question: what do you make of what is stored.
+    // The Settings row asks it on mount, before anyone has picked anything.
+    await ipc.invoke(IPC.gameExecutable, undefined)
+    expect(d.gameExecutableReport).toHaveBeenLastCalledWith({ path: '' })
+    // Not a string is not a path. Parsed rather than trusted, like every other payload here.
+    await expect(ipc.invoke(IPC.gameExecutable, { path: 42 })).rejects.toThrow()
+  })
+
+  /**
+   * The launch takes no payload, and that is the security property rather than a convenience.
+   *
+   * A channel that accepted a path would be a channel for running any program on the machine
+   * from the renderer. This one runs the stored setting, which main read from its own file and
+   * checked itself, so there is nothing here a compromised renderer could name.
+   */
+  it('runs the stored game and refuses to carry a path from the renderer', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.gameLaunch, '/bin/sh')
+    expect(d.launchGame).toHaveBeenCalledTimes(1)
+    expect(d.launchGame).toHaveBeenCalledWith()
+  })
+
+  it('lets a refused launch reach the renderer as a rejection', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    d.launchGame = vi.fn().mockRejectedValue(new Error('There is nothing at /opt/gone.'))
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.gameLaunch)).rejects.toThrow('There is nothing at /opt/gone.')
   })
 
   it('validates checksums at the play:summaries boundary', async () => {

@@ -107,6 +107,20 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
       quarantined: [],
       usable: false
     }),
+    // Settings asks what Encore makes of the stored Clone Hero path as soon as it mounts, the
+    // same way it asks about the score folder. Nothing is chosen here, which is the state every
+    // user starts in.
+    gameExecutable: vi.fn().mockResolvedValue({
+      path: '',
+      platform: 'linux',
+      supported: true,
+      kind: 'missing',
+      executable: false,
+      usable: false
+    }),
+    pickExecutable: vi.fn().mockResolvedValue(null),
+    gameLaunch: vi.fn().mockResolvedValue(undefined),
+    chartReveal: vi.fn().mockResolvedValue(undefined),
     // The Stats tab asks the gate first and draws its "nothing recorded" sentence on this,
     // which is the answer for a machine with no Clone Hero on it.
     playStatus: vi.fn().mockResolvedValue({
@@ -1263,5 +1277,146 @@ describe('App: Home fills the rail rather than leaving the page', () => {
     rail().style.display = ''
 
     expect(rail().textContent).toContain('YYZ')
+  })
+})
+
+/**
+ * The two buttons the approved design puts in the title bar.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says the bar is still 50px tall or
+ * that the buttons fit beside the search field; `scripts/measure-top-bar.mjs` is what answers
+ * that, in a real engine, at five widths. What IS pinnable is every branch of what the two do:
+ * where they lead when Encore has not been told enough to do the thing, what they ask main for
+ * when it has, and that a refusal from main lands on screen rather than in a console the user of
+ * a packaged build cannot open.
+ */
+describe('the title bar buttons', () => {
+  const GAME = '/opt/clonehero/Clone Hero'
+
+  const withSettings = (
+    over: Partial<Settings>,
+    api: Record<string, unknown> = {}
+  ): Record<string, ReturnType<typeof vi.fn>> =>
+    stubEncore({
+      settingsGet: vi.fn().mockResolvedValue({ ...seenSettings(), ...over }),
+      ...api
+    })
+
+  it('holds both of them, in the order the design puts them', async () => {
+    render(App)
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent?.trim())
+    expect(buttons).toContain('Launch Clone Hero')
+    expect(buttons).toContain('My library')
+    expect(buttons.indexOf('Launch Clone Hero')).toBeLessThan(buttons.indexOf('My library'))
+  })
+
+  it('leads to the setting rather than failing when no Clone Hero is chosen', async () => {
+    const api = withSettings({ gamePath: '' })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(''))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy()
+    // Nothing was asked of main: there is no path to run, and a rejected invoke would be a
+    // failure report for a question the user has not been given the chance to answer.
+    expect(api.gameLaunch).not.toHaveBeenCalled()
+  })
+
+  it('starts the stored game, and asks main for nothing else', async () => {
+    const api = withSettings({ gamePath: GAME })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    await waitFor(() => expect(api.gameLaunch).toHaveBeenCalledTimes(1))
+    // No payload. The path main runs is the one main stored, not one the renderer named.
+    expect(api.gameLaunch).toHaveBeenCalledWith()
+  })
+
+  it('puts a refused launch on screen, where the user pressing the button is looking', async () => {
+    withSettings(
+      { gamePath: GAME },
+      { gameLaunch: vi.fn().mockRejectedValue(new Error('There is nothing at /opt/gone.')) }
+    )
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    const note = await screen.findByRole('alert')
+    expect(note.textContent).toContain('There is nothing at /opt/gone.')
+  })
+
+  it('lets the note be dismissed, since the app is still working', async () => {
+    withSettings({ gamePath: GAME }, { gameLaunch: vi.fn().mockRejectedValue(new Error('nope')) })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+    await screen.findByRole('alert')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  /**
+   * The reveal is `chartReveal`, which is the point rather than an implementation detail: main
+   * already has one guarded route from a path to the desktop shell, and it refuses anything
+   * outside the configured folders. A second channel would be a second place for that guard to
+   * be forgotten.
+   */
+  it('opens the folder downloads land in, through the reveal the rail already uses', async () => {
+    const api = withSettings({
+      libraryFolders: [
+        { path: '/mnt/other', isDefault: false },
+        { path: '/mnt/songs', isDefault: true }
+      ]
+    })
+    render(App)
+    await waitFor(() => expect(get(settings).libraryFolders).toHaveLength(2))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    await waitFor(() => expect(api.chartReveal).toHaveBeenCalledWith('/mnt/songs'))
+  })
+
+  it('leads to the setting when there is no library folder to open', async () => {
+    const api = withSettings({ libraryFolders: [] })
+    render(App)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy()
+    expect(api.chartReveal).not.toHaveBeenCalled()
+  })
+
+  it('reports a refused reveal on the same note', async () => {
+    withSettings(
+      { libraryFolders: [{ path: '/mnt/songs', isDefault: true }] },
+      { chartReveal: vi.fn().mockRejectedValue(new Error('Refusing to open a path outside')) }
+    )
+    render(App)
+    await waitFor(() => expect(get(settings).libraryFolders).toHaveLength(1))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Refusing to open a path')
+  })
+
+  /**
+   * macOS gets no Launch button at all.
+   *
+   * Encore does not launch the game there (main/game/executable.ts says why), and a control that
+   * can never work is worth less than the room it takes in a 50px row. My library is unaffected:
+   * revealing a folder is the desktop shell's job on every platform.
+   */
+  it('draws no Launch button on a platform Encore does not launch the game on', async () => {
+    stubEncore({ platform: 'darwin' })
+    render(App)
+
+    expect(screen.queryByRole('button', { name: 'Launch Clone Hero' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'My library' })).toBeTruthy()
   })
 })

@@ -76,6 +76,16 @@ release.
   actually run with, so the one control in Settings written in a syntax no longer has to be
   proved by a download. The example follows the field as you type; the setting itself is still
   stored when you leave the field, not on every keystroke.
+- Launch Clone Hero and My library, in the title bar beside the search field. Launch starts the
+  game and lets go of it, so closing Encore does not close Clone Hero; My library opens the folder
+  downloads land in, in your own file manager. With no game chosen yet, Launch takes you to the
+  setting rather than failing, and when the game refuses to start the reason appears under the
+  button instead of nowhere.
+- Settings asks where Clone Hero is, under Library. Encore does not look for this one: the game is
+  installed wherever you put it, so there is nothing to search and a wrong guess would be worse
+  than asking. On Linux that is the AppImage or the extracted binary, and a file nothing can start
+  is refused with what to do about it rather than stored; on Windows it is the .exe. Launching is
+  not offered on macOS, which nobody has been able to test.
 
 ### Changed
 

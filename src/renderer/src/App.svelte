@@ -19,7 +19,9 @@
   import Welcome from './lib/components/Welcome.svelte'
   import WelcomeTour from './lib/components/WelcomeTour.svelte'
   import WhatsNew from './lib/components/WhatsNew.svelte'
-  import { initSettings, needsWelcome, settingsLoaded } from './lib/stores/settings'
+  import { initSettings, needsWelcome, settings, settingsLoaded } from './lib/stores/settings'
+  import { encore } from './lib/stores/bridge'
+  import { errorHeadline } from './lib/errors'
   import { finishTour, tourOpen } from './lib/stores/tour'
   import {
     closeWhatsNew,
@@ -93,6 +95,80 @@
 
   const control = (action: 'minimize' | 'maximize' | 'close'): void => {
     void window.encore.windowControl(action)
+  }
+
+  /**
+   * What the two title-bar buttons could not do, in the words the user needs.
+   *
+   * A launch that the operating system refused, or a reveal of a folder that has since been
+   * removed from the library, is a direct answer to a press: it belongs beside the button that
+   * was pressed and not in a console nobody can open in a packaged build. `RuntimeErrorBar` is
+   * the other on-screen surface and is deliberately not this one: it exists for the errors that
+   * unwind past every boundary with nobody waiting on them, and it labels itself BACKGROUND
+   * ERROR, which this is not.
+   *
+   * The note renders `position: absolute` under the bar, so a message of any length costs the
+   * 50px title row nothing. scripts/measure-top-bar.mjs measures that rather than assuming it.
+   */
+  let topbarError = $state<string | null>(null)
+
+  /**
+   * Whether Encore launches the game on this platform at all.
+   *
+   * Linux and Windows; see `gameLaunchSupported` in main/game/executable.ts for why macOS is
+   * out. The button is not drawn there rather than being drawn and always refusing: a control
+   * that cannot work on this machine is worth less than the room it takes in a 50px row.
+   * `window.encore` is read directly because the platform is a value on the bridge rather than a
+   * channel, and it cannot change while the process runs.
+   */
+  const canLaunchGame = typeof window === 'undefined' || window.encore?.platform !== 'darwin'
+
+  /**
+   * Start Clone Hero, or go and ask where it is.
+   *
+   * An unset path leads to the setting rather than failing: the user pressed a button that names
+   * a thing Encore does not yet know how to do, and the answer to that is the one screen where
+   * they can say. A path that IS set is main's to check and to run, and its refusal is what the
+   * note below shows.
+   */
+  const launchGame = async (): Promise<void> => {
+    topbarError = null
+    if ($settings.gamePath === '') {
+      goTo('settings')
+      return
+    }
+    try {
+      await encore().gameLaunch()
+    } catch (err) {
+      topbarError = errorHeadline(err)
+    }
+  }
+
+  /**
+   * Open the library in the system file manager.
+   *
+   * `chartReveal` rather than a channel of its own, which is the point: main already has one
+   * guarded route from a path to the desktop shell, it already refuses anything outside the
+   * configured folders, and a library folder is inside itself by that check. A second channel
+   * would be a second place for that guard to be forgotten.
+   *
+   * The folder is the one downloads land in, since that is the one a user asking for "my
+   * library" has just put something into. With none configured there is nothing to open, and
+   * Settings is where that is fixed.
+   */
+  const openLibrary = async (): Promise<void> => {
+    topbarError = null
+    const folders = $settings.libraryFolders
+    const target = folders.find((f) => f.isDefault) ?? folders[0]
+    if (!target) {
+      goTo('settings')
+      return
+    }
+    try {
+      await encore().chartReveal(target.path)
+    } catch (err) {
+      topbarError = errorHeadline(err)
+    }
   }
 
   const onSearchInput = (value: string): void => {
@@ -415,6 +491,29 @@
              has no way to act on from inside the field's announcement. -->
         <span class="kbd" aria-hidden="true">{searchHint.join(' ').toUpperCase()}</span>
       </div>
+      <!-- The two things the title bar can do about the world outside Encore, in the order the
+           approved design puts them: the game first, then the folder the charts are in, then the
+           window controls. Both are `no-drag`, or a press would begin a window move instead. -->
+      <div class="actions">
+        {#if canLaunchGame}
+          <button
+            class="action"
+            onclick={() => void launchGame()}
+            ondblclick={(e) => e.stopPropagation()}
+          >
+            <Icon name="play" size={13} />
+            <span>Launch Clone Hero</span>
+          </button>
+        {/if}
+        <button
+          class="action"
+          onclick={() => void openLibrary()}
+          ondblclick={(e) => e.stopPropagation()}
+        >
+          <Icon name="folder" size={13} />
+          <span>My library</span>
+        </button>
+      </div>
       <div class="controls">
         <!-- ondblclick stops propagation so button double-clicks don't trigger the header maximize -->
         <button
@@ -434,6 +533,15 @@
           aria-label="Close"><Icon name="x" size={14} /></button
         >
       </div>
+      <!-- Out of flow, so a sentence of any length costs the 50px row nothing. `role="alert"`
+           because it is the answer to something the user just pressed and nothing else on screen
+           will have changed to say so. -->
+      {#if topbarError !== null}
+        <div class="topbar-note" role="alert">
+          <p>{topbarError}</p>
+          <button class="hairline" onclick={() => (topbarError = null)}>Dismiss</button>
+        </div>
+      {/if}
     </header>
     <!-- The {#key} here is the boundary's reset, NOT a re-render device: the {#if} chain below
          already creates a fresh component (and a fresh root element) on every navigation, and an
@@ -638,17 +746,29 @@
     grid-row: 1 / 2;
     display: flex;
     align-items: center;
+    gap: 10px;
     height: 100%;
-    padding: 0;
+    /* Padding on the left only. The window controls have to stay flush in the corner (see the
+       focus-ring rule below, which exists because the close button's right edge IS innerWidth),
+       so the row is inset where it begins and not where it ends. */
+    padding: 0 0 0 14px;
     border-bottom: 1px solid var(--hairline);
     -webkit-app-region: drag;
     position: relative;
   }
+  /* In flow rather than absolutely centred, which is what makes room for the two buttons.
+     Centred, the box was placed from the row's midpoint and knew nothing about what was to its
+     right, so the buttons were drawn straight over it. Measured with the centred rule and the
+     buttons both in place (scripts/measure-top-bar.mjs): 237px of overlap at a 960px window,
+     175px at 1120 and again at 1121, 95px at 1280, and clear only at 1920. Laid out in the row,
+     the buttons take their width first and the search takes what is left, up to the same
+     maximum it had before. `min-width` is what stops it collapsing to its content at the 960px
+     window minimum; `flex: 1` is what keeps it as wide as it used to be above that. */
   .search {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(420px, 40vw);
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 180px;
+    max-width: 420px;
     display: flex;
     align-items: center;
     -webkit-app-region: no-drag;
@@ -680,8 +800,40 @@
     padding: 2px 5px;
     pointer-events: none;
   }
-  .controls {
+  /* `margin-left: auto` here rather than on `.controls`: one auto margin puts everything from
+     this point on against the right edge, where two would split the free space and float the
+     buttons somewhere in the middle of the row. */
+  .actions {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 8px;
+    -webkit-app-region: no-drag;
+  }
+  .actions .action {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 29px;
+    padding: 0 11px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+  .actions .action:hover {
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  .controls {
     display: flex;
     -webkit-app-region: no-drag;
   }
@@ -713,6 +865,42 @@
   .controls button.close:hover {
     background: var(--accent);
     color: var(--bg);
+  }
+  /* Anchored to the title bar and out of its flow, so the row stays exactly 50px whatever the
+     message says. Right-aligned under the buttons it belongs to, capped so a long path wraps
+     rather than running the width of the window, and above the view underneath it. */
+  .topbar-note {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 5;
+    max-width: min(460px, calc(100% - 16px));
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 6px;
+    padding: 9px 11px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    box-shadow: var(--elev-3);
+    -webkit-app-region: no-drag;
+  }
+  .topbar-note p {
+    margin: 0;
+    font-size: var(--fs-secondary);
+    color: var(--text-1);
+  }
+  .topbar-note .hairline {
+    flex-shrink: 0;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 3px 9px;
+    cursor: pointer;
   }
   /* Row 3 is 70px and this box is content-sized against it, pinned to the row's bottom edge.
      That is what lets the runtime error strip appear without moving the player bar: the strip

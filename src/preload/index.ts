@@ -29,6 +29,7 @@ import type {
   PlayStats
 } from '../shared/play'
 import type { ScoreFolderReport } from '../shared/score-folder'
+import type { GameExecutableReport } from '../shared/game-launch'
 
 type Unsubscribe = () => void
 
@@ -98,6 +99,22 @@ const api = {
   windowControl: (action: 'minimize' | 'maximize' | 'close'): Promise<void> =>
     ipcRenderer.invoke(IPC.windowControl, action),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.dialogPickFolder),
+  // A file dialog, for the program Clone Hero is started by. Separate from pickFolder because it
+  // opens on a file and because the filter it offers depends on the platform. Returns the chosen
+  // path, or null if the dialog was cancelled. Choosing a path does not store it: pass it to
+  // gameExecutable first, which is what refuses one that could not run.
+  pickExecutable: (): Promise<string | null> => ipcRenderer.invoke(IPC.dialogPickExecutable),
+  // What Encore makes of one path: whether anything is there, whether it is a file, and whether
+  // it is one this platform could start. Call it with a path the user has just picked to find out
+  // whether it is any use before storing it, or with '' to be told about the stored one.
+  // `describeGameExecutable` in shared/game-launch.ts turns the answer into the sentence to show.
+  gameExecutable: (path: string): Promise<GameExecutableReport> =>
+    ipcRenderer.invoke(IPC.gameExecutable, { path }),
+  // Starts Clone Hero from the stored path and lets go of it: the game outlives Encore, and
+  // quitting Encore does not take it with it. Resolves once the operating system has accepted the
+  // process, and rejects with a sentence to show when the path cannot be run or the spawn failed.
+  // Takes no path, deliberately: the setting is what it runs.
+  gameLaunch: (): Promise<void> => ipcRenderer.invoke(IPC.gameLaunch),
   // Structured clone copies the file buffers across the IPC boundary, which is fine at
   // chart scale (tens of MB worst case).
   chartReadFiles: (req: {
