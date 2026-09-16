@@ -6,12 +6,14 @@
   import {
     type NowPlaying,
     nowPlaying,
+    playerRepeat,
     playerState,
     playerVolume,
     progress,
     seekTo,
     setPlayerVolume,
     togglePlay,
+    toggleRepeat,
     viewportMounted
   } from '../stores/preview-controller'
   import DownloadsPanel from './DownloadsPanel.svelte'
@@ -24,7 +26,8 @@
 
   const idle = $derived($nowPlaying === null)
   // While PreviewPane is mounted it owns the transport (see `viewportMounted`), and the bar keeps
-  // only what the pane does not carry: the title, the volume slider and the downloads toggle.
+  // only what the pane does not carry: the title, the repeat toggle, the volume slider and the
+  // downloads toggle.
   // Playback is view-bound, so any navigation unmounts the pane and hands the transport back.
   const ceded = $derived($viewportMounted)
   const isPlaying = $derived($playerState === 'playing')
@@ -91,11 +94,20 @@
     {/if}
   </div>
 
-  <!-- Ceded by fading, not by removal: the bar is 64px whatever it holds, and the transport keeps
+  <!-- Ceded by fading, not by removal: the bar is 70px whatever it holds, and the transport keeps
        its `flex: 1` so the slot stays reserved and the title and volume do not slide when it goes.
        A faded control is still a control, hence `inert` (no Tab stop, no pointer target) and
        `aria-hidden` (no announcement) for as long as the pane owns playback. -->
   <div class="transport" class:ceded inert={ceded} aria-hidden={ceded}>
+    <!-- One control where the design's control group has five, and a second of the five,
+         repeat, is over in `.right` for the reason given there.
+
+         Shuffle, previous and next all need a sequence, and Encore has none. It previews one
+         chart, the one the rail or the chart page is pointed at: nothing hands the controller a
+         list, `openPreview` replaces whatever was playing, and pointing the rail somewhere new
+         closes the old preview outright. Nor are they drawn disabled, the way the sidebar draws
+         the two features that are merely unbuilt: a disabled control says "later", and these
+         would be promising a play queue this app has no reason to grow. -->
     <button
       class="play"
       disabled={idle}
@@ -125,6 +137,34 @@
   </div>
 
   <div class="right">
+    <!-- Repeat sits with the volume slider rather than beside play, which is not where the
+         design draws it.
+
+         The transport above fades out for as long as a viewport is registered, and a viewport is
+         registered whenever anything is playing: a preview can only exist inside one. Measured
+         at all five widths and from both surfaces that start a preview
+         (`scripts/measure-player-bar.mjs`), the transport is ceded in every state where the bar
+         has a chart in it. A repeat drawn there would be reachable only while nothing was
+         playing, which is the one time nobody wants it. This group is the one the bar keeps, and
+         repeat belongs to it for the same reason the volume slider does: neither the rail nor
+         the chart page carries one.
+
+         Not disabled while idle either, unlike play: it is a mode rather than an action, it
+         outlives the chart it was armed on, and arming it before pressing Play in the rail is a
+         thing to do. -->
+    <button
+      class="repeat"
+      onclick={toggleRepeat}
+      aria-pressed={$playerRepeat}
+      title="Play the preview again when it ends"
+      aria-label="Repeat"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true"
+        ><path
+          d="M17 3l3 3-3 3M4 12V9a3 3 0 0 1 3-3h13M7 21l-3-3 3-3M20 12v3a3 3 0 0 1-3 3H4"
+        /></svg
+      >
+    </button>
     <input
       class="vol"
       type="range"
@@ -262,7 +302,7 @@
       opacity var(--t-fast) var(--ease);
   }
   /* A 32px circle is the visual; the thing the pointer has to land on is 44px. The extra
-     reach is invisible and the bar is 64px tall, so it costs nothing on screen. */
+     reach is invisible and the bar is 70px tall, so it costs nothing on screen. */
   .play::after {
     content: '';
     position: absolute;
@@ -280,6 +320,60 @@
     width: 16px;
     height: 16px;
     fill: currentColor;
+  }
+  /* Quieter than play and smaller, which is the design's own ratio between the two, with the
+     same invisible 44px reach: 28px of circle and 8px of overhang on every side. */
+  .repeat {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    transition:
+      background var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+  .repeat::after {
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
+  .repeat:hover {
+    background: var(--surface-2);
+    color: var(--text-1);
+  }
+  .repeat svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+  }
+  /* --accent-text measures 7.3:1 on --surface-1 (tokens.css), which is the same violet the
+     DOWNLOADS label goes when its panel is open, so the bar has one colour for "this is on". */
+  .repeat[aria-pressed='true'] {
+    color: var(--accent-text);
+  }
+  /* Colour is not the whole signal. `aria-pressed` carries the state to a screen reader and this
+     dot carries it to anyone who cannot separate --accent-text from --text-2, which is the same
+     pair of hues the rest of the bar asks nobody to tell apart. */
+  .repeat[aria-pressed='true']::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: 3px;
+    height: 3px;
+    margin-left: -1.5px;
+    border-radius: 50%;
+    background: currentColor;
   }
   .time {
     font-family: var(--font-mono);
@@ -335,7 +429,7 @@
     white-space: nowrap;
   }
   /* Padding rather than a bigger label: the text stays 12px mono, the hit box becomes 32px
-     tall inside the 64px bar. Negative side margins keep the label where it was. */
+     tall inside the 70px bar. Negative side margins keep the label where it was. */
   .dl {
     background: none;
     border: 0;

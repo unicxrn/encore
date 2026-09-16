@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   type NowPlaying,
   nowPlaying,
+  playerRepeat,
   playerState,
   playerVolume,
   progress,
@@ -23,6 +24,9 @@ afterEach(() => {
   playerVolume.set(null)
   // The settings store is a singleton too, and the bar's slider follows `previewVolume` in it.
   settings.update((s) => ({ ...s, previewVolume: 50 }))
+  // Repeat is deliberately NOT reset by `closePreview()`, which is the point of it: a mode
+  // outlives the chart. That makes it the one store here a test has to put back by hand.
+  playerRepeat.set(false)
 })
 
 const ART_URL = 'encore-art://d4e5f6'
@@ -253,5 +257,119 @@ describe('PlayerBar: the DOWNLOADS toggle', () => {
     expect(button.getAttribute('aria-expanded')).toBe('true')
     expect(button.classList.contains('open')).toBe(true)
     expect(container.querySelector('.panel')).toBeTruthy()
+  })
+})
+
+describe('PlayerBar: the transport controls', () => {
+  const button = (name: RegExp | string): HTMLElement | null =>
+    screen.queryByRole('button', { name })
+
+  /**
+   * The decision this bar makes about the design, pinned so it is a decision and not a slip.
+   *
+   * The design draws shuffle, previous, play, next and repeat. Encore has one preview and no
+   * list behind it: the rail or the chart page points the controller at a chart, `openPreview`
+   * replaces whatever was playing, and pointing it somewhere new closes the old one. Shuffle,
+   * previous and next all need a sequence, so none of them is drawn, and none is drawn disabled
+   * either: a disabled control is a promise, and these would promise a play queue.
+   */
+  it('draws no shuffle, previous or next, because there is no sequence to move through', () => {
+    nowPlaying.set(track())
+    const { container } = render(PlayerBar)
+
+    expect(button(/shuffle/i)).toBeNull()
+    expect(button(/previous/i)).toBeNull()
+    expect(button(/next/i)).toBeNull()
+    // Not hidden behind `disabled` or a tooltip either: nothing in the bar answers to the words.
+    expect(screen.queryByTitle(/shuffle|previous|next/i)).toBeNull()
+    // Play and repeat, and nothing else that could be mistaken for a transport.
+    const controls = [...container.querySelectorAll('.transport button, .right button')].map((b) =>
+      b.getAttribute('aria-label')
+    )
+    expect(controls).toEqual(['Play preview', 'Repeat', null])
+  })
+
+  it('puts repeat with the controls that stay rather than in the transport', () => {
+    // Measured, not assumed: `scripts/measure-player-bar.mjs` finds the transport ceded in every
+    // state where the bar has a chart in it, at all five widths and from both surfaces that can
+    // start a preview. Drawn in there, repeat would be reachable only while nothing was playing.
+    nowPlaying.set(track())
+    const { container } = render(PlayerBar)
+
+    expect(container.querySelector('.transport .repeat')).toBeNull()
+    expect(container.querySelector('.right .repeat')).toBeTruthy()
+  })
+
+  it('keeps repeat while the transport is ceded, and can be armed there', async () => {
+    const unregister = registerViewport(document.createElement('div'))
+    try {
+      nowPlaying.set(track())
+      render(PlayerBar)
+      expect(button('Play preview')).toBeNull()
+
+      const repeat = button('Repeat') as HTMLButtonElement
+      await fireEvent.click(repeat)
+      expect(repeat.getAttribute('aria-pressed')).toBe('true')
+    } finally {
+      unregister()
+    }
+  })
+
+  describe('repeat', () => {
+    it('starts off and says so', () => {
+      nowPlaying.set(track())
+      render(PlayerBar)
+      expect(button('Repeat')?.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('turns on and off again, and says which it is', async () => {
+      nowPlaying.set(track())
+      render(PlayerBar)
+      const repeat = button('Repeat') as HTMLButtonElement
+
+      await fireEvent.click(repeat)
+      expect(repeat.getAttribute('aria-pressed')).toBe('true')
+
+      await fireEvent.click(repeat)
+      expect(repeat.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('follows the store, so a second transport cannot disagree with it', async () => {
+      // PreviewPane's transport sits beside this one on the chart page, and both read the same
+      // mode. A button that only followed its own clicks would drift the moment anything else
+      // set it.
+      nowPlaying.set(track())
+      render(PlayerBar)
+      playerRepeat.set(true)
+      await tick()
+      expect(button('Repeat')?.getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('stays pressable with nothing playing, unlike the play button', async () => {
+      // A mode, not an action: it outlives the chart it was armed on, and arming it before
+      // pressing Play in the rail is a thing to do.
+      render(PlayerBar)
+      const repeat = button('Repeat') as HTMLButtonElement
+      expect(repeat.disabled).toBe(false)
+
+      await fireEvent.click(repeat)
+      expect(repeat.getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('keeps its state across the track it was armed on', async () => {
+      // closePreview runs on every navigation and clears `nowPlaying`. The mode is not track
+      // state and must not go with it.
+      nowPlaying.set(track())
+      render(PlayerBar)
+      await fireEvent.click(button('Repeat') as HTMLButtonElement)
+
+      nowPlaying.set(null)
+      await tick()
+      expect(button('Repeat')?.getAttribute('aria-pressed')).toBe('true')
+
+      nowPlaying.set(track({ title: 'Limelight' }))
+      await tick()
+      expect(button('Repeat')?.getAttribute('aria-pressed')).toBe('true')
+    })
   })
 })
