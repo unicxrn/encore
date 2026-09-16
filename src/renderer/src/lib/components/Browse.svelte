@@ -849,7 +849,9 @@
          file host, and Encore does not query RhythmVerse. A control that cannot change the
          answer is worse than a missing one. -->
     <div class="rbar">
-      <span class="found" aria-live="polite">
+      <!-- Not a live region: the list already has one, off screen at the end of it, and two that
+           announce the same number is one of them read out twice. -->
+      <span class="found">
         {#if $loading && $results.length === 0}
           Searching…
         {:else if $found}
