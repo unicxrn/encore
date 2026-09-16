@@ -46,9 +46,17 @@
  * a shortcut.
  */
 
-/** The eight sidebar views, in sidebar order, which is the order `Mod+1…8` follows. */
+/** The nine sidebar views, in sidebar order, which is the order `Mod+1…9` follows. */
 export type ShortcutView =
-  'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'duplicates' | 'settings'
+  | 'home'
+  | 'browse'
+  | 'library'
+  | 'assets'
+  | 'stats'
+  | 'tools'
+  | 'duplicates'
+  | 'metadata'
+  | 'settings'
 
 export type ShortcutId =
   'focus-search' | 'toggle-play' | 'dismiss' | 'show-shortcuts' | `go:${ShortcutView}`
@@ -103,6 +111,7 @@ export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
   'stats',
   'tools',
   'duplicates',
+  'metadata',
   'settings'
 ]
 
@@ -119,6 +128,7 @@ const VIEW_LABELS: Record<ShortcutView, string> = {
   stats: 'Statistics',
   tools: 'Issues',
   duplicates: 'Duplicates',
+  metadata: 'Metadata editor',
   settings: 'Settings'
 }
 

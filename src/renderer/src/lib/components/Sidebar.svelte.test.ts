@@ -173,11 +173,12 @@ describe('Sidebar order and the view shortcuts', () => {
 
   // Duplicates went in beside Issues, which is what moved Settings off the seventh digit. Both
   // are pinned, because the cost of the insert is exactly that Settings moved.
-  it('gives Duplicates the seventh digit and Settings the eighth', () => {
+  it('gives Duplicates the seventh digit, the editor the eighth and Settings the ninth', () => {
     const digitOf = (id: string): string[] =>
       renderKeys(SHORTCUTS.find((s) => s.id === id)?.keys ?? '', 'Linux x86_64')
     expect(digitOf('go:duplicates')).toEqual(['Ctrl', '7'])
-    expect(digitOf('go:settings')).toEqual(['Ctrl', '8'])
+    expect(digitOf('go:metadata')).toEqual(['Ctrl', '8'])
+    expect(digitOf('go:settings')).toEqual(['Ctrl', '9'])
   })
 })
 

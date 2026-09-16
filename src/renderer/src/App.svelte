@@ -4,6 +4,7 @@
   import Browse from './lib/components/Browse.svelte'
   import Detail from './lib/components/Detail.svelte'
   import Duplicates from './lib/components/Duplicates.svelte'
+  import MetadataEditor from './lib/components/MetadataEditor.svelte'
   import ErrorFallback from './lib/components/ErrorFallback.svelte'
   import Home, { type ChartTarget } from './lib/components/Home.svelte'
   import Icon from './lib/components/Icon.svelte'
@@ -77,6 +78,7 @@
     stats: 'Statistics',
     tools: 'Issues',
     duplicates: 'Duplicates',
+    metadata: 'Metadata editor',
     settings: 'Settings'
   }
 
@@ -646,6 +648,8 @@
             <Tools onNavigate={goTo} />
           {:else if view === 'duplicates'}
             <Duplicates />
+          {:else if view === 'metadata'}
+            <MetadataEditor />
           {:else if view === 'settings'}
             <Settings />
           {/if}

@@ -138,21 +138,25 @@ describe('matchShortcut: the bindings', () => {
   })
 
   /**
-   * Settings moved from the seventh digit to the eighth when Duplicates took its place in the
-   * sidebar. Both are pinned here rather than only the new one: the digits are the sidebar read
-   * top to bottom, and a Duplicates that took the eighth while being drawn seventh would satisfy
-   * the loop above and still be wrong.
+   * Settings moved from the seventh digit to the ninth as Duplicates and the metadata editor
+   * took the rows above it. Each is pinned rather than only the last: the digits are the sidebar
+   * read top to bottom, and a view that took a digit it is not drawn at would satisfy the loop
+   * above and still be wrong.
    */
   it('reaches the seventh view, which Duplicates took from Settings', () => {
     expect(matchShortcut(chord({ key: '7', code: 'Digit7', ctrlKey: true }))).toBe('go:duplicates')
   })
 
-  it('reaches the eighth view, which is where Settings went', () => {
-    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBe('go:settings')
+  it('reaches the eighth view, which the metadata editor took', () => {
+    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBe('go:metadata')
   })
 
-  it("has no ninth view, so Mod+9 is nobody's", () => {
-    expect(matchShortcut(chord({ key: '9', code: 'Digit9', ctrlKey: true }))).toBeNull()
+  it('reaches the ninth view, which is where Settings went', () => {
+    expect(matchShortcut(chord({ key: '9', code: 'Digit9', ctrlKey: true }))).toBe('go:settings')
+  })
+
+  it("has no tenth view, so Mod+0 is nobody's", () => {
+    expect(matchShortcut(chord({ key: '0', code: 'Digit0', ctrlKey: true }))).toBeNull()
   })
 
   it('opens the sheet on ?', () => {

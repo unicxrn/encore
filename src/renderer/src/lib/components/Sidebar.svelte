@@ -1,6 +1,14 @@
 <script lang="ts" module>
   export type ViewId =
-    'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'duplicates' | 'settings'
+    | 'home'
+    | 'browse'
+    | 'library'
+    | 'assets'
+    | 'stats'
+    | 'tools'
+    | 'duplicates'
+    | 'metadata'
+    | 'settings'
 </script>
 
 <script lang="ts">
@@ -161,6 +169,12 @@
           // Two overlapping squares, the shape every file manager uses for a copy.
           d: 'M8 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Zm7 0V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2',
           count: 'duplicates'
+        },
+        {
+          view: 'metadata',
+          // A pencil over lines of text: the fields it edits are the ones a row prints.
+          d: 'M4 7h9M4 12h6M4 17h5m6.5-1.5L20 10l-2-2-4.5 5.5L13 17l2.5-1.5Z',
+          label: 'Metadata editor'
         },
         {
           view: 'settings',

@@ -317,7 +317,8 @@ describe('App keyboard shortcuts', () => {
     ['Digit5', 'Statistics'],
     ['Digit6', 'Issues'],
     ['Digit7', 'Duplicates'],
-    ['Digit8', 'Settings']
+    ['Digit8', 'Metadata editor'],
+    ['Digit9', 'Settings']
   ])('Ctrl+%s goes to %s', async (code, label) => {
     render(App)
     press(document.body, { key: 'x', code, ctrlKey: true })
