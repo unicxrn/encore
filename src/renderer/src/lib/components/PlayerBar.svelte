@@ -94,7 +94,7 @@
     {/if}
   </div>
 
-  <!-- Ceded by fading, not by removal: the bar is 64px whatever it holds, and the transport keeps
+  <!-- Ceded by fading, not by removal: the bar is 70px whatever it holds, and the transport keeps
        its `flex: 1` so the slot stays reserved and the title and volume do not slide when it goes.
        A faded control is still a control, hence `inert` (no Tab stop, no pointer target) and
        `aria-hidden` (no announcement) for as long as the pane owns playback. -->
@@ -302,7 +302,7 @@
       opacity var(--t-fast) var(--ease);
   }
   /* A 32px circle is the visual; the thing the pointer has to land on is 44px. The extra
-     reach is invisible and the bar is 64px tall, so it costs nothing on screen. */
+     reach is invisible and the bar is 70px tall, so it costs nothing on screen. */
   .play::after {
     content: '';
     position: absolute;
@@ -429,7 +429,7 @@
     white-space: nowrap;
   }
   /* Padding rather than a bigger label: the text stays 12px mono, the hit box becomes 32px
-     tall inside the 64px bar. Negative side margins keep the label where it was. */
+     tall inside the 70px bar. Negative side margins keep the label where it was. */
   .dl {
     background: none;
     border: 0;
