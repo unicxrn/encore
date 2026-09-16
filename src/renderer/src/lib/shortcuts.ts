@@ -25,10 +25,11 @@
  *
  * - `Mod+K`: focus search. Already the app's binding, and already advertised on
  *   the search field itself. Kept, not moved.
- * - `Mod+1…8`: the eight sidebar views in sidebar order. Digits are read off
- *   `code`, not `key`: on AZERTY the unshifted digit row produces `&`, `é`, `"`,
- *   so a `key`-based match would leave these unreachable for those users.
+ * - `Mod+1…9`: the first nine sidebar views in sidebar order. Digits are read
+ *   off `code`, not `key`: on AZERTY the unshifted digit row produces `&`, `é`,
+ *   `"`, so a `key`-based match would leave these unreachable for those users.
  *   Letters stay on `key`, where the mnemonic matters more than the position.
+ *   There are ten views and nine digits; see `SHORTCUT_DIGITS`.
  * - `Space`: play/pause. The key everyone tries first, and the one the preview
  *   element already uses, so binding anything else would have taught two
  *   answers to one question. Safe to claim because it only fires when
@@ -46,11 +47,12 @@
  * a shortcut.
  */
 
-/** The nine sidebar views, in sidebar order, which is the order `Mod+1…9` follows. */
+/** The ten sidebar views, in sidebar order, the first nine of which `Mod+1…9` follows. */
 export type ShortcutView =
   | 'home'
   | 'browse'
   | 'library'
+  | 'setlists'
   | 'assets'
   | 'stats'
   | 'tools'
@@ -94,7 +96,16 @@ export interface ShortcutSpec {
 }
 
 /**
- * Sidebar order. Index + 1 is the digit that reaches each view.
+ * How many of the sidebar's views a digit reaches.
+ *
+ * There is no `Mod+10`, and inventing one over `Mod+0` would be a tenth key nobody would guess
+ * from a list that reads 1 to 9. So the tenth view has no shortcut, and this constant is where
+ * that is said once rather than being left implicit in the `[1-9]` the matcher happens to accept.
+ */
+export const SHORTCUT_DIGITS = 9
+
+/**
+ * Sidebar order. Index + 1 is the digit that reaches each of the first `SHORTCUT_DIGITS` views.
  *
  * Duplicates was inserted here rather than appended, and Settings moved from `Mod+7` to `Mod+8`
  * with it. That is a real cost and it was paid deliberately: the one thing a user can be told
@@ -102,11 +113,18 @@ export interface ShortcutSpec {
  * Issues on that list. Appending it as an eighth digit while drawing it seventh would have kept
  * one habit and broken the only rule, which is the worse trade. Settings is the digit least
  * likely to be in anybody's fingers: it is also a link in the sidebar's own footer.
+ *
+ * Setlists went in the same way, fourth, where the approved design draws it, and pushed the five
+ * views under it down one. Settings is what came off the end, and it is the same argument a second
+ * time rather than a new one: the rule survives intact for nine views, and the one that loses its
+ * key is the one with its own link in the footer under the list. Every other view keeps a digit
+ * and the rule stays statable, which is worth more than five habits that were two commits old.
  */
 export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
   'home',
   'browse',
   'library',
+  'setlists',
   'assets',
   'stats',
   'tools',
@@ -119,11 +137,16 @@ export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
  * Sidebar labels, repeated here because the sheet has to name the destination
  * the way the sidebar does. "Issues", not "tools", because the view ids appear
  * nowhere in the interface.
+ *
+ * Exported because it is also the one table the sidebar's own order test can be
+ * pinned against. Reading the labels back out of `SHORTCUTS` used to do that job
+ * and cannot any more: the tenth view has no spec to read one out of.
  */
-const VIEW_LABELS: Record<ShortcutView, string> = {
+export const SHORTCUT_VIEW_LABELS: Record<ShortcutView, string> = {
   home: 'Home',
   browse: 'Explore',
   library: 'Installed',
+  setlists: 'Setlists',
   assets: 'Asset Studio',
   stats: 'Statistics',
   tools: 'Issues',
@@ -142,10 +165,12 @@ export const SHORTCUTS: readonly ShortcutSpec[] = [
     group: 'General'
   },
   { id: 'toggle-play', keys: 'Space', what: 'Play or pause the preview', group: 'Playback' },
-  ...SHORTCUT_VIEWS.map((view, i): ShortcutSpec => ({
+  // Only the views a digit reaches. A sheet listing the tenth with no keys beside it would be a
+  // row of the shortcut list that is not a shortcut.
+  ...SHORTCUT_VIEWS.slice(0, SHORTCUT_DIGITS).map((view, i): ShortcutSpec => ({
     id: `go:${view}`,
     keys: `Mod ${i + 1}`,
-    what: `Go to ${VIEW_LABELS[view]}`,
+    what: `Go to ${SHORTCUT_VIEW_LABELS[view]}`,
     group: 'Navigation'
   }))
 ]
@@ -207,7 +232,11 @@ export function matchShortcut(e: KeyChord): ShortcutId | null {
     if (e.altKey || e.shiftKey) return null
     if (e.key.toLowerCase() === 'k') return 'focus-search'
     const digit = Number(/^Digit([1-9])$/.exec(e.code)?.[1])
-    if (digit >= 1 && digit <= SHORTCUT_VIEWS.length) return `go:${SHORTCUT_VIEWS[digit - 1]}`
+    // Bounded by SHORTCUT_DIGITS and not by the array's length: the tenth view has no digit, and
+    // a bound that followed the array would silently give it one the moment an eleventh appeared.
+    if (digit >= 1 && digit <= Math.min(SHORTCUT_DIGITS, SHORTCUT_VIEWS.length)) {
+      return `go:${SHORTCUT_VIEWS[digit - 1]}`
+    }
     return null
   }
 

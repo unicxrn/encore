@@ -7,6 +7,7 @@
   import MetadataEditor from './lib/components/MetadataEditor.svelte'
   import ErrorFallback from './lib/components/ErrorFallback.svelte'
   import Home, { type ChartTarget } from './lib/components/Home.svelte'
+  import Setlists from './lib/components/Setlists.svelte'
   import Icon from './lib/components/Icon.svelte'
   import Library from './lib/components/Library.svelte'
   import Rail from './lib/components/Rail.svelte'
@@ -36,6 +37,7 @@
   import { initAssets } from './lib/stores/assets'
   import { initDuplicates } from './lib/stores/duplicates'
   import { loadFavourites } from './lib/stores/favourites'
+  import { loadSetlists } from './lib/stores/setlists'
   import { appUpdate, downloadAppUpdate, initAppUpdate } from './lib/stores/app-update'
   import { offeredUpdate } from '../../shared/app-update'
   import { globalQuery } from './lib/stores/global-search'
@@ -75,6 +77,7 @@
     home: 'Home',
     browse: 'Explore',
     library: 'Installed',
+    setlists: 'Setlists',
     assets: 'Asset Studio',
     stats: 'Statistics',
     tools: 'Issues',
@@ -450,6 +453,11 @@
     // Once for the launch, for the reason the store gives: the rail asks which chart is hearted
     // on every navigation, and App destroys the rail's neighbours on each one.
     void loadFavourites()
+    // Once for the launch, and for the same reason: the sidebar draws how many setlists there are
+    // the whole time, and the rail asks which of them hold a chart on every navigation. The
+    // failure is swallowed here and reported by the Setlists view, which re-reads on mount; a
+    // message about a list nobody has asked to see would be an alarm for an absent count.
+    void loadSetlists().catch(() => {})
     // Subscribed here rather than in Settings, because the two states that arrive unasked (the
     // startup check's result, and download progress) land while that tab is closed as often as
     // not, and a subscription that only exists while the panel is mounted would miss them.
@@ -641,6 +649,11 @@
                  that. An Explore row is a candidate among 95,000, and the question is which one
                  to take. -->
             <Library onOpenChart={(target) => (detailChart = target)} onSelectChart={selectChart} />
+          {:else if view === 'setlists'}
+            <!-- Given `selectChart` and not `onOpenChart`: a setlist row's job is to let a reader
+                 check a chart without leaving the order they are reading, which is the rail's
+                 whole purpose, and the chart page is one navigation away from there. -->
+            <Setlists onSelectChart={selectChart} />
           {:else if view === 'assets'}
             <Assets />
           {:else if view === 'stats'}

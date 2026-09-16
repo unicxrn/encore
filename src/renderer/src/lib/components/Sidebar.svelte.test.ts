@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QueuedDownload } from '../../../../shared/schemas'
-import { SHORTCUTS, SHORTCUT_VIEWS, renderKeys } from '../shortcuts'
+import { SHORTCUTS, SHORTCUT_VIEWS, SHORTCUT_VIEW_LABELS, renderKeys } from '../shortcuts'
 import { appUpdate } from '../stores/app-update'
 import { downloads } from '../stores/downloads'
 import { duplicates } from '../stores/duplicates'
 import { issueTally } from '../stores/issue-tally'
 import { scanProgress } from '../stores/scan'
+import { setlists } from '../stores/setlists'
 import Sidebar from './Sidebar.svelte'
 
 /**
@@ -38,11 +39,12 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  // All three are module state that would otherwise be the next test's starting point.
+  // Every one of these is module state that would otherwise be the next test's starting point.
   downloads.set([])
   duplicates.set(null)
   issueTally.set(null)
   scanProgress.set(null)
+  setlists.set([])
 })
 
 const noop = (): void => {}
@@ -80,6 +82,7 @@ describe('Sidebar: the page row and the panel row', () => {
       'Home',
       'Explore',
       'Installed',
+      'Setlists',
       'Asset Studio',
       'Statistics',
       'Duplicates',
@@ -119,6 +122,7 @@ describe('Sidebar: the page row and the panel row', () => {
       'Home',
       'Explore',
       'Installed',
+      'Setlists',
       'Asset Studio',
       'Statistics',
       'Issues',
@@ -159,26 +163,35 @@ describe('Sidebar order and the view shortcuts', () => {
       .filter((button) => button.getAttribute('aria-expanded') === null)
       .map((button) => button.querySelector('.label')?.textContent?.trim())
 
-    const labels = SHORTCUT_VIEWS.map((view) =>
-      SHORTCUTS.find((spec) => spec.id === `go:${view}`)?.what.replace('Go to ', '')
-    )
-    expect(rows).toEqual(labels)
+    // Against the label table rather than against SHORTCUTS, which used to be the same thing and
+    // is not any more: there are ten views and nine digits, so the tenth has no spec to read a
+    // label out of. The table is what both this component and the sheet name a view by.
+    expect(rows).toEqual(SHORTCUT_VIEWS.map((view) => SHORTCUT_VIEW_LABELS[view]))
   })
 
   it('gives the Statistics row the digit its position in that list earns', () => {
     const spec = SHORTCUTS.find((s) => s.id === 'go:stats')
     expect(spec?.what).toBe('Go to Statistics')
-    expect(renderKeys(spec?.keys ?? '', 'Linux x86_64')).toEqual(['Ctrl', '5'])
+    expect(renderKeys(spec?.keys ?? '', 'Linux x86_64')).toEqual(['Ctrl', '6'])
   })
 
-  // Duplicates went in beside Issues, which is what moved Settings off the seventh digit. Both
-  // are pinned, because the cost of the insert is exactly that Settings moved.
-  it('gives Duplicates the seventh digit, the editor the eighth and Settings the ninth', () => {
+  // Duplicates went in beside Issues, which is what moved Settings off the seventh digit, and
+  // Setlists went in below Downloads, which is what moved it off the list entirely. Both are
+  // pinned, because the cost of each insert is exactly what Settings gave up for it.
+  it('gives Setlists the fourth digit, and leaves Settings with none', () => {
     const digitOf = (id: string): string[] =>
       renderKeys(SHORTCUTS.find((s) => s.id === id)?.keys ?? '', 'Linux x86_64')
-    expect(digitOf('go:duplicates')).toEqual(['Ctrl', '7'])
-    expect(digitOf('go:metadata')).toEqual(['Ctrl', '8'])
-    expect(digitOf('go:settings')).toEqual(['Ctrl', '9'])
+    expect(digitOf('go:setlists')).toEqual(['Ctrl', '4'])
+    expect(digitOf('go:duplicates')).toEqual(['Ctrl', '8'])
+    expect(digitOf('go:metadata')).toEqual(['Ctrl', '9'])
+    expect(SHORTCUTS.find((s) => s.id === 'go:settings')).toBeUndefined()
+  })
+
+  // The row is still there and still reachable, which is what makes losing the digit affordable.
+  it('still draws Settings as a row, and as the footer link beside it', () => {
+    renderSidebar()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Settings' })).toBeTruthy()
   })
 })
 
@@ -435,6 +448,41 @@ describe('Sidebar: the figures on the nav items', () => {
     renderSidebar()
 
     expect(figure('Downloads')).toBeNull()
+  })
+
+  // The row's figure is how many SETLISTS there are, not how many charts they hold between them:
+  // the row names the destination, and a user with four setlists is told nothing by "300".
+  it('counts the setlists beside Setlists, not the charts in them', () => {
+    const entry = { name: 'Everlong', artist: '', charter: '', addedAt: 'now' }
+    setlists.set([
+      {
+        id: 'a',
+        name: 'Friday night',
+        createdAt: 'now',
+        entries: [entry, { ...entry, name: 'B' }]
+      },
+      { id: 'b', name: 'Encores', createdAt: 'now', entries: [] }
+    ])
+    renderSidebar()
+
+    expect(figure('Setlists')).toBe('2')
+    expect(screen.getByRole('button', { name: 'Setlists, 2 setlists' })).toBeTruthy()
+  })
+
+  it('says setlist rather than setlists when there is one of them', () => {
+    setlists.set([{ id: 'a', name: 'Friday night', createdAt: 'now', entries: [] }])
+    renderSidebar()
+
+    expect(screen.getByRole('button', { name: 'Setlists, 1 setlist' })).toBeTruthy()
+  })
+
+  // The rule every one of these counts follows: a zero is at least as likely to mean nothing has
+  // looked as it is to mean there is none, so nothing is drawn.
+  it('draws no figure beside Setlists until there is one', () => {
+    renderSidebar()
+
+    expect(figure('Setlists')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Setlists' })).toBeTruthy()
   })
 
   it('counts the spare copies beside Duplicates, in copies rather than sets', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   SHORTCUTS,
   SHORTCUT_GROUPS,
+  SHORTCUT_DIGITS,
   SHORTCUT_VIEWS,
   isTypingTarget,
   matchShortcut,
@@ -123,11 +124,24 @@ describe('matchShortcut: the bindings', () => {
     expect(matchShortcut(chord({ key: 'k', code: 'KeyK', ctrlKey: true, altKey: true }))).toBeNull()
   })
 
-  it('maps Mod+1…8 onto the eight views in sidebar order', () => {
-    for (const [i, view] of SHORTCUT_VIEWS.entries()) {
+  it('maps Mod+1…9 onto the first nine views in sidebar order', () => {
+    for (const [i, view] of SHORTCUT_VIEWS.slice(0, SHORTCUT_DIGITS).entries()) {
       expect(
         matchShortcut(chord({ key: String(i + 1), code: `Digit${i + 1}`, ctrlKey: true }))
       ).toBe(`go:${view}`)
+    }
+  })
+
+  // The loop above cannot catch this, because it only walks the views that have a digit. What is
+  // pinned here is that the views past the ninth have none rather than quietly sharing one.
+  it('leaves the views past the ninth without a digit at all', () => {
+    const reached = new Set(
+      Array.from({ length: SHORTCUT_DIGITS }, (_, i) =>
+        matchShortcut(chord({ key: String(i + 1), code: `Digit${i + 1}`, ctrlKey: true }))
+      )
+    )
+    for (const view of SHORTCUT_VIEWS.slice(SHORTCUT_DIGITS)) {
+      expect(reached.has(`go:${view}`)).toBe(false)
     }
   })
 
@@ -138,24 +152,31 @@ describe('matchShortcut: the bindings', () => {
   })
 
   /**
-   * Settings moved from the seventh digit to the ninth as Duplicates and the metadata editor
-   * took the rows above it. Each is pinned rather than only the last: the digits are the sidebar
-   * read top to bottom, and a view that took a digit it is not drawn at would satisfy the loop
-   * above and still be wrong.
+   * Settings moved from the seventh digit to the ninth as Duplicates and the metadata editor took
+   * the rows above it, and then off the end when Setlists took the fourth. Each is pinned rather
+   * than only the last: the digits are the sidebar read top to bottom, and a view that took a
+   * digit it is not drawn at would satisfy the loop above and still be wrong.
    */
-  it('reaches the seventh view, which Duplicates took from Settings', () => {
-    expect(matchShortcut(chord({ key: '7', code: 'Digit7', ctrlKey: true }))).toBe('go:duplicates')
+  it('reaches the fourth view, which is Setlists', () => {
+    expect(matchShortcut(chord({ key: '4', code: 'Digit4', ctrlKey: true }))).toBe('go:setlists')
   })
 
-  it('reaches the eighth view, which the metadata editor took', () => {
-    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBe('go:metadata')
+  it('reaches the eighth view, which Duplicates was pushed onto', () => {
+    expect(matchShortcut(chord({ key: '8', code: 'Digit8', ctrlKey: true }))).toBe('go:duplicates')
   })
 
-  it('reaches the ninth view, which is where Settings went', () => {
-    expect(matchShortcut(chord({ key: '9', code: 'Digit9', ctrlKey: true }))).toBe('go:settings')
+  it('reaches the ninth view, which is where the metadata editor went', () => {
+    expect(matchShortcut(chord({ key: '9', code: 'Digit9', ctrlKey: true }))).toBe('go:metadata')
   })
 
-  it("has no tenth view, so Mod+0 is nobody's", () => {
+  // The cost of the insert, stated. Settings is reachable from its own sidebar row and from the
+  // footer link under it, which is why it is the one that pays.
+  it('leaves Settings with no digit, and does not give Mod+0 to it or to anyone', () => {
+    for (let digit = 1; digit <= SHORTCUT_DIGITS; digit++) {
+      expect(
+        matchShortcut(chord({ key: String(digit), code: `Digit${digit}`, ctrlKey: true }))
+      ).not.toBe('go:settings')
+    }
     expect(matchShortcut(chord({ key: '0', code: 'Digit0', ctrlKey: true }))).toBeNull()
   })
 
@@ -183,14 +204,16 @@ describe('matchShortcut: the bindings', () => {
 })
 
 describe('the sheet is generated from the bindings', () => {
-  it('lists every shortcut matchShortcut can return', () => {
+  // The views a digit reaches, and only those. A sheet row for the tenth view would print a
+  // shortcut with nothing to press, which is worse than leaving it off a list of shortcuts.
+  it('lists every shortcut matchShortcut can return, and nothing it cannot', () => {
     const listed = new Set(SHORTCUTS.map((s) => s.id))
     const expected = new Set<string>([
       'focus-search',
       'toggle-play',
       'dismiss',
       'show-shortcuts',
-      ...SHORTCUT_VIEWS.map((v) => `go:${v}`)
+      ...SHORTCUT_VIEWS.slice(0, SHORTCUT_DIGITS).map((v) => `go:${v}`)
     ])
     expect(listed).toEqual(expected)
   })
@@ -204,6 +227,7 @@ describe('the sheet is generated from the bindings', () => {
     expect(what).toContain('Go to Issues')
     expect(what).toContain('Go to Explore')
     expect(what).toContain('Go to Statistics')
+    expect(what).toContain('Go to Setlists')
     expect(what).toContain('Go to Duplicates')
     expect(what).not.toContain('Go to tools')
   })

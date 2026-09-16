@@ -3,6 +3,7 @@
     | 'home'
     | 'browse'
     | 'library'
+    | 'setlists'
     | 'assets'
     | 'stats'
     | 'tools'
@@ -19,6 +20,7 @@
   import { spareCopies } from '../stores/duplicates'
   import { issueTally } from '../stores/issue-tally'
   import { scanProgress } from '../stores/scan'
+  import { setlistCount } from '../stores/setlists'
   import { APP_VERSION } from '../../../../shared/constants'
 
   let {
@@ -69,8 +71,13 @@
    *   until a scan completes in this launch, and reading it copies 24,151 rows to count them. It
    *   is published by the Issues view instead, so the pill appears once something has looked and
    *   is absent every launch nothing has. stores/issue-tally.ts carries the whole reasoning.
+   * - `setlists` is how many setlists there are, off the store App loads once per launch. It costs
+   *   one property read per render and no query at all: the list is already in memory so the rail
+   *   can draw which setlists hold a chart, and this is a second reader of it, the arrangement
+   *   `downloads` has with the queue. It counts setlists and not the charts in them, because the
+   *   row names the destination rather than its contents.
    */
-  type CountId = 'library' | 'downloads' | 'duplicates' | 'issues'
+  type CountId = 'library' | 'downloads' | 'duplicates' | 'issues' | 'setlists'
 
   /** Charts in the catalog, or null before the count answers and after one that failed. */
   let libraryTotal = $state<number | null>(null)
@@ -83,7 +90,8 @@
     library: libraryTotal,
     downloads: activeDownloads,
     duplicates: $spareCopies,
-    issues: $issueTally?.brokenCharts ?? null
+    issues: $issueTally?.brokenCharts ?? null,
+    setlists: $setlistCount
   })
 
   /**
@@ -96,10 +104,11 @@
     library: (n) => `${n.toLocaleString()} charts`,
     downloads: (n) => `${n} still to download`,
     duplicates: (n) => `${n} spare ${n === 1 ? 'copy' : 'copies'}`,
-    issues: (n) => `${n} ${n === 1 ? 'chart is' : 'charts are'} broken`
+    issues: (n) => `${n} ${n === 1 ? 'chart is' : 'charts are'} broken`,
+    setlists: (n) => `${n} ${n === 1 ? 'setlist' : 'setlists'}`
   }
 
-  /** The Issues figure is a warning and is drawn as one; the other three are quiet. */
+  /** The Issues figure is a warning and is drawn as one; the other four are quiet. */
   const isPill = (id: CountId): boolean => id === 'issues'
 
   function countOf(item: NavItem): { figure: string; says: string; pill: boolean } | null {
@@ -114,13 +123,14 @@
   }
 
   /**
-   * Two groups, and the ORDER inside them is what `Mod+1…8` means.
+   * Two groups, and the ORDER inside them is what `Mod+1…9` means.
    *
    * SHORTCUT_VIEWS in shortcuts.ts is this list read top to bottom, pinned against this component
    * by its own test, so moving a row between groups is free and moving one past another is not.
    * Duplicates went in beside Issues, which is where the approved design puts it and which pushed
-   * Settings from the seventh digit to the eighth. shortcuts.ts records why that was the trade
-   * worth making.
+   * Settings from the seventh digit to the eighth. Setlists went in below Downloads, where the
+   * design draws it, and pushed Settings off the end of the digits altogether. shortcuts.ts
+   * records why Settings is the one that keeps paying for this.
    */
   const SECTIONS: { header: string; items: NavItem[] }[] = [
     {
@@ -139,6 +149,14 @@
           count: 'downloads',
           // Closure (not a direct reference) so the current prop value is called.
           action: () => onToggleDownloads()
+        },
+        {
+          view: 'setlists',
+          // The design's glyph: lines of a list with a note beside them. Not a heart and not a
+          // folder, because a setlist is neither the charts you liked nor a place on disk.
+          d: 'M4 6h11M4 12h11M4 18h7M18 8v9M18 17a2 2 0 1 0 0 .01',
+          label: 'Setlists',
+          count: 'setlists'
         },
         {
           view: 'assets',
