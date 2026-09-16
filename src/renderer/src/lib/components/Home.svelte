@@ -203,7 +203,7 @@
           bass: chart.diff_bass,
           drums: chart.diff_drums
         },
-        health: summary.worst === null ? null : issueTitle(summary),
+        health: summary.worst === null ? null : issueTitle(summary, 'Chorus'),
         broken: summary.worst === 'blocking'
       }
     })

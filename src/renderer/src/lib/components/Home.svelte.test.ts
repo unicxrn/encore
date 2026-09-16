@@ -392,3 +392,29 @@ describe('Home: a name written in Clone Hero markup', () => {
     expect(screen.queryByText(/color=#/)).toBeNull()
   })
 })
+
+// The health mark on a Chorus row names who found the problem, and the name is an argument rather
+// than a constant inside issueTitle, because Installed draws the same mark for problems found on
+// this disk. Nothing else in this file reads the mark, so a change to that signature reached the
+// compiler and no test.
+describe('Home: the mark on a Chorus row says Chorus found it', () => {
+  afterEach(() => {
+    latest.set({ charts: [], total: null, loading: false, error: null })
+  })
+
+  it('names Chorus as the finder', async () => {
+    renderHome()
+    latest.set({
+      charts: [
+        remote({
+          metadataIssues: [{ metadataIssue: 'missingValue', description: 'no year' }]
+        } as Partial<ChartData>)
+      ],
+      total: 1,
+      loading: false,
+      error: null
+    })
+    const mark = await screen.findByTitle(/Chorus found/)
+    expect(mark).toBeTruthy()
+  })
+})
