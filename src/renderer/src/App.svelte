@@ -38,6 +38,7 @@
   import { togglePlay } from './lib/stores/preview-controller'
   import { matchShortcut, renderKeys, type ShortcutView } from './lib/shortcuts'
   import { railOnScreen } from './lib/rail-visible'
+  import { surprise } from './lib/stores/surprise'
 
   let view = $state<ViewId>('home')
   // The chart page's subject: opened from Installed's rows, from the rail's All details, or by
@@ -180,6 +181,24 @@
   const goTo = (id: ViewId): void => {
     detailChart = null
     view = id
+  }
+
+  /**
+   * Five charts the user does not have, and the view they belong in.
+   *
+   * Explore is where this lands because Explore is the list of charts that are not in the
+   * library: the rows, the health dot, the pips, the per-row download, the multi-select and the
+   * rail a row fills are all already built for exactly these five charts, and a surprise shown
+   * anywhere else would be a second, poorer copy of that list. The store puts a line over it
+   * saying where the rows came from; see `SearchStore.present`.
+   *
+   * Navigating first rather than when the answer arrives. The press has to be visibly heard, the
+   * roll's own note is on the view it is navigating to, and a failure then lands beside the list
+   * rather than in a sidebar tile with no room for a sentence.
+   */
+  const surpriseMe = (): void => {
+    goTo('browse')
+    void surprise.roll()
   }
 
   /**
@@ -473,6 +492,7 @@
       onNavigate={goTo}
       onToggleDownloads={() => (downloadsOpen = !downloadsOpen)}
       onShowShortcuts={() => (shortcutsOpen = true)}
+      onSurprise={surpriseMe}
     />
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
