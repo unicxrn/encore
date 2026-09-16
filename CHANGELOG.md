@@ -31,6 +31,11 @@ release.
 - Installed's rows can fill that column without opening the chart. The mark at the end of a row
   puts it in the column and leaves the list, its filters and its place on screen exactly where
   they were.
+- Installed marks a chart Encore's own issue scan found problems in, the same dot Explore draws
+  for a chart Chorus found problems in: nothing on a clean chart, a hollow dot for charting notes
+  that do not stop it playing, a filled one for a chart that is broken. It reads the report the
+  last scan left rather than reading your charts again, so it costs nothing and shows nothing
+  until you have run that scan once.
 - The sidebar carries the things it had nowhere to say before: which game the library belongs to,
   two quick actions, which chart source Explore searches, and whether a newer Encore exists. Two
   of those offer more than Encore can do yet, and say so on the control rather than looking live:
@@ -69,6 +74,19 @@ release.
   chart with nothing wrong, which is most of them; a hollow dot for charting notes that do not
   stop it playing, and a filled one for a chart that is broken. Hovering says what was found.
   Chorus runs the same checks Encore's own Issues view runs, so this costs no extra request.
+- Installed's rows say what Explore's rows say, and in the same order: a larger cover, the title,
+  the artist with the album, the year and the genre under it, the charter, six pips per instrument
+  in place of the old letter-and-number codes, and the health mark. The year left its own column
+  for the line under the title, which is where Explore already had it.
+- Installed's rows fold as the window narrows, which they never did before. They now use Explore's
+  two widths and its two foldings: the length goes first, then the charter drops under the title
+  and the difficulty under that. Measured at every width the window supports. It fixes a real
+  failure rather than making room for the pips alone: at the 509px the view column has at a 1121px
+  window, which is the narrowest it ever gets, every title in the list was squeezed to nothing and
+  read as a bare ellipsis. The same title now has 282px.
+- A row in Installed announces itself to a screen reader as the chart it opens rather than reading
+  out everything printed on it, which after the pips and the health mark would have been eighteen
+  difficulty bars and a paragraph about the chart's problems.
 - Explore's rows fold rather than crush as the window narrows: the track number and the length
   go first, then the charter drops under the title and the difficulty under that. Measured at
   every width the window supports, down to the 509px the results column has at a 1121px window,
