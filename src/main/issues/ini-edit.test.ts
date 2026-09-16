@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { assertKeyIsNotHashed, HASHED_INI_KEYS, removeSongIniKey } from './ini-edit'
+import {
+  assertKeyIsNotHashed,
+  HASHED_INI_KEYS,
+  readSongIniKey,
+  removeSongIniKey,
+  setSongIniKey
+} from './ini-edit'
 
 const encoder = new TextEncoder()
 const bytes = (text: string): Uint8Array => encoder.encode(text)
@@ -167,5 +173,181 @@ describe('the hashed-key refusal', () => {
     for (const key of ['diff_bass', 'diff_guitar', 'diff_vocals', 'album', 'year', 'genre']) {
       expect(() => assertKeyIsNotHashed(key)).not.toThrow()
     }
+  })
+})
+
+describe('readSongIniKey', () => {
+  it("reads the raw value, not scan-chart's reading of it", () => {
+    // `getIniString` would fold an absent album to "Unknown Album" and strip style tags. The
+    // editor has to show what is in the file: writing scan-chart's answer back would put the
+    // words "Unknown Album" in the user's song.ini.
+    const ini = bytes('[song]\nname = <color=#FF0000>Fixture</color>\nartist=Tester\n')
+
+    expect(readSongIniKey(ini, 'name')).toBe('<color=#FF0000>Fixture</color>')
+    expect(readSongIniKey(ini, 'artist')).toBe('Tester')
+    expect(readSongIniKey(ini, 'album')).toBe('')
+  })
+
+  it('reads the value parseIni would keep when a key is set twice', () => {
+    expect(readSongIniKey(bytes('[song]\nalbum = one\nalbum = two\n'), 'album')).toBe('two')
+  })
+
+  it('ignores a key under some other section, exactly as parseIni does', () => {
+    expect(readSongIniKey(bytes('[song]\nname = X\n[extras]\nalbum = nope\n'), 'album')).toBe('')
+  })
+
+  it('refuses a UTF-16 file rather than reporting every field empty', () => {
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('[song]\nalbum = X\n', 'utf16le')
+    ])
+
+    expect(() => readSongIniKey(new Uint8Array(utf16), 'album')).toThrow(/UTF-16/)
+  })
+})
+
+describe('setSongIniKey', () => {
+  it('replaces the value and leaves every other byte alone', () => {
+    const after = setSongIniKey(bytes(MESSY), 'artist', 'Motorhead')
+
+    expect(after.changed).toBe(true)
+    // Byte-for-byte again, and this fixture is the reason: `artist=Tester\r` has no space around
+    // its `=` and ends in a lone CR, and the hashed `pro_drums` line above it is padded with
+    // spaces. A parse-and-reserialise would normalise all three.
+    expect(text(after.bytes)).toBe(MESSY.replace('artist=Tester', 'artist=Motorhead'))
+  })
+
+  it('keeps the spacing the charter chose around the delimiter', () => {
+    const after = setSongIniKey(bytes('[song]\nalbum   =   old   \n'), 'album', 'new')
+
+    expect(text(after.bytes)).toBe('[song]\nalbum   =   new   \n')
+  })
+
+  it('keeps a CRLF line a CRLF line', () => {
+    const after = setSongIniKey(bytes('[song]\r\nalbum = old\r\nname = X\r\n'), 'album', 'new')
+
+    expect(text(after.bytes)).toBe('[song]\r\nalbum = old\r\nname = X\r\n'.replace('old', 'new'))
+  })
+
+  it('appends a missing key at the end of the [song] section', () => {
+    // Not at the end of the FILE: `parseIni` tracks sections, so a key written under `[extras]`
+    // is a key scan-chart never reads.
+    const after = setSongIniKey(
+      bytes('[song]\nname = X\n\n[extras]\nsomething = 1\n'),
+      'album',
+      'Moving Pictures'
+    )
+
+    expect(text(after.bytes)).toBe(
+      '[song]\nname = X\nalbum = Moving Pictures\n\n[extras]\nsomething = 1\n'
+    )
+  })
+
+  it('appends with the terminator the section already uses', () => {
+    const after = setSongIniKey(bytes('[song]\r\nname = X\r\n'), 'album', 'A')
+
+    expect(text(after.bytes)).toBe('[song]\r\nname = X\r\nalbum = A\r\n')
+  })
+
+  it('gives a file with no trailing newline one before appending', () => {
+    const after = setSongIniKey(bytes('[song]\nname = X'), 'album', 'A')
+
+    expect(text(after.bytes)).toBe('[song]\nname = X\nalbum = A')
+  })
+
+  it('writes into an empty [song] section', () => {
+    const after = setSongIniKey(bytes('[song]\n'), 'album', 'A')
+
+    expect(text(after.bytes)).toBe('[song]\nalbum = A\n')
+  })
+
+  it('refuses a file with no [song] section at all', () => {
+    // scan-chart reports `invalidMetadata` for such a file and reads nothing out of it, so a key
+    // written anywhere in it would be a key nobody ever reads.
+    expect(() => setSongIniKey(bytes('[extras]\na = 1\n'), 'album', 'A')).toThrow(/no \[song\]/)
+  })
+
+  it('removes the key when the value is cleared to empty', () => {
+    // `key = ` and no key at all are the same thing to scan-chart, which folds an empty value to
+    // the field's default either way. One of them leaves a line that means nothing.
+    const after = setSongIniKey(bytes('[song]\nname = X\nalbum = old\n'), 'album', '')
+
+    expect(after.changed).toBe(true)
+    expect(text(after.bytes)).toBe('[song]\nname = X\n')
+  })
+
+  it('reports no change when clearing a key the file never set', () => {
+    const after = setSongIniKey(bytes('[song]\nname = X\n'), 'album', '')
+
+    expect(after.changed).toBe(false)
+    expect(text(after.bytes)).toBe('[song]\nname = X\n')
+  })
+
+  it('reports no change when the file already says this', () => {
+    // The caller skips the write entirely on a false, which for a .sng is a whole archive not
+    // copied and for either shape is an mtime the scanner would otherwise have to chase.
+    const after = setSongIniKey(bytes('[song]\nalbum = same\n'), 'album', 'same')
+
+    expect(after.changed).toBe(false)
+    expect(text(after.bytes)).toBe('[song]\nalbum = same\n')
+  })
+
+  it('collapses a key the file set twice down to the one parseIni reads', () => {
+    const after = setSongIniKey(
+      bytes('[song]\nalbum = one\nname = X\nalbum = two\n'),
+      'album',
+      'three'
+    )
+
+    expect(text(after.bytes)).toBe('[song]\nname = X\nalbum = three\n')
+  })
+
+  it('writes non-ASCII as UTF-8 and leaves a Latin-1 neighbour alone', () => {
+    // The neighbour is the point. `parseIni` decodes UTF-8, so this artist already reads back as
+    // a replacement character everywhere in Encore; what must not happen is a decode-and-re-encode
+    // of the whole file turning its byte into one.
+    const latin1 = new Uint8Array(
+      Buffer.concat([
+        Buffer.from('[song]\nartist = Mot'),
+        Buffer.from([0xf6]),
+        Buffer.from('rhead\nalbum = old\n')
+      ])
+    )
+
+    const after = setSongIniKey(latin1, 'album', 'Ace of Spädes')
+
+    expect(Buffer.from(after.bytes)).toEqual(
+      Buffer.concat([
+        Buffer.from('[song]\nartist = Mot'),
+        Buffer.from([0xf6]),
+        Buffer.from('rhead\nalbum = Ace of Spädes\n')
+      ])
+    )
+  })
+
+  it('refuses a value carrying a line break', () => {
+    // An ini value ends at the newline, so the remainder would become a line of its own: a
+    // `badIniLine`, or worse, a key nobody set.
+    expect(() => setSongIniKey(bytes('[song]\nalbum = old\n'), 'album', 'a\nname = evil')).toThrow(
+      /line break/
+    )
+    expect(() => setSongIniKey(bytes('[song]\nalbum = old\n'), 'album', 'a\rb')).toThrow(
+      /line break/
+    )
+  })
+
+  it('refuses a UTF-16 file rather than writing a key Clone Hero would never read', () => {
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('[song]\nalbum = X\n', 'utf16le')
+    ])
+
+    expect(() => setSongIniKey(new Uint8Array(utf16), 'album', 'Y')).toThrow(/UTF-16/)
+  })
+
+  it.each([...HASHED_INI_KEYS])('refuses to set %s', (key) => {
+    expect(() => setSongIniKey(bytes(`[song]\n${key} = 1\n`), key, '2')).toThrow(
+      /matches charts between players/
+    )
   })
 })
