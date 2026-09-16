@@ -350,10 +350,16 @@
   )
 
   /**
-   * The three instruments a row draws pips for, which are Explore's three.
+   * The three instruments a row draws pips for, which are Explore's first three.
    *
    * The catalog stores eleven difficulty ratings and the chart page draws all of them. A list
    * row draws the three anybody scans a library for, in the order a band is written down.
+   *
+   * Explore draws five. That is not this list disagreeing with it: Explore's row folds the
+   * difficulty onto a line of its own below 800px of column, so its five groups cost the title
+   * nothing at the widths where the column is narrow, and this row keeps the difficulty beside
+   * the song at every width above 559px. Five here was measured rather than argued about, and
+   * the price is written down beside the track width below.
    */
   const ROW_PARTS: readonly {
     key: string
@@ -960,6 +966,7 @@
                 label={part.label}
                 instruments={chart.instruments}
                 tier={part.tier(chart)}
+                icon
               />
             {/each}
           </span>
@@ -1305,10 +1312,25 @@
      under a long title. The old row avoided that with `min-width: 0` on `.song` alone and paid
      the other price for it, measured before this rewrite: at a 1121px window, where this column
      is 509px, the title box was 0px wide on all thirty rows and every one of them was an
-     ellipsis. Folding the row is what fixes that; see the two container queries below. */
+     ellipsis. Folding the row is what fixes that; see the two container queries below.
+
+     124px of difficulty: 3 groups of 34px plus 2 gaps of 9px is 120px, and the four spare pixels
+     are the margin for the subpixel width of a border-boxed circle, which is Explore's own
+     arithmetic at 210px for five. It was 136px when the three groups were letters, so the ring
+     form gave the song 12px back rather than costing it anything.
+
+     Five groups here would want 210px, and `VIEW=installed scripts/measure-explore-row.mjs`
+     priced that at every width the shell supports: the song column goes 386 to 300 at a 960px
+     window, 546 to 460 at 1120, 303 to 217 at the default 1280, 431 to 345 at 1600 and 751 to
+     665 at 1920, which is 74px off the title at every one of them. At 1120 the subtitle crosses:
+     0 of 30 rows ellipsised at 546px, 30 of 30 at 460px. Explore pays none of that because its
+     row folds the difficulty onto a line of its own below 800px of column, and this row does not
+     fold until 559px; the 1121px window is the one width where five would have been free here,
+     and a row that draws five instruments at one width and three at another is a row that says
+     different things about the same chart. */
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 130px) 136px 10px 46px;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 130px) 124px 10px 46px;
     gap: 10px;
     align-items: center;
     width: 100%;
@@ -1421,12 +1443,12 @@
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
   }
-  /* 6px between the three parts, Explore's number: half the 12px that separates a part's letter
-     from the previous part's pips, so the gap inside a group reads as smaller than the gap
-     between groups and the eighteen bars do not read as one run. */
+  /* 9px between the groups, Explore's number, against the 2px between the pips inside one and
+     the 4px that separates a group's ring from its own pips. The gap inside a group has to read
+     as smaller than the gap between groups or the thirty pips read as one run. */
   .diffs {
     display: flex;
-    gap: 6px;
+    gap: 9px;
     min-width: 0;
   }
   .health {
@@ -1553,7 +1575,7 @@
      reading that can be left to inference. */
   @container results (max-width: 899px) {
     .row {
-      grid-template-columns: 44px minmax(0, 1fr) 136px 10px;
+      grid-template-columns: 44px minmax(0, 1fr) 124px 10px;
       grid-template-rows: auto auto;
       row-gap: 1px;
     }
@@ -1585,7 +1607,15 @@
 
      The health mark stays a column of its own rather than joining that line. It is the one thing
      in the row that is absent on most charts, and a mark that moves depending on what is beside
-     it is a mark the eye has to look for rather than glance at. */
+     it is a mark the eye has to look for rather than glance at.
+
+     This is the one place the ring form costs anything. Everywhere else the difficulty sits
+     beside text that is taller than it is, so a group going from roughly 12px tall to 27px
+     changes no row's height; here it has a line to itself and the row went from 79px to 91px,
+     measured at a 1121px window. That is the whole of the price, and it is paid over the fifty
+     pixels of window width where this column is 559px or less. The alternative was drawing the
+     letters back at this one width, which would make a chart's row say the same thing two
+     different ways depending on how wide the window happens to be. */
   @container results (max-width: 559px) {
     .row {
       grid-template-columns: 40px minmax(0, 1fr) 10px;
