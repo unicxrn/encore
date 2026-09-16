@@ -74,22 +74,15 @@ release.
   every width the window supports, down to the 509px the results column has at a 1121px window,
   which is the narrowest it ever gets and is not the smallest window.
 - The window is a three by three frame rather than a stack of bars: a sidebar running the full
-  height beside a top bar, the view, the new chart column and the player bar. Nothing a view does
-  has changed; they are the same seven views in a different frame, and `Ctrl+1` to `Ctrl+7` still
-  reach the same seven in the same order.
-- The nav is grouped under two headings rather than three. Nothing moved past anything else, so
-  every keyboard shortcut still reaches the view it reached before.
-- Everything that floats above the app now takes its shadow from the elevation scale by what it
-  is, rather than from one of two numbers copied between six files.
-- Rhythm has an instrument colour, which it had none of. A guitar co-op or six-fret track takes
-  the colour of the part it plays rather than one of its own, because which controller a track is
-  for is already written in the label beside it and colour is better spent on which instrument it
-  is.
-- The design tokens are the redesign's scale rather than the two surfaces, three text levels and
-  one accent that came before: six ground steps, two borders, four steps of elevation, six
-  instrument colours, three semantic colours and three radii. The names the components already
-  read are now aliases of steps in the new scale, which is why most of it looks unchanged.
-- What did move, on every screen: the dimmest text colour is lighter, and now clears the
+  height beside a top bar, the view, the new chart column and the player bar, with the nav grouped
+  under two headings rather than three. Nothing a view does has changed, and nothing moved past
+  anything else, so `Ctrl+1` to `Ctrl+7` still reach the same seven views in the same order.
+- The palette has depth it did not have: six steps of ground where there were two, and four
+  steps of shadow, so a dialog, a popover, a card and a row each sit somewhere distinct rather
+  than sharing one plane. Every instrument has a colour, rhythm included, and a co-op or six-fret
+  track takes the colour of the part it plays, since which controller it is for is already in
+  the label beside it.
+- What that moved on every screen: the dimmest text colour is lighter, and now clears the
   contrast floor on every surface the app draws it on, which it did not on the darkest of them
   before. Hover states on links and the player's progress are a lighter violet than the
   pink-violet they were, the wash behind a selected row is a flat colour rather than a tint that
