@@ -392,8 +392,12 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
+  // The sidebar draws a count inside the row it belongs to, so "Installed" is "Installed 4" as
+  // far as textContent is concerned. Matching the word and whatever follows it is what keeps this
+  // harness working when a row gains or loses a badge; an exact match timed out for 40 seconds
+  // and reported it as the rail never appearing.
   const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
+    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}' || b.textContent.trim().startsWith('${label} '))`
 
   if (state === 'remote') {
     await waitFor(win, named('Explore'))
