@@ -24,6 +24,10 @@
  *             is a fixed width and a grid track is not, so this compares the two.
  *   clipped   Text cut off by its own box: `scrollWidth > clientWidth` on an element that
  *             declares an ellipsis, which is what an ellipsis actually is.
+ *   title     The box the chart's name gets, `charter` the box beside it, and `cover` the one
+ *             fixed square in the row. The first two are what a wider difficulty column is paid
+ *             for, and `clipped` alone does not report a price: a title that lost 74px and has
+ *             not started ellipsising yet is still a title that lost 74px.
  *   sideways  The page pushing itself wider than its column.
  *   landing   Where a row click goes. Home's rows fill the preview rail, and the rail is
  *             `display: none` below 1120px, so the same click has to reach the chart page
@@ -249,7 +253,12 @@ const HOME = `(() => {
   const blocks = [...document.querySelectorAll('.home .row-block')]
   const viewBox = view.getBoundingClientRect()
 
-  const heights = [...new Set(rows.map((r) => round(r.getBoundingClientRect().height)))]
+  // How many rows at each height, not just which heights exist, which is how the Explore row
+  // script counts them: one tall row among twelve is a different fact from half the list being
+  // tall, and only the counts tell the two apart.
+  const heights = [...new Set(rows.map((r) => round(r.getBoundingClientRect().height)))].map(
+    (h) => h + 'px x' + rows.filter((r) => round(r.getBoundingClientRect().height) === h).length
+  )
 
   const boxes = {}
   for (const el of home.querySelectorAll('*')) {
@@ -275,6 +284,26 @@ const HOME = `(() => {
       : 0
     return { track: round(cell.getBoundingClientRect().width), drawn, parts: parts.length }
   }).filter(Boolean)
+
+  // The cover, and the two text boxes a wider difficulty column is paid for out of. The boxes
+  // list above only reports a box that clipped, which says nothing about a column that got narrower
+  // and has not crossed yet: the width is the price and the ellipsis count is what it bought.
+  // A box folded away by a container query has no width and is left out rather than called zero.
+  const cell = (sel) => {
+    const found = rows
+      .map((row) => {
+        const el = row.querySelector(sel)
+        return el ? round(el.getBoundingClientRect().width) : 0
+      })
+      .filter((n) => n > 0)
+    return found.length ? { min: Math.min(...found), max: Math.max(...found), of: found.length } : null
+  }
+  const covers = [...new Set(rows.map((row) => {
+    const art = row.querySelector('.cover')
+    if (!art) return null
+    const b = art.getBoundingClientRect()
+    return round(b.width) + 'x' + round(b.height)
+  }).filter(Boolean))]
 
   // Each labelled region, with the heading that names it and where its top edge sits relative to
   // the box that scrolls. A section with no accessible name is not a landmark at all, so the name
@@ -303,6 +332,9 @@ const HOME = `(() => {
       ? round(rows[rows.length - 1].getBoundingClientRect().bottom - viewBox.top)
       : null,
     sections,
+    covers,
+    title: cell('.title'),
+    charter: cell('.charter'),
     pipTrack: pips.length ? Math.min(...pips.map((p) => p.track)) : null,
     pipDrawn: pips.length ? Math.max(...pips.map((p) => p.drawn)) : null,
     pipGroups: [...new Set(pips.map((p) => p.parts))],
@@ -465,6 +497,10 @@ app.whenReady().then(async () => {
       `    ${section.named === null ? 'UNNAMED SECTION' : `"${section.named}"`} starts at ${section.top}px`
     )
   }
+  console.log(`  cover         ${shape.covers.join(', ')}`)
+  const box = (b) => (b === null ? 'folded away' : `${b.min}px to ${b.max}px on ${b.of} rows`)
+  console.log(`  title box     ${box(shape.title)}`)
+  console.log(`  charter box   ${box(shape.charter)}`)
   console.log(
     `  pips          ${shape.pipDrawn}px drawn in a ${shape.pipTrack}px track, ${JSON.stringify(shape.pipGroups)} groups per row`
   )

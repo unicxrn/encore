@@ -25,6 +25,10 @@
  *   cover       The one fixed box in the row, and the thing that used to set its height.
  *   song        The column the difficulty column is taken out of, narrowest first: that is the
  *               row that decides whether a title fits.
+ *   title       The box the chart's name gets, and `charter` the box beside it. These are what
+ *               a wider difficulty column is paid for, and `clipped` alone does not report a
+ *               price: a title that lost 74px and has not started ellipsising yet is still a
+ *               title that lost 74px, and the next long name is where that shows.
  *   band        The badges under the subtitle, and how many lines they take. The set is not
  *               fixed per chart, so a band that wraps on some rows and not others is a list of
  *               two row heights, which is the thing the eye stumbles down.
@@ -266,8 +270,11 @@ const SHAPE = `(() => {
   // The cover, which is the one fixed box in the row and the one the row's height used to be
   // set by. Every row has to agree about it: a cover sized from its column is a cover that
   // changes the row's height when the column does.
+  // .thumb is Installed's class for the same box Explore calls .cover. Both are here because
+  // the two lists are asked the same question and answered it with different names; without the
+  // second selector this line reported nothing at all for Installed, at every width.
   const covers = [...new Set(rows.map((row) => {
-    const art = row.querySelector('.cover, .art')
+    const art = row.querySelector('.cover, .art, .thumb')
     if (!art) return null
     const box = art.getBoundingClientRect()
     return Math.round(box.width) + 'x' + Math.round(box.height)
@@ -279,6 +286,23 @@ const SHAPE = `(() => {
     const cell = row.querySelector('.song')
     return cell ? Math.round(cell.getBoundingClientRect().width) : null
   }).filter((n) => n !== null)
+
+  // The two text boxes a wider difficulty column is paid for out of, measured whether or not
+  // they ran out of room. The boxes list below only reports a box that clipped, which says nothing
+  // about a column that got narrower and has not crossed yet: the width is the price, and the
+  // ellipsis count is what the price bought. A box folded away by a container query has no
+  // width and is left out rather than reported as zero.
+  const cell = (sel) => {
+    const found = rows
+      .map((row) => {
+        const el = row.querySelector(sel)
+        return el ? Math.round(el.getBoundingClientRect().width) : 0
+      })
+      .filter((n) => n > 0)
+    return found.length ? { min: Math.min(...found), max: Math.max(...found), of: found.length } : null
+  }
+  const title = cell('.title')
+  const charter = cell('.charter, .badge.charter')
 
   // The badge band under the subtitle, and the one thing about it worth watching: how many lines
   // it takes. The badges a chart carries are not a fixed set, so a band that wraps on some rows
@@ -327,6 +351,8 @@ const SHAPE = `(() => {
     covers,
     songNarrowest: songs.length ? Math.min(...songs) : null,
     songWidest: songs.length ? Math.max(...songs) : null,
+    title,
+    charter,
     bandLines: [...new Set(bands.map((b) => b.lines))].sort(),
     bandWidth: bands.length ? Math.min(...bands.map((b) => b.width)) : null,
     bandBadges: [...new Set(bands.map((b) => b.badges))].sort(),
@@ -431,6 +457,9 @@ app.whenReady().then(async () => {
   if (shape.songNarrowest !== null) {
     console.log(`  song column   ${shape.songNarrowest}px to ${shape.songWidest}px`)
   }
+  const box = (b) => (b === null ? 'folded away' : `${b.min}px to ${b.max}px on ${b.of} rows`)
+  console.log(`  title box     ${box(shape.title)}`)
+  console.log(`  charter box   ${box(shape.charter)}`)
   if (shape.bandWidth !== null) {
     console.log(
       `  badge band    ${shape.bandWidth}px wide, ${JSON.stringify(shape.bandLines)} lines, ${JSON.stringify(shape.bandBadges)} badges per row`
