@@ -243,11 +243,12 @@ describe('Settings: updating Encore', () => {
   })
 
   it('shows a placeholder rather than a verdict before main has answered', async () => {
-    // Not the same as up to date. A panel opened in the first moment of a session is genuinely in
-    // this state, and the sidecar rows above it draw the same placeholder for the same reason.
+    // Not the same as up to date. A view opened in the first moment of a session is genuinely in
+    // this state, and the two tool rows in the Downloads group draw the same placeholder for the
+    // same reason.
     stubEncore({ appUpdateStatus: () => new Promise<never>(() => {}) })
     render(Settings)
-    // Three rows in this panel show a status; the two sidecars are unknown at this point too.
+    // Three rows in this view show a status; the two tools are unknown at this point too.
     await waitFor(() => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0)
     })
@@ -526,5 +527,86 @@ describe('Settings: Clone Hero score folder', () => {
     })
     render(Settings)
     expect(await screen.findByText(/Choose the folder yourself/)).toBeTruthy()
+  })
+})
+
+/**
+ * The four groups.
+ *
+ * jsdom applies no CSS, so nothing here says the page looks grouped; what it pins is that the
+ * four regions exist and are named, which is what a screen reader navigates by and what the
+ * previous seven-section version was rearranged into. The names are the claim: each one is a
+ * thing somebody came here to do, not a subsystem that owns a value.
+ */
+describe('Settings: the groups', () => {
+  it('names four regions, in the order a visit tends to want them', async () => {
+    stubEncore()
+    render(Settings)
+    await screen.findByText('NOTHING TO UNDO')
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Library',
+      'Downloads',
+      'Encore',
+      'Undo history'
+    ])
+  })
+
+  it('keeps the two tools with the downloading they serve', async () => {
+    // They used to sit beside Encore's own update row. yt-dlp fetches video backgrounds and
+    // ffmpeg converts them, so the question they answer is "why has nothing downloaded", which is
+    // not the question the Encore group answers.
+    stubEncore()
+    render(Settings)
+
+    const downloads = screen.getByRole('region', { name: 'Downloads' })
+    expect(downloads.contains(await screen.findByLabelText('Install yt-dlp'))).toBe(true)
+    expect(downloads.contains(screen.getByLabelText('Install ffmpeg'))).toBe(true)
+  })
+})
+
+/**
+ * The folder a download lands in.
+ *
+ * The template is the one control here written in a syntax, and what it produces is a name on
+ * disk nobody sees until a download has finished. The example line is that name. The second test
+ * is the one that matters: the example follows the field as it is typed, and the SETTING still
+ * does not, because a write on every keystroke would store the half-typed template of anyone who
+ * walked away mid-edit.
+ */
+describe('Settings: folder name template', () => {
+  it('shows what the stored template produces, with the extension the format adds', async () => {
+    stubEncore({ settingsSet: () => Promise.resolve() })
+    render(Settings)
+
+    expect(await screen.findByText('Rush - YYZ (Harmonix).sng')).toBeTruthy()
+  })
+
+  it('names a folder rather than an archive when that is the download format', async () => {
+    stubEncore({ settingsSet: () => Promise.resolve() })
+    render(Settings)
+    settings.set({ ...defaultSettings(), downloadFormat: 'folder' })
+
+    expect(await screen.findByText('Rush - YYZ (Harmonix)')).toBeTruthy()
+  })
+
+  it('follows the field as it is typed, and still stores only on change', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({ settingsSet })
+    render(Settings)
+
+    const field = screen.getByLabelText('Folder name template') as HTMLInputElement
+    await fireEvent.input(field, { target: { value: '{name} by {artist}' } })
+
+    expect(await screen.findByText('YYZ by Rush.sng')).toBeTruthy()
+    // Nothing written yet: this is a field mid-edit, not a decision.
+    expect(settingsSet).not.toHaveBeenCalled()
+
+    await fireEvent.change(field, { target: { value: '{name} by {artist}' } })
+    await waitFor(() => {
+      expect(settingsSet).toHaveBeenCalledWith(
+        expect.objectContaining({ chartFolderName: '{name} by {artist}' })
+      )
+    })
   })
 })

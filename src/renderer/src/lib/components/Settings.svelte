@@ -14,6 +14,7 @@
   import { encore } from '../stores/bridge'
   import { formatBytes } from '../../../../shared/format'
   import { APP_VERSION } from '../../../../shared/constants'
+  import { resolveChartFolderName } from '../../../../shared/naming'
   import { describeScoreFolder, type ScoreFolderReport } from '../../../../shared/score-folder'
 
   interface SidecarStatus {
@@ -90,6 +91,31 @@
     await loadScoreFolder()
   }
 
+  // ── the folder a download lands in ─────────────────────────────────────────
+  /**
+   * The template as it is being typed, which feeds the example line and nothing else.
+   *
+   * The stored value is still written on `change`, exactly as it was before the example existed.
+   * Moving the write to `input` would put a row on disk on every keystroke and would store the
+   * half-typed template of anyone who walked away mid-edit. Null means nothing has been typed
+   * this visit, so the example reads what is stored.
+   */
+  let templateDraft = $state<string | null>(null)
+
+  const folderNameExample = $derived(
+    resolveChartFolderName(templateDraft ?? $settings.chartFolderName, {
+      artist: 'Rush',
+      name: 'YYZ',
+      charter: 'Harmonix'
+    })
+  )
+
+  // The queue appends `.sng` itself when that is the download format (downloads/download.ts), so
+  // an example that stopped at the folder name would name something the user will not find.
+  const downloadExample = $derived(
+    $settings.downloadFormat === 'sng' ? `${folderNameExample}.sng` : folderNameExample
+  )
+
   // ── sidecar tools ──────────────────────────────────────────────────────────
   let ytdlpStatus = $state<SidecarStatus | null>(null)
   let ffmpegStatus = $state<SidecarStatus | null>(null)
@@ -156,13 +182,9 @@
   /**
    * The row that says whether a newer Encore exists, and the controls that act on it.
    *
-   * Beside the sidecar rows on purpose: yt-dlp, ffmpeg and Encore are the three things this app
-   * fetches and installs, and a user looking for "how do I get the new version" is looking at the
-   * same part of the same screen.
-   *
-   * `status` is main's, not this component's. The check runs once at startup and its answer
-   * survives navigating away and back, so mounting reads it rather than starting a second one.
-   * A check the user asks for is the only thing here that touches the network.
+   * `status` is main's, not this component's. The check runs once at startup, from main, and its
+   * answer survives navigating away and back, so mounting reads it rather than starting a second
+   * one. A check the user asks for is the only thing here that touches the network.
    */
   const status = $derived($appUpdate)
   const updateState = $derived($appUpdate?.state ?? { kind: 'idle' as const })
@@ -172,8 +194,8 @@
    * The mono line beside the row name, in the same register as the sidecars' NOT INSTALLED.
    *
    * Every state has a line, including the one before main has answered, which draws the same
-   * placeholder the two sidecar rows above it use. That state is neither up to date nor out of
-   * date, and a panel opened in the first moment of a session is genuinely in it.
+   * placeholder the two sidecar rows use. That state is neither up to date nor out of date, and
+   * a view opened in the first moment of a session is genuinely in it.
    */
   const updateStatusLine = $derived.by(() => {
     if (status === null) return '—'
@@ -204,13 +226,14 @@
    *
    * Every issue fix copies aside what it replaces so it can be undone, and those copies are kept
    * until the user says otherwise, with no expiry, no rotation and no "last N". That is only an
-   * honest default if the cost is visible and the user can act on it, which is what this section
+   * honest default if the cost is visible and the user can act on it, which is what this group
    * is. The measured worst case on a real library is about half a gigabyte to make every
    * repairable chart reversible, so the usual answer to seeing this number will be to leave it
    * alone.
    *
    * Undoing a specific repair lives in the Issues tab, beside the repairs. This is the
-   * housekeeping half: what it costs, and how to stop paying it.
+   * housekeeping half: what it costs, and how to stop paying it. Last of the four groups for
+   * that reason, and because it holds the only action here that cannot be taken back.
    */
   let backupCount = $state(0)
   let backupBytes = $state(0)
@@ -256,352 +279,475 @@
     void loadSidecarStatus()
     void loadBackups()
     void loadScoreFolder()
-    // A read of what main already concluded, not a second check. The startup one has usually
-    // finished by the time anyone opens Settings, and asking GitHub again on every visit to this
-    // tab would spend a request to be told the same thing.
+    // A read of what main already concluded, not a second check, and not the only caller of it:
+    // App subscribes at launch and reads once there, which is what makes the launch prompt a
+    // launch prompt. Asking GitHub again on every visit to this view would spend a request to be
+    // told the same thing.
     void refreshAppUpdate()
   })
 </script>
 
+<!--
+  Four groups, named for what somebody came here to do rather than for the subsystem that owns
+  the value: where my songs are, what happens when Encore downloads, which Encore this is, and
+  what the repairs are costing me on disk.
+
+  What that moved. The two sidecar rows used to sit beside Encore's own update row, on the
+  grounds that yt-dlp, ffmpeg and Encore are the three things this app fetches and installs. That
+  is true of the code and not of the question: nobody arrives wanting "the things that install
+  themselves". yt-dlp fetches video backgrounds and ffmpeg converts them, so both are part of
+  downloading, and the Encore group is left holding one subject instead of two.
+-->
 <div class="settings selectable">
-  <h1>Settings</h1>
+  <header class="page">
+    <h1>Settings</h1>
+    <p class="lede">
+      Where Encore looks for your songs, what it does when it downloads, and what it is keeping on
+      disk so repairs can be undone.
+    </p>
+  </header>
 
   <!-- Every group is labelled by its own visible heading. A <section> with no
        accessible name is not a landmark, so without these the page is one flat
        list of controls. -->
-  <section aria-labelledby="settings-folders">
-    <h2 id="settings-folders">Library folders</h2>
-    <!-- The radios already share a `name`, which makes them one group to the
-         browser but leaves the group itself unnamed to a screen reader, which
-         would announce "radio button, 1 of 3" with no idea what is being
-         chosen. -->
-    <div role="radiogroup" aria-label="Default download folder">
-      {#each $settings.libraryFolders as folder (folder.path)}
-        <div class="folder">
-          <!-- Every one of these radios carried the same `title`, so all of them
-               announced "Default download folder" and none of them said which
-               folder. The path is the only thing that tells them apart. -->
-          <input
-            type="radio"
-            name="default"
-            checked={folder.isDefault}
-            onchange={() => void setDefault(folder.path)}
-            aria-label="Download to {folder.path}"
-          />
-          <span class="path">{folder.path}</span>
-          <!-- Same problem as the radios: N buttons all reading "Remove". -->
-          <button
-            class="rm"
-            aria-label="Remove {folder.path}"
-            onclick={() => void removeFolder(folder.path)}>Remove</button
-          >
-        </div>
-      {/each}
+  <section class="group" aria-labelledby="settings-library">
+    <div class="group-head">
+      <h2 id="settings-library">Library</h2>
+      <p class="group-note prose">
+        Encore scans these folders, downloads into the one you pick, and refuses to write to any
+        chart outside them. Everything the catalog holds is scoped to them, so this is the
+        highest-consequence setting in the app.
+      </p>
     </div>
-    {#if $settings.libraryFolders.length === 0}
-      <p class="hint">Add your Clone Hero Songs folder. Downloads and scans need one.</p>
-    {/if}
-    <button class="btn-primary add" onclick={() => void addFolder()}>Add folder</button>
-  </section>
 
-  <section aria-labelledby="settings-scores">
-    <h2 id="settings-scores">Clone Hero scores</h2>
-    <p class="hint prose">
-      Encore reads Clone Hero's own score files to show what you played before Encore was installed.
-      It reads them and nothing else: nothing is ever written into this folder.
-    </p>
-    <p class="score-folder">{scoreFolder ? describeScoreFolder(scoreFolder) : '—'}</p>
-    {#if $settings.scoreFolder}
+    <div class="block">
+      <h3 class="block-head">Song folders</h3>
+      {#if $settings.libraryFolders.length === 0}
+        <p class="hint prose">Add your Clone Hero Songs folder. Downloads and scans need one.</p>
+      {:else}
+        <p class="hint prose">The selected folder is the one downloads land in.</p>
+      {/if}
+      <!-- The radios already share a `name`, which makes them one group to the
+           browser but leaves the group itself unnamed to a screen reader, which
+           would announce "radio button, 1 of 3" with no idea what is being
+           chosen. -->
+      <div
+        class="folders"
+        class:empty={$settings.libraryFolders.length === 0}
+        role="radiogroup"
+        aria-label="Default download folder"
+      >
+        {#each $settings.libraryFolders as folder (folder.path)}
+          <div class="folder">
+            <!-- Every one of these radios carried the same `title`, so all of them
+                 announced "Default download folder" and none of them said which
+                 folder. The path is the only thing that tells them apart. -->
+            <input
+              type="radio"
+              name="default"
+              checked={folder.isDefault}
+              onchange={() => void setDefault(folder.path)}
+              aria-label="Download to {folder.path}"
+            />
+            <span class="path">{folder.path}</span>
+            <!-- Same problem as the radios: N buttons all reading "Remove". -->
+            <button
+              class="rm"
+              aria-label="Remove {folder.path}"
+              onclick={() => void removeFolder(folder.path)}>Remove</button
+            >
+          </div>
+        {/each}
+      </div>
+      <div class="block-actions">
+        <button class="btn-primary" onclick={() => void addFolder()}>Add folder</button>
+        <p class="hint prose">
+          Removing a folder leaves the files where they are. Encore stops scanning it, and a write
+          to a chart inside it is refused from then on.
+        </p>
+      </div>
+    </div>
+
+    <div class="block">
+      <h3 class="block-head">Clone Hero scores</h3>
       <p class="hint prose">
-        You chose this folder. Clearing it puts Encore back on its own search, which is right on
-        Linux and a good guess everywhere else.
+        Encore reads Clone Hero's own score files to show what you played before Encore was
+        installed. It reads them and nothing else: nothing is ever written into this folder.
       </p>
-    {:else}
-      <p class="hint prose">
-        This is where Encore looked. Only the Linux location has been confirmed against a real
-        install, so if your scores are somewhere else, say where.
-      </p>
-    {/if}
-    {#if scoreFolderError}
-      <!-- The refusal. Nothing was stored, and this says what was looked for and what was in
-           the folder instead. -->
-      <p class="tool-error" role="alert">{scoreFolderError}</p>
-    {/if}
-    <div class="score-actions">
-      <button class="btn-primary" onclick={() => void chooseScoreFolder()}>
-        Choose score folder
-      </button>
+      <p class="score-folder">{scoreFolder ? describeScoreFolder(scoreFolder) : '—'}</p>
       {#if $settings.scoreFolder}
-        <button class="hairline sentence" onclick={() => void clearScoreFolder()}>
-          Use Encore's search
-        </button>
-      {/if}
-    </div>
-  </section>
-
-  <section aria-labelledby="settings-downloads">
-    <h2 id="settings-downloads">Downloads</h2>
-    <label>
-      Parallel downloads
-      <input
-        type="number"
-        min="1"
-        max="8"
-        value={$settings.downloadConcurrency}
-        onchange={(e) => {
-          const v = Math.min(8, Math.max(1, Number(e.currentTarget.value) || 1))
-          e.currentTarget.value = String(v)
-          void patchSettings({ downloadConcurrency: v })
-        }}
-      />
-      <span class="hint">Applies after a restart</span>
-    </label>
-    <label>
-      Folder name template
-      <input
-        type="text"
-        class="wide"
-        value={$settings.chartFolderName}
-        onchange={(e) => void patchSettings({ chartFolderName: e.currentTarget.value })}
-      />
-    </label>
-  </section>
-
-  <section aria-labelledby="settings-tools">
-    <h2 id="settings-tools">Tools</h2>
-    <!-- The two rows are identical in structure and their buttons read
-         "Install"/"Update" on both, so the tool's name is the only thing that
-         tells them apart; it labels the row and the buttons borrow it. -->
-    <!-- Three states, not two. A binary that is on disk but did not answer the version probe (it
-         exited non-zero, printed nothing, or ran past the probe's timeout and was killed) used to
-         fall through to NOT INSTALLED, which is the one thing it certainly is not, and which
-         sits next to an Update button that only appears because it IS installed. -->
-    <div class="tool-row" role="group" aria-labelledby="tool-ytdlp">
-      <span class="tool-name" id="tool-ytdlp">yt-dlp</span>
-      <span class="tool-status mono">
-        {#if ytdlpRunning}
-          {ytdlpPercent !== null ? `${ytdlpPercent}%` : 'INSTALLING…'}
-        {:else if ytdlpStatus === null}
-          —
-        {:else if ytdlpStatus.installed && ytdlpStatus.version}
-          {ytdlpStatus.version}
-        {:else if ytdlpStatus.installed}
-          VERSION UNKNOWN
-        {:else}
-          NOT INSTALLED
-        {/if}
-      </span>
-      {#if !ytdlpRunning}
-        {#if ytdlpStatus?.installed}
-          <button class="hairline" aria-label="Update yt-dlp" onclick={() => void updateYtdlp()}>
-            Update
-          </button>
-        {:else}
-          <button class="hairline" aria-label="Install yt-dlp" onclick={() => void installYtdlp()}>
-            Install
-          </button>
-        {/if}
+        <p class="hint prose">
+          You chose this folder. Clearing it puts Encore back on its own search, which is right on
+          Linux and a good guess everywhere else.
+        </p>
       {:else}
-        <!-- In-flight guard: button hidden while job is running to prevent concurrent-install race -->
-        <button class="hairline" disabled aria-label="Installing yt-dlp">
-          {ytdlpPercent !== null ? `${ytdlpPercent}%` : '…'}
-        </button>
+        <p class="hint prose">
+          This is where Encore looked. Only the Linux location has been confirmed against a real
+          install, so if your scores are somewhere else, say where.
+        </p>
       {/if}
-    </div>
-
-    <div class="tool-row" role="group" aria-labelledby="tool-ffmpeg">
-      <span class="tool-name" id="tool-ffmpeg">ffmpeg</span>
-      <span class="tool-status mono">
-        {#if ffmpegStatus === null}
-          —
-        {:else if ffmpegStatus.installed && ffmpegStatus.version}
-          {ffmpegStatus.version}
-        {:else if ffmpegStatus.installed}
-          VERSION UNKNOWN
-        {:else}
-          NOT INSTALLED
-        {/if}
-      </span>
-      <!-- The Issues tab offers this install too, beside the rows that need it, which is where
-           most people will meet it. It is here as well because a user who wants their tools set
-           up before anything goes wrong should not have to break something first. -->
-      {#if !ffmpegRunning}
-        {#if ffmpegStatus?.installed}
-          <button class="hairline" aria-label="Update ffmpeg" onclick={() => void updateFfmpeg()}>
-            Update
-          </button>
-        {:else}
-          <button class="hairline" aria-label="Install ffmpeg" onclick={() => void installFfmpeg()}>
-            Install
+      {#if scoreFolderError}
+        <!-- The refusal. Nothing was stored, and this says what was looked for and what was in
+             the folder instead. -->
+        <p class="tool-error" role="alert">{scoreFolderError}</p>
+      {/if}
+      <div class="score-actions">
+        <button class="btn-primary" onclick={() => void chooseScoreFolder()}>
+          Choose score folder
+        </button>
+        {#if $settings.scoreFolder}
+          <button class="hairline sentence" onclick={() => void clearScoreFolder()}>
+            Use Encore's search
           </button>
         {/if}
-      {:else}
-        <!-- In-flight guard: button disabled while the job runs to prevent a concurrent-install race -->
-        <button class="hairline" disabled aria-label="Installing ffmpeg">
-          {ffmpegPercent !== null ? `${ffmpegPercent}%` : '…'}
-        </button>
-      {/if}
+      </div>
     </div>
-
-    <!-- An install that fails its pinned-hash check is exactly the case where
-         silence is worst, and this line is the only report of it. role="alert"
-         so it interrupts rather than waiting to be found. -->
-    {#if toolError}
-      <p class="tool-error mono" role="alert">ERROR: {toolError}</p>
-    {/if}
-    <p class="hint">
-      yt-dlp downloads video backgrounds. ffmpeg converts the ones Clone Hero cannot play on Linux
-      to WebM. Encore checks its own copies against a pinned checksum before using them.
-    </p>
   </section>
 
-  <!-- Encore's own releases, beside the two tools it installs, because that is where someone
-       looking for "how do I get the new version" is already looking. The row is the same shape:
-       name, mono status, one button. What differs is that on some installs there is no button,
-       and the sentence below says why rather than leaving a dead control on screen. -->
-  <section aria-labelledby="settings-updates">
-    <h2 id="settings-updates">Updates</h2>
-    <div class="tool-row" role="group" aria-labelledby="tool-encore">
-      <span class="tool-name" id="tool-encore">Encore</span>
-      <span class="tool-status mono">{updateStatusLine}</span>
-      {#if status !== null && status.canApply}
-        {#if updateState.kind === 'available'}
-          <!-- Before Download, and in that order on purpose: reading what is in a release is the
-               step that comes first, and a user who has to press Download to find out what they
-               are getting has not been given a choice. -->
-          <button
-            class="hairline"
-            aria-label="What is new in Encore {updateState.version}"
-            onclick={() => openOfferedWhatsNew(updateState.version)}
-          >
-            What's new
-          </button>
-          <button
-            class="hairline"
-            aria-label="Download Encore {updateState.version}"
-            onclick={() => void downloadAppUpdate()}
-          >
-            Download
-          </button>
-        {:else if updateState.kind === 'ready'}
-          <!-- The label names what pressing it does. Nothing has changed on disk that the user
-               can see yet, and "Install" would imply it happens where they are standing. -->
-          <button
-            class="hairline"
-            aria-label="Restart Encore to finish the update"
-            onclick={() => void installAppUpdate()}
-          >
-            Restart
-          </button>
-        {:else if updateBusy}
-          <!-- In-flight guard, matching the sidecar rows: pressing again during a check would
-               join the same request, and during a download would be refused, so the button says
-               where it is instead of pretending to be pressable. The label names which of the two
-               is running, because the visible text is a percent or an ellipsis either way. -->
-          <button
-            class="hairline"
-            disabled
-            aria-label={updateState.kind === 'downloading'
-              ? `Downloading Encore ${updateState.version}`
-              : 'Checking for an Encore update'}
-          >
-            {updateState.kind === 'downloading' && updateState.percent !== null
-              ? `${updateState.percent}%`
-              : '…'}
-          </button>
-        {:else}
-          <button
-            class="hairline"
-            aria-label="Check for an Encore update"
-            onclick={() => void checkAppUpdate()}
-          >
-            Check
-          </button>
-        {/if}
-      {/if}
-    </div>
-
-    <!-- Same treatment as a failed sidecar install: the one report of it, and it interrupts. -->
-    {#if updateError}
-      <p class="tool-error mono" role="alert">ERROR: {updateError}</p>
-    {/if}
-
-    <!-- Always shown, on every target. On Windows and the AppImage it sets the expectation that
-         a restart is involved; on the deb it warns about the password prompt before the button is
-         pressed; on a snap it is the whole answer, and the reason there is no button above. -->
-    {#if status !== null}
-      <p class="hint">{status.note}</p>
-    {/if}
-    {#if updateState.kind === 'ready'}
-      <p class="hint">
-        The update is downloaded. Encore stays on this version until you restart it.
+  <section class="group" aria-labelledby="settings-downloads">
+    <div class="group-head">
+      <h2 id="settings-downloads">Downloads</h2>
+      <p class="group-note prose">
+        How much of your connection a queue takes, what a download is called when it lands, and the
+        two tools a video background needs.
       </p>
-    {/if}
+    </div>
 
-    <!-- The changelog, whenever it is wanted. It also opens itself once on the first launch after
-         an update, which is the moment most people want it, so this is the way back to it rather
-         than the only way to it. The file is built into this copy of Encore, so it describes the
-         version named on the button and needs no network. -->
-    <button class="hairline sentence whats-new" onclick={() => openWhatsNew()}>
-      What's new in Encore {APP_VERSION}
-    </button>
+    <div class="block">
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="download-concurrency">Parallel downloads</label>
+          <p class="hint">Applies after a restart</p>
+        </div>
+        <input
+          id="download-concurrency"
+          class="count"
+          type="number"
+          min="1"
+          max="8"
+          value={$settings.downloadConcurrency}
+          onchange={(e) => {
+            const v = Math.min(8, Math.max(1, Number(e.currentTarget.value) || 1))
+            e.currentTarget.value = String(v)
+            void patchSettings({ downloadConcurrency: v })
+          }}
+        />
+      </div>
+
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="chart-folder-name">Folder name template</label>
+          <p class="hint">
+            {'{artist}'}, {'{name}'} and {'{charter}'} are filled in. Everything else is kept as typed,
+            less the characters a filename cannot hold.
+          </p>
+        </div>
+        <input
+          id="chart-folder-name"
+          type="text"
+          class="wide"
+          value={$settings.chartFolderName}
+          oninput={(e) => (templateDraft = e.currentTarget.value)}
+          onchange={(e) => {
+            templateDraft = e.currentTarget.value
+            void patchSettings({ chartFolderName: e.currentTarget.value })
+          }}
+        />
+      </div>
+      <!-- The template is the most opaque control in this view: it is written in a syntax, and
+           what it produces is a name on disk nobody sees until a download has finished. This is
+           that name, on the settings the queue would actually run with. -->
+      <p class="example">
+        A download of Rush's YYZ lands in <span class="mono">{downloadExample}</span>
+      </p>
+    </div>
+
+    <div class="block">
+      <h3 class="block-head">Video tools</h3>
+      <!-- The two rows are identical in structure and their buttons read
+           "Install"/"Update" on both, so the tool's name is the only thing that
+           tells them apart; it labels the row and the buttons borrow it. -->
+      <!-- Three states, not two. A binary that is on disk but did not answer the version probe (it
+           exited non-zero, printed nothing, or ran past the probe's timeout and was killed) used to
+           fall through to NOT INSTALLED, which is the one thing it certainly is not, and which
+           sits next to an Update button that only appears because it IS installed. -->
+      <div class="tool-row" role="group" aria-labelledby="tool-ytdlp">
+        <span class="tool-name" id="tool-ytdlp">yt-dlp</span>
+        <span class="tool-status mono">
+          {#if ytdlpRunning}
+            {ytdlpPercent !== null ? `${ytdlpPercent}%` : 'INSTALLING…'}
+          {:else if ytdlpStatus === null}
+            —
+          {:else if ytdlpStatus.installed && ytdlpStatus.version}
+            {ytdlpStatus.version}
+          {:else if ytdlpStatus.installed}
+            VERSION UNKNOWN
+          {:else}
+            NOT INSTALLED
+          {/if}
+        </span>
+        {#if !ytdlpRunning}
+          {#if ytdlpStatus?.installed}
+            <button class="hairline" aria-label="Update yt-dlp" onclick={() => void updateYtdlp()}>
+              Update
+            </button>
+          {:else}
+            <button
+              class="hairline"
+              aria-label="Install yt-dlp"
+              onclick={() => void installYtdlp()}
+            >
+              Install
+            </button>
+          {/if}
+        {:else}
+          <!-- In-flight guard: button hidden while job is running to prevent concurrent-install race -->
+          <button class="hairline" disabled aria-label="Installing yt-dlp">
+            {ytdlpPercent !== null ? `${ytdlpPercent}%` : '…'}
+          </button>
+        {/if}
+      </div>
+
+      <div class="tool-row" role="group" aria-labelledby="tool-ffmpeg">
+        <span class="tool-name" id="tool-ffmpeg">ffmpeg</span>
+        <span class="tool-status mono">
+          {#if ffmpegStatus === null}
+            —
+          {:else if ffmpegStatus.installed && ffmpegStatus.version}
+            {ffmpegStatus.version}
+          {:else if ffmpegStatus.installed}
+            VERSION UNKNOWN
+          {:else}
+            NOT INSTALLED
+          {/if}
+        </span>
+        <!-- The Issues tab offers this install too, beside the rows that need it, which is where
+             most people will meet it. It is here as well because a user who wants their tools set
+             up before anything goes wrong should not have to break something first. -->
+        {#if !ffmpegRunning}
+          {#if ffmpegStatus?.installed}
+            <button class="hairline" aria-label="Update ffmpeg" onclick={() => void updateFfmpeg()}>
+              Update
+            </button>
+          {:else}
+            <button
+              class="hairline"
+              aria-label="Install ffmpeg"
+              onclick={() => void installFfmpeg()}
+            >
+              Install
+            </button>
+          {/if}
+        {:else}
+          <!-- In-flight guard: button disabled while the job runs to prevent a concurrent-install race -->
+          <button class="hairline" disabled aria-label="Installing ffmpeg">
+            {ffmpegPercent !== null ? `${ffmpegPercent}%` : '…'}
+          </button>
+        {/if}
+      </div>
+
+      <!-- An install that fails its pinned-hash check is exactly the case where
+           silence is worst, and this line is the only report of it. role="alert"
+           so it interrupts rather than waiting to be found. -->
+      {#if toolError}
+        <p class="tool-error mono" role="alert">ERROR: {toolError}</p>
+      {/if}
+      <p class="hint prose">
+        yt-dlp downloads video backgrounds. ffmpeg converts the ones Clone Hero cannot play on Linux
+        to WebM. Encore checks its own copies against a pinned checksum before using them.
+      </p>
+    </div>
   </section>
 
-  <section>
-    <h2>Undo history</h2>
-    <div class="tool-row">
-      <span class="tool-name">Fixes</span>
-      <span class="tool-status mono">
-        {#if backupCount === 0 && backupBytes === 0}
-          NOTHING TO UNDO
-        {:else}
-          {backupCount} UNDOABLE · {formatBytes(backupBytes)}
-        {/if}
-      </span>
-      <!-- Offered on the SIZE, not the count. A backup interrupted between its files and its
-           manifest is not undoable and is not listed, and the ones most likely to be interrupted
-           are the large ones, so a store can hold a gigabyte with nothing to undo, and a button
-           keyed on the count would leave no way to reclaim it. -->
-      {#if backupCount > 0 || backupBytes > 0}
-        <button class="hairline" disabled={clearing} onclick={() => void clearBackups()}>
-          {#if clearing}
-            Clearing…
-          {:else if clearArmed}
-            Delete them permanently
+  <section class="group" aria-labelledby="settings-encore">
+    <div class="group-head">
+      <h2 id="settings-encore">Encore</h2>
+      <p class="group-note prose">
+        The version that is running, where a newer one comes from, and the way back to what changed.
+      </p>
+    </div>
+
+    <div class="block">
+      <!-- Name, mono status, one button, the same shape the two tool rows use. What differs is
+           that on some installs there is no button, and the sentence below says why rather than
+           leaving a dead control on screen. -->
+      <div class="tool-row" role="group" aria-labelledby="tool-encore">
+        <span class="tool-name" id="tool-encore">Encore</span>
+        <span class="tool-status mono">{updateStatusLine}</span>
+        {#if status !== null && status.canApply}
+          {#if updateState.kind === 'available'}
+            <!-- Before Download, and in that order on purpose: reading what is in a release is the
+                 step that comes first, and a user who has to press Download to find out what they
+                 are getting has not been given a choice. -->
+            <button
+              class="hairline"
+              aria-label="What is new in Encore {updateState.version}"
+              onclick={() => openOfferedWhatsNew(updateState.version)}
+            >
+              What's new
+            </button>
+            <button
+              class="hairline"
+              aria-label="Download Encore {updateState.version}"
+              onclick={() => void downloadAppUpdate()}
+            >
+              Download
+            </button>
+          {:else if updateState.kind === 'ready'}
+            <!-- The label names what pressing it does. Nothing has changed on disk that the user
+                 can see yet, and "Install" would imply it happens where they are standing. -->
+            <button
+              class="hairline"
+              aria-label="Restart Encore to finish the update"
+              onclick={() => void installAppUpdate()}
+            >
+              Restart
+            </button>
+          {:else if updateBusy}
+            <!-- In-flight guard, matching the tool rows: pressing again during a check would
+                 join the same request, and during a download would be refused, so the button says
+                 where it is instead of pretending to be pressable. The label names which of the two
+                 is running, because the visible text is a percent or an ellipsis either way. -->
+            <button
+              class="hairline"
+              disabled
+              aria-label={updateState.kind === 'downloading'
+                ? `Downloading Encore ${updateState.version}`
+                : 'Checking for an Encore update'}
+            >
+              {updateState.kind === 'downloading' && updateState.percent !== null
+                ? `${updateState.percent}%`
+                : '…'}
+            </button>
           {:else}
-            Clear
+            <button
+              class="hairline"
+              aria-label="Check for an Encore update"
+              onclick={() => void checkAppUpdate()}
+            >
+              Check
+            </button>
           {/if}
-        </button>
+        {/if}
+      </div>
+
+      <!-- Same treatment as a failed sidecar install: the one report of it, and it interrupts. -->
+      {#if updateError}
+        <p class="tool-error mono" role="alert">ERROR: {updateError}</p>
+      {/if}
+
+      <!-- Always shown, on every target. On Windows and the AppImage it sets the expectation that
+           a restart is involved; on the deb it warns about the password prompt before the button is
+           pressed; on a snap it is the whole answer, and the reason there is no button above. -->
+      {#if status !== null}
+        <p class="hint prose">{status.note}</p>
+      {/if}
+      {#if updateState.kind === 'ready'}
+        <p class="hint prose">
+          The update is downloaded. Encore stays on this version until you restart it.
+        </p>
       {/if}
     </div>
-    <p class="hint">
-      When Encore fixes an issue it keeps whatever it replaced (the original video, cover, song.ini
-      line or deleted file) so the fix can be undone from the Issues tab. Nothing here expires.
-      Clearing is the only thing that removes it, and after that those fixes are permanent.
-    </p>
+
+    <!-- The two things that showed themselves once and then went away. Both are doors back to
+         something already in this build: the changelog is bundled with it, so it describes the
+         version named on the button and needs no network, and the tour is the same walkthrough
+         first run offered. Neither is a setting, which is why they sit under the group's rule
+         rather than in the row above it. -->
+    <div class="block doors">
+      <button class="hairline sentence" onclick={() => openWhatsNew()}>
+        What's new in Encore {APP_VERSION}
+      </button>
+      <button class="hairline sentence" onclick={openTour}>Show the welcome tour again</button>
+    </div>
   </section>
 
-  <section aria-labelledby="settings-help">
-    <h2 id="settings-help">Help</h2>
-    <!-- The tour shows itself once, on first run, and most people skip it. This is the way back
-         for the ones who later want it. -->
-    <button class="hairline sentence" onclick={openTour}>Show the welcome tour again</button>
+  <section class="group" aria-labelledby="settings-undo">
+    <div class="group-head">
+      <h2 id="settings-undo">Undo history</h2>
+      <p class="group-note prose">
+        What the repairs are costing you on disk, and the one control that reclaims it.
+      </p>
+    </div>
+
+    <div class="block">
+      <div class="tool-row">
+        <span class="tool-name">Fixes</span>
+        <span class="tool-status mono">
+          {#if backupCount === 0 && backupBytes === 0}
+            NOTHING TO UNDO
+          {:else}
+            {backupCount} UNDOABLE · {formatBytes(backupBytes)}
+          {/if}
+        </span>
+        <!-- Offered on the SIZE, not the count. A backup interrupted between its files and its
+             manifest is not undoable and is not listed, and the ones most likely to be interrupted
+             are the large ones, so a store can hold a gigabyte with nothing to undo, and a button
+             keyed on the count would leave no way to reclaim it. -->
+        {#if backupCount > 0 || backupBytes > 0}
+          <button
+            class="hairline destructive"
+            disabled={clearing}
+            onclick={() => void clearBackups()}
+          >
+            {#if clearing}
+              Clearing…
+            {:else if clearArmed}
+              Delete them permanently
+            {:else}
+              Clear
+            {/if}
+          </button>
+        {/if}
+      </div>
+      <p class="hint prose">
+        When Encore fixes an issue it keeps whatever it replaced (the original video, cover,
+        song.ini line or deleted file) so the fix can be undone from the Issues tab. Nothing here
+        expires. Clearing is the only thing that removes it, and after that those fixes are
+        permanent.
+      </p>
+    </div>
   </section>
 </div>
 
 <style>
+  /* One column, centred, and capped at a measure rather than stretched to the view.
+     The view column is 509px at its narrowest (a 1121px window, where the rail has just
+     appeared) and over 1300px on a wide one; a settings row 1300px across puts its label and its
+     control at opposite ends of the screen. Centring also stops the four cards from reading as a
+     left-hand list when the window is wide. */
   .settings {
-    padding: 22px 24px 30px;
-    max-width: 660px;
+    padding: 22px 24px 36px;
+    max-width: 768px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+  .page {
+    margin-bottom: 2px;
   }
   h1 {
     font-size: var(--fs-heading);
     font-weight: 700;
     letter-spacing: var(--ls-tight);
-    margin-bottom: 2px;
+    line-height: var(--lh-display);
+  }
+  .lede {
+    margin-top: 6px;
+    max-width: 62ch;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+  }
+  /* Each group is a card: surface-1 on the window's ground, at the elevation the token file
+     names for a card. */
+  .group {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    box-shadow: var(--elev-2);
+    padding: 16px 18px 18px;
   }
   /* Section header: mono uppercase micro-caps, same register as Home's rows
      and Detail's card heads. */
@@ -612,23 +758,57 @@
     letter-spacing: var(--ls-caps);
     text-transform: uppercase;
     color: var(--text-3);
-    margin-bottom: 10px;
   }
-  /* Each settings group is a surface-1 card. */
-  section {
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    padding: 14px 16px 16px;
+  /* The head is the card's own rule: the heading plus one sentence saying what the group is for,
+     then a hairline. Without the sentence a settings card is a heading over controls, and the
+     controls are the part a first-time reader is least able to interpret. */
+  .group-head {
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-1);
+  }
+  .group-note {
+    margin-top: 6px;
+    font-size: var(--fs-secondary);
+    line-height: var(--lh-prose);
+    color: var(--text-2);
+  }
+  /* A group's internal divisions. Two blocks in one card are two subjects that belong to one
+     question (song folders and score folders are both "where Encore looks"), separated by the
+     same hairline the head uses rather than by a second card. */
+  .block {
+    padding-top: 14px;
+  }
+  .block + .block {
+    margin-top: 14px;
+    border-top: 1px solid var(--border-1);
+  }
+  .block-head {
+    font-size: var(--fs-secondary);
+    font-weight: 600;
+    color: var(--text-1);
+    margin-bottom: 6px;
+  }
+  /* The folder list is a well: it is the one place in this view holding user content rather than
+     controls, and --ground-0 is the token scale's recessed step, for exactly that. */
+  .folders {
+    margin-top: 10px;
+    background: var(--ground-0);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+  }
+  /* No folders yet, so no well: an empty box under the hint would read as a list that failed to
+     load rather than as one nothing has been added to. */
+  .folders.empty {
+    display: none;
   }
   .folder {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 7px 0;
+    padding: 9px 11px;
   }
   .folder + .folder {
-    border-top: 1px solid rgba(255, 255, 255, 0.035);
+    border-top: 1px solid var(--border-1);
   }
   /* 16px, not the UA's 13: the same size as Explore's row checkbox, and the smallest control
      in the app otherwise. */
@@ -640,20 +820,27 @@
     flex-shrink: 0;
     cursor: pointer;
   }
+  /* Wraps rather than ellipsises, which is the change worth arguing for: a library path is the
+     longest string in this view and it is also the content of the row. An ellipsised path in a
+     list of three that differ only in their last segment tells the user nothing, and there are
+     never more than a handful of these rows, so the height a wrap costs is affordable here in a
+     way it is not in a thousand-row list. */
   .path {
     font-family: var(--font-mono);
     font-size: var(--fs-secondary);
+    line-height: var(--lh-snug);
     color: var(--text-2);
     flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
-  /* Remove stays ghost: destructive actions never take the accent. */
+  /* Ghost, because destructive actions never take the accent, and red only on hover: the row is
+     read far more often than it is acted on, and a list of three permanently red buttons reads
+     as three warnings. */
   .rm {
     background: var(--surface-2);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
@@ -665,12 +852,12 @@
       border-color var(--t-fast) var(--ease);
   }
   .rm:hover {
-    color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--danger);
+    border-color: var(--danger);
   }
   .btn-primary {
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--accent-grad);
     color: #fff;
     font-weight: 600;
@@ -678,45 +865,84 @@
     font-family: var(--font-ui);
     padding: 6px 14px;
     cursor: pointer;
+    flex-shrink: 0;
     transition: filter var(--t-fast) var(--ease);
   }
   .btn-primary:hover {
     filter: brightness(1.12);
   }
-  .add {
-    margin-top: 12px;
-  }
-  label {
+  /* The action and the consequence on one line while there is room for both, and stacked when
+     there is not. The sentence is beside the button rather than under the list because it is
+     about Remove, which is the control a user is least likely to have thought through. */
+  .block-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .block-actions .hint {
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+  /* A control row: its name and its explanation on the left, the control itself on the right,
+     and the control dropping to its own line when the pair no longer fits. */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .row + .row {
+    margin-top: 14px;
+  }
+  .row-text {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+  .row-label {
+    display: block;
     font-size: var(--fs-secondary);
-    color: var(--text-2);
-    margin-bottom: 10px;
+    color: var(--text-1);
+  }
+  .row-text .hint {
+    margin-top: 3px;
   }
   /* Inputs sit one surface up from their card, with the shared focus
      border-brightening. */
-  label input[type='number'],
-  label input.wide {
+  .row input {
     background: var(--surface-2);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-1);
     padding: 6px 9px;
     font-family: var(--font-mono);
     font-size: var(--fs-secondary);
     transition: border-color var(--t-fast) var(--ease);
   }
-  label input[type='number']:focus,
-  label input.wide:focus {
-    border-color: rgba(255, 255, 255, 0.2);
+  .row input:focus {
+    border-color: var(--border-2);
   }
-  label input[type='number'] {
+  .row input.count {
+    flex: 0 0 auto;
+    margin-left: auto;
     width: 56px;
   }
-  label input.wide {
-    flex: 1;
+  /* Grows into whatever the row has left, and takes a line of its own once that is under 260px.
+     The stored templates are long: the default alone is 38 characters. */
+  .row input.wide {
+    flex: 1 1 260px;
     min-width: 0;
+  }
+  .example {
+    margin-top: 10px;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+  }
+  .example .mono {
+    color: var(--text-2);
+    overflow-wrap: anywhere;
   }
   .hint {
     font-size: var(--fs-caption);
@@ -741,20 +967,21 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
     margin-top: 12px;
   }
   .tool-row {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 0;
+    padding: 6px 0;
   }
   .tool-row + .tool-row {
-    border-top: 1px solid rgba(255, 255, 255, 0.035);
+    border-top: 1px solid var(--border-1);
   }
   .tool-name {
     font-size: var(--fs-secondary);
-    color: var(--text-2);
+    color: var(--text-1);
     width: 72px;
     flex-shrink: 0;
   }
@@ -763,6 +990,8 @@
     font-size: var(--fs-secondary);
     color: var(--text-2);
     flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .mono {
     font-family: var(--font-mono);
@@ -775,35 +1004,50 @@
     line-height: var(--lh-prose);
     overflow-wrap: anywhere;
   }
+  .tool-row + .hint,
+  .tool-error + .hint {
+    margin-top: 10px;
+  }
   .hairline {
     background: var(--surface-2);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-size: var(--fs-secondary);
     padding: 4px 11px;
     cursor: pointer;
     font-family: var(--font-mono);
+    flex-shrink: 0;
     transition:
       color var(--t-fast) var(--ease),
       border-color var(--t-fast) var(--ease);
   }
-  /* The other hairline buttons here are one mono word beside a mono status. This one is a
-     sentence, and reads as one in the UI face, the same as the tour's own Back. */
+  /* The other hairline buttons here are one mono word beside a mono status. These are
+     sentences, and read as ones in the UI face, the same as the tour's own Back. */
   .hairline.sentence {
     font-family: var(--font-ui);
   }
-  /* Off the row above it and clear of the hint that follows the row, so it reads as a door out of
-     the section rather than a third control on the Encore line. */
-  .whats-new {
-    margin-top: 12px;
+  /* Same rule as Remove: the colour arrives on hover, once the pointer is on the control that
+     makes a completed repair permanent, rather than sitting on the card as a standing warning
+     about a store most people will never clear. It stays on the armed second press too, which is
+     the one that actually deletes. */
+  .hairline.destructive:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
   }
   .hairline:hover:not(:disabled) {
     color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
   }
   .hairline:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+  /* Two ways back into something this build already carries, side by side while they fit and
+     stacked when they do not. */
+  .doors {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 </style>
