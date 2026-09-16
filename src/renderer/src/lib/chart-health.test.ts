@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { healthSummary, localHealth, remoteHealth, type HealthItem } from './chart-health'
+import {
+  healthPhrase,
+  healthScore,
+  healthSummary,
+  localHealth,
+  remoteHealth,
+  type HealthItem
+} from './chart-health'
 import type { ChartData } from './api/enchor'
 import type { ChartRecord } from '../../../shared/schemas'
 
@@ -115,5 +122,81 @@ describe('the health summary', () => {
       })
     )
     expect(healthSummary(items)).toEqual({ present: 3, known: 5 })
+  })
+})
+
+describe('the health score the ring draws', () => {
+  it('is a percentage of the checks that were looked at, not of the five items', () => {
+    // Album art present, video absent, and the other three never measured: one of two known.
+    const items = remoteHealth(chart({ albumArtMd5: 'a'.repeat(32) }))
+    expect(healthScore(items)).toBe(50)
+  })
+
+  it('resolves to one check and no finer', () => {
+    // Four of five on a local chart is 80, and the only other values a five-check chart can
+    // reach are 0, 20, 40, 60 and 100. A score of 95 is not in the set, which is the point:
+    // the ring must not imply a precision five booleans do not have.
+    const four = localHealth(
+      record({
+        hasAlbumArt: true,
+        hasBackground: true,
+        hasVideo: true,
+        hasLyrics: false,
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 9 }]
+      })
+    )
+    expect(healthScore(four)).toBe(80)
+    const all = localHealth(
+      record({
+        hasAlbumArt: true,
+        hasBackground: true,
+        hasVideo: true,
+        hasLyrics: true,
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 9 }]
+      })
+    )
+    expect(healthScore(all)).toBe(100)
+    expect(healthScore(localHealth(record()))).toBe(0)
+  })
+
+  it('rounds a three-check chart to the nearest whole percent', () => {
+    const items: HealthItem[] = [
+      { key: 'albumArt', label: 'Album art', state: 'present' },
+      { key: 'video', label: 'Video', state: 'present' },
+      { key: 'notes', label: 'Note counts', state: 'missing' },
+      { key: 'lyrics', label: 'Lyrics', state: 'unknown' }
+    ]
+    expect(healthScore(items)).toBe(67)
+  })
+
+  it('has no number at all when nothing was measured', () => {
+    expect(healthScore([{ key: 'lyrics', label: 'Lyrics', state: 'unknown' }])).toBeNull()
+    expect(healthScore([])).toBeNull()
+  })
+})
+
+describe('the phrase beside each tick', () => {
+  it('states what is there, what is not, and what nobody looked at', () => {
+    expect(healthPhrase({ key: 'albumArt', label: 'Album art', state: 'present' })).toBe(
+      'Album art'
+    )
+    expect(healthPhrase({ key: 'albumArt', label: 'Album art', state: 'missing' })).toBe(
+      'No album art'
+    )
+    expect(healthPhrase({ key: 'albumArt', label: 'Album art', state: 'unknown' })).toBe(
+      'Album art unknown'
+    )
+  })
+
+  // The claim carries the state in words, so the colour of the glyph beside it is the second
+  // signal and never the only one. A label that read the same in all three states would put
+  // the whole distinction on a green tick against an amber one.
+  it('never reads the same for two different states', () => {
+    for (const label of ['Album art', 'Background', 'Video', 'Lyrics', 'Note counts']) {
+      const said = (['present', 'missing', 'unknown'] as const).map((state) =>
+        healthPhrase({ key: 'notes', label, state })
+      )
+      expect(new Set(said).size).toBe(3)
+    }
   })
 })

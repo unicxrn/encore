@@ -66,3 +66,39 @@ export function healthSummary(items: HealthItem[]): { present: number; known: nu
   if (known.length === 0) return null
   return { present: known.filter((item) => item.state === 'present').length, known: known.length }
 }
+
+/**
+ * The number in the middle of the rail's health ring.
+ *
+ * It is a percentage of `known`, the checks somebody actually looked at, and never of the five
+ * items. Counting an unknown as a failure would mark every chart on Chorus down for a lyrics
+ * track and a background that cannot be seen before a download, which is the same rule
+ * `healthSummary` already applies, written as a number so an arc can be drawn from it.
+ *
+ * The scale is percent and its resolution is one check, so the values it can take are fixed by
+ * the denominator: five known checks give 0, 20, 40, 60, 80 and 100, and three give 0, 33, 67
+ * and 100. Nothing here can produce a 95. A ring reporting one would be claiming a precision
+ * that five booleans do not have, and the card prints "4 of 5 checks" beside it so the reader
+ * is told what the percentage is a percentage of.
+ *
+ * Null when nothing is known either way, which is the one case where there is no ring to draw.
+ */
+export function healthScore(items: HealthItem[]): number | null {
+  const counted = healthSummary(items)
+  if (counted === null) return null
+  return Math.round((counted.present / counted.known) * 100)
+}
+
+/**
+ * One health item as a claim rather than a noun, which is what lets the tick beside it be
+ * decoration instead of the only signal.
+ *
+ * Built from the label rather than stored per state: three strings per item is three places for
+ * the vocabulary to drift, and the shape "Album art" / "No album art" / "Album art unknown"
+ * holds for every label the two builders above produce.
+ */
+export function healthPhrase(item: HealthItem): string {
+  if (item.state === 'present') return item.label
+  if (item.state === 'unknown') return `${item.label} unknown`
+  return `No ${item.label.charAt(0).toLowerCase()}${item.label.slice(1)}`
+}
