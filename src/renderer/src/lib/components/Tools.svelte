@@ -1728,9 +1728,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     margin-top: auto;
     padding-top: 9px;
+  }
+  .s-foot button {
+    margin-left: auto;
   }
   .s-findings {
     font-size: var(--fs-caption);
@@ -1764,9 +1768,13 @@
      because the full-width cards below kept the third one from being empty, which left each state
      card 272px wide at a window 200px wider than one where they were 306px, and clipped
      "CHARTS · 60 FINDINGS" in the foot. */
+  /* 220px rather than 244: at the 509px the view column narrows to with the preview rail up, 244
+     leaves room for one track and the two cards stack, which cost 115px of a 629px scroller at
+     the width that has the least of it. 220 fits two, and the foot below wraps rather than
+     clipping when a card gets that narrow. */
   .strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(244px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 8px;
   }
   .cards > :global(.dupes) {
