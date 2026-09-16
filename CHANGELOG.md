@@ -35,16 +35,28 @@ release.
   chart matched there by hash is the same upload and carries the same blank.
 
 - A third column, to the right of whatever you are looking at, holding the chart you last opened:
-  its cover, name, artist and charter, a note highway you can play it in, the instrument and
-  difficulty that highway uses, what that instrument and difficulty are made of, and what the
-  chart is missing around its notes. It keeps that chart while you go to Settings or Stats rather
+  its cover, name, artist, album, year, genre and charter, a note highway you can play it in
+  labelled with the track it would play, the instrument and difficulty that highway uses, what
+  that instrument and difficulty are made of, and what the chart is missing around its notes. It keeps that chart while you go to Settings or Stats rather
   than emptying out, which is the same thing the player bar under it already does. It is hidden
   below a window width of 1120px, where the columns either side of the view leave it too little
   room to be worth the space.
-- The column says what the track you picked is made of: how many notes it has, the fastest
-  stretch of it in notes per second, and how long the song runs. A drum chart that needs a double
-  pedal says so, beside the drums and nowhere else. A chart with no cover shows its initial
-  rather than an empty square.
+- The column says what the track you picked is made of, in eight figures: its notes, the
+  intensity its charter rated it at, its notes per second on average and over its fastest
+  stretch, how many difficulties it carries, how many tracks the chart has, how long the song
+  runs, and whether it marks out solo sections. Four of those move when you change the
+  instrument or the difficulty above them and four do not. Anything nothing measured reads as a
+  dash and never as a zero, so a chart scanned before Encore stored note counts says it does not
+  know rather than claiming the chart is empty. A drum chart that needs a double pedal says so,
+  beside the drums and nowhere else. A chart with no cover shows its initial rather than an empty
+  square.
+- What the chart is missing is a score out of 100 in a ring, with the checklist beside it. The
+  score counts only the checks something actually looked at: a chart in your library is scored
+  out of five, and one on Chorus Encore out of the three the search answer covers, because a
+  still background and a lyrics track are not in that answer and calling either of them missing
+  would be a guess. It moves one whole check at a time, which is why a five-check chart reads 0,
+  20, 40, 60, 80 or 100 and never anything in between, and the card says what the number is a
+  fraction of rather than leaving it to be assumed.
 - The column offers the one action its chart can answer: Download for a chart on Chorus Encore,
   Show in folder for one in your library. There is no favourite and no setlist behind either of
   those, so neither is drawn.

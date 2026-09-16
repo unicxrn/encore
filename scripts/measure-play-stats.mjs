@@ -545,13 +545,17 @@ const SIDEBAR = `(() => {
  * size, and whether the whole column fits its own height or scrolls. jsdom answers all four
  * with zero.
  *
- * Step five added three things to this column, and each one is a new way to break it. The art
- * box now draws a letter, which can overflow a box it is too large for. The stats strip puts
- * three labelled cells and a flag on one line, which is four things in 342px of usable width and
- * the first candidate for a sideways scroll. And the action row adds a full-width button whose
- * word is longer than the button is when the column narrows. All three are read below, per
- * element, with the clipping measured rather than eyeballed: an ellipsised label and a label
- * that fits look identical in a screenshot, and only one of them is readable.
+ * Three things in this column are each a way to break it. The art box draws a letter, which can
+ * overflow a box it is too large for. The statistics card puts eight labelled cells in two
+ * columns of 346px of usable width, so a value wider than its share is what collapses the grid
+ * to one column. And the action row has a full-width button whose word is longer than the button
+ * is when the column narrows. All three are read below, per element, with the clipping measured
+ * rather than eyeballed: an ellipsised label and a label that fits look identical in a
+ * screenshot, and only one of them is readable.
+ *
+ * This leg answers those four questions about the column. `scripts/measure-rail-panel.mjs`
+ * answers the panel's own: where each block falls against the fold, the health ring's arc inside
+ * its box, and the checklist wrapping, in each of the five states a chart can reach the rail in.
  */
 const RAIL = `(() => {
   const round = (n) => Math.round(n)
@@ -569,14 +573,17 @@ const RAIL = `(() => {
     (el) => round(box(el).right) > round(box(rail).right)
   )
   const placeholder = rail.querySelector('.art.placeholder')
-  const flag = rail.querySelector('.stats .flag')
+  // Beside the statistics card's heading, not in a ninth cell: the grid is eight and stays
+  // eight, and a flag that appeared only on a drum chart would otherwise make a drum chart
+  // taller than every other chart.
+  const flag = rail.querySelector('.stats .chip')
   return {
     present: true,
     width: round(box(rail).width),
     // A square art box: the aspect-ratio only holds if the column gave it a width to square.
     artWidth: art ? round(box(art).width) : null,
     artHeight: art ? round(box(art).height) : null,
-    // The letter an artless chart shows. It must sit inside the 88px box, not overflow it.
+    // The letter an artless chart shows. It must sit inside the 76px box, not overflow it.
     monogram: text(placeholder),
     monogramOverflows: placeholder
       ? placeholder.scrollWidth > placeholder.clientWidth + 1 ||
@@ -591,8 +598,8 @@ const RAIL = `(() => {
       height: round(box(b).height),
       clipped: clipped(b)
     })),
-    // Three cells and, on a drum chart with a double pedal, a fourth thing beside them. A cell
-    // whose label is clipped has stopped saying which number it is.
+    // Eight cells, and on a drum chart with a double pedal a chip beside the card's heading. A
+    // cell whose label is clipped has stopped saying which number it is.
     stats: [...rail.querySelectorAll('.stats .stat')].map((s) => ({
       label: text(s.querySelector('.stat-label')),
       value: text(s.querySelector('.stat-value')),

@@ -3,8 +3,16 @@
   import { albumArtUrl } from '../api/enchor'
   import { artUrl } from '../../../../shared/art'
   import { msToTime, fallbackChartName, stripRichText } from '../../../../shared/format'
-  import { localHealth, remoteHealth, healthSummary } from '../chart-health'
+  import {
+    localHealth,
+    remoteHealth,
+    healthPhrase,
+    healthScore,
+    healthSummary
+  } from '../chart-health'
+  import { INTENSITY_SCALE_TOP } from '../api/advanced'
   import { diffMatrix, instrumentColorVar, type DiffKey } from '../matrix'
+  import { partState } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
   import {
     nowPlaying,
@@ -44,6 +52,21 @@
   const artist = $derived(stripRichText(chart?.artist ?? record?.artist))
   const charter = $derived(stripRichText(chart?.charter ?? record?.charter))
 
+  /**
+   * The dim line under the artist: album, year and genre, and only the ones this chart has.
+   *
+   * Joined rather than laid out in three slots, so a chart with no album does not leave a
+   * leading separator floating at the start of the line. Empty for a chart that carries none of
+   * the three, which is what `:empty` in the stylesheet removes rather than leaving a blank row
+   * in a head whose height is otherwise set by the cover beside it.
+   */
+  const context = $derived.by(() => {
+    const album = stripRichText(chart?.album ?? record?.album)
+    const year = chart?.year?.trim() || (record?.year != null ? String(record.year) : '')
+    const genre = stripRichText(chart?.genre ?? record?.genre)
+    return [album, year, genre].filter(Boolean).join(' · ')
+  })
+
   let artFailed = $state(false)
   const coverUrl = $derived.by<string | null>(() => {
     if (artFailed) return null
@@ -54,14 +77,14 @@
   /**
    * What the art box shows when the chart ships no cover, or when the cover fails to load.
    *
-   * A letter rather than an empty square or a generic disc glyph. The box is 88px and the rail
+   * A letter rather than an empty square or a generic disc glyph. The box is 76px and the rail
    * holds one chart at a time, so the only job left for it is to stop being a gap in the head,
    * and an initial does that while still differing from chart to chart. It deliberately does not
-   * say "no art": the health list below already carries an Album art row, and saying it twice on
+   * say "no art": the health card below already carries an album art row, and saying it twice on
    * one screen would be the rail contradicting nothing and repeating itself.
    *
    * Empty for a title with no letter or digit in it at all, which leaves the tinted, bordered box
-   * on its own. Decorative either way: the name is in the three lines beside it.
+   * on its own. Decorative either way: the name is in the four lines beside it.
    */
   const monogram = $derived.by(() => {
     for (const ch of title) if (/[\p{L}\p{N}]/u.test(ch)) return ch.toUpperCase()
@@ -70,6 +93,30 @@
 
   const health = $derived(record ? localHealth(record) : chart ? remoteHealth(chart) : [])
   const summary = $derived(healthSummary(health))
+  const score = $derived(healthScore(health))
+
+  /**
+   * The ring's arc, in the units an SVG circle takes.
+   *
+   * r = 25 and stroke-width 6 inside a 56px box, so the stroke sits fully inside its viewBox at
+   * both ends of the arc rather than being clipped by it: 25 + 3 = 28, which is exactly the
+   * half-box. The circumference is computed rather than written down, because a radius edited
+   * without its dasharray is a ring that reports the wrong number while still looking like a
+   * ring.
+   */
+  const RING_R = 25
+  const RING_C = 2 * Math.PI * RING_R
+  const ringOffset = $derived(RING_C * (1 - (score ?? 0) / 100))
+  /**
+   * Green only when nothing known is missing, amber otherwise, and no third threshold.
+   *
+   * The same two colours the checklist's own glyphs take, so the ring cannot disagree with the
+   * list beside it. A red band at some score would need a cut-off nobody measured, and "half of
+   * the assets are missing" is not a worse kind of problem than "one is", it is more of it.
+   */
+  const ringColor = $derived(
+    summary !== null && summary.present === summary.known ? 'var(--success)' : 'var(--warning)'
+  )
 
   // Same source, same shape, same helper as the chart page's matrix: the catalog stores note
   // counts under the field names the API returns, so one call covers both kinds of target.
@@ -79,16 +126,18 @@
   interface DiffOption {
     value: string
     label: string
+    /** The word on its own, for the badge over the highway, where the letter would be noise. */
+    word: string
     key: DiffKey
   }
 
   // The letters the difficulty matrix uses, so the rail's selector and the chart page's grid
   // read as one vocabulary rather than two.
   const DIFFICULTY_OPTIONS: readonly DiffOption[] = [
-    { value: 'expert', label: 'Expert (X)', key: 'X' },
-    { value: 'hard', label: 'Hard (H)', key: 'H' },
-    { value: 'medium', label: 'Medium (M)', key: 'M' },
-    { value: 'easy', label: 'Easy (E)', key: 'E' }
+    { value: 'expert', label: 'Expert (X)', word: 'Expert', key: 'X' },
+    { value: 'hard', label: 'Hard (H)', word: 'Hard', key: 'H' },
+    { value: 'medium', label: 'Medium (M)', word: 'Medium', key: 'M' },
+    { value: 'easy', label: 'Easy (E)', word: 'Easy', key: 'E' }
   ]
 
   const instrumentList = $derived.by<{ value: string; label: string }[]>(() => {
@@ -109,6 +158,13 @@
   let instrument = $state('guitar')
   const instrumentVar = $derived(instrumentColorVar(instrument))
   let difficulty = $state('expert')
+
+  // What the badge over the highway says the preview would play. Read off the same two lists the
+  // selects are built from, so it cannot name a track the selects do not offer.
+  const trackLabel = $derived(
+    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} · ` +
+      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  )
 
   // Keep the two selections answerable by the chart in front of us. Written the way the chart
   // page's preview pane writes them, for the same reason: switching instrument can drop the
@@ -154,6 +210,114 @@
   const doubleKick = $derived(
     instrument === 'drums' && (chart?.notesData?.has2xKick ?? record?.has2xKick ?? false)
   )
+
+  /**
+   * Notes per second across the whole song, which is not the same number as the peak beside it.
+   *
+   * Derived rather than stored, because nothing stores it: the catalog holds note counts and a
+   * peak rate and no average, and computing one in the scanner would cost every user a rescan
+   * for a division the renderer can do. Deliberately over the SONG's length, including whatever
+   * silence the audio starts and ends with, so a chart with a 40 second intro reads lower here
+   * than it plays. The honest name for it is therefore "notes per second of song", which is what
+   * the label says; a figure over the charted span would need a first and last note timestamp,
+   * and neither the record nor the search result carries one.
+   */
+  const avgNps = $derived.by<number | null>(() => {
+    if (selectedNotes === null || songLength === null || songLength <= 0) return null
+    return selectedNotes / (songLength / 1000)
+  })
+
+  /**
+   * song.ini's intensity rating for the part on screen, and only for that part.
+   *
+   * The catalog carries ten of these and the search API five, so a rhythm or GHL track selected
+   * on a chart from Chorus has no rating to show and dashes out. `partState` is the one place
+   * that decides what a rating means: it reads the instruments list first, because six charts in
+   * a hundred rate a part their notes do not contain, and it separates "charted, nobody said how
+   * hard" from "rated 0". Both of those are a dash here; the number is the only thing this cell
+   * can say without a second line to say it in.
+   */
+  const instrumentNames = $derived<readonly string[]>(
+    chart?.notesData?.instruments ?? record?.instruments ?? []
+  )
+  const ratings = $derived.by<Record<string, number | null | undefined>>(() => {
+    if (chart) {
+      return {
+        guitar: chart.diff_guitar,
+        bass: chart.diff_bass,
+        drums: chart.diff_drums,
+        keys: chart.diff_keys
+      }
+    }
+    if (!record) return {}
+    return {
+      guitar: record.diffGuitar,
+      bass: record.diffBass,
+      drums: record.diffDrums,
+      keys: record.diffKeys,
+      rhythm: record.diffRhythm,
+      guitarcoop: record.diffGuitarCoop,
+      guitarghl: record.diffGuitarGhl,
+      bassghl: record.diffBassGhl,
+      rhythmghl: record.diffRhythmGhl,
+      guitarcoopghl: record.diffGuitarCoopGhl
+    }
+  })
+  const intensity = $derived.by<string>(() => {
+    const state = partState(instrumentNames, instrument, ratings[instrument])
+    return state.kind === 'rated' ? `${state.tier}/${INTENSITY_SCALE_TOP}` : '—'
+  })
+
+  // Both counts come off the same matrix the instrument select is built from, so the card can
+  // never report a track the select does not offer.
+  const trackCount = $derived(matrixRows.length)
+  const diffCount = $derived.by<number | null>(() => {
+    const row = matrixRows.find((r) => r.instrument === instrument)
+    if (!row) return null
+    return (Object.values(row.diffs) as boolean[]).filter(Boolean).length
+  })
+
+  /**
+   * Whether the chart marks out solo sections, which Clone Hero scores a bonus for.
+   *
+   * Step five turned this down as a row badge and was right to: measured at 44 of 100 charts on
+   * api.enchor.us, a flag set on half the catalog separates nothing when you are scanning thirty
+   * rows for one to download. This card asks a different question. It is about the one chart in
+   * front of the user, where "does this have solos" is a fact somebody wants before they commit
+   * to practising it, and a value shared with half the catalog is no less true for being common.
+   *
+   * Null, not false, when nothing read the notes. A record's flag defaults to false, so the
+   * empty note counts are what separate "no solos" from "never looked" - the same test
+   * `chart-health` applies to the note counts themselves.
+   */
+  const soloSections = $derived.by<boolean | null>(() => {
+    if (chart) return chart.notesData?.hasSoloSections ?? null
+    if (!record) return null
+    if (!record.noteCounts || record.noteCounts.length === 0) return null
+    return record.hasSoloSections
+  })
+
+  /**
+   * The eight cells, in the two columns the panel draws them in.
+   *
+   * Four of the design's eight do not exist in Encore's data and are not here: sustains, chords,
+   * HOPO share and star power are all note-level shapes nothing records, and putting any of them
+   * on screen needs a scanner pass and a SCAN_VERSION bump that re-reads every user's library.
+   *
+   * What replaces them keeps the split the design had. The left column is the selected track,
+   * the four numbers that change when either select above changes. The right column is the shape
+   * of the chart as a whole, which does not.
+   */
+  const statCells = $derived.by<{ label: string; value: string }[]>(() => [
+    { label: 'Notes', value: selectedNotes === null ? '—' : selectedNotes.toLocaleString() },
+    { label: 'Intensity', value: intensity },
+    { label: 'NPS avg', value: avgNps === null ? '—' : avgNps.toFixed(1) },
+    { label: 'Difficulties', value: diffCount === null ? '—' : String(diffCount) },
+    { label: 'NPS peak', value: selectedNps === null ? '—' : selectedNps.toFixed(1) },
+    { label: 'Tracks', value: trackCount === 0 ? '—' : String(trackCount) },
+    { label: 'Length', value: msToTime(songLength) },
+    { label: 'Solos', value: soloSections === null ? '—' : soloSections ? 'Yes' : 'No' }
+  ])
 
   // ─── the three actions that exist ─────────────────────────────────────────
   /**
@@ -367,14 +531,17 @@
       <p class="empty-note">Art, instruments, the highway and what the chart is missing.</p>
     </div>
   {:else}
-    <!-- Cover beside the name rather than above it. Measured: a full-width square cover put the
-         rail's content at about 920px against the 680 a default 1280x800 window gives it, so
-         the column scrolled on the size most users open. Side by side, and with the action row
-         and the stats strip this step adds, it is 638px and still fits, with 42px left for the
-         two blocks that only appear sometimes: the state line once something is playing (21px)
-         and a refused reveal's reason (38px over two lines). Both at once overruns it, and that
-         is the one state where this column scrolls. `scripts/measure-play-stats.mjs` prints
-         every one of those numbers as `rail`. -->
+    <!-- Cover beside the name rather than above it, which is the design's arrangement and also
+         the only one that fits: a full-width square cover put the column's content at about
+         920px against the 680 a 1280x800 window gives it.
+
+         It does not all fit even so. Measured with `scripts/measure-rail-panel.mjs`, the panel
+         is 746px, so at 1280x800 the last 52px of the health card is below the fold and the
+         column scrolls; from a window 866px tall it fits whole. What that height buys is spent
+         on the eight-figure statistics card, which is 149px where the strip it replaced was 40.
+         The order is what makes the overrun affordable: the head, the highway, the two selects
+         and the action all sit in the first 419px, so nothing a user came here to press is ever
+         the thing they have to scroll for. -->
     <div class="head">
       {#if coverUrl}
         <img class="art" src={coverUrl} alt="Album art" onerror={() => (artFailed = true)} />
@@ -387,44 +554,25 @@
              two headings for one song. The landmark's own label is what names this column. -->
         <p class="title" {title}>{title}</p>
         <p class="artist" title={artist}>{artist || '—'}</p>
+        <p class="context" title={context}>{context}</p>
         <p class="charter" title={charter}>{charter ? `Charted by ${charter}` : '—'}</p>
       </div>
     </div>
 
-    <!-- One row: the action this kind of chart has, and the way through to its full page. The
-         action takes the width left over rather than being sized to its word, because a button
-         floating at the left of a 374px column reads as the leftover of a row that lost its
-         second control. -->
-    <div class="actions">
-      {#if chart}
-        <button class="act primary" onclick={() => void download()}>Download</button>
-      {:else if record}
-        <button class="act" onclick={() => void reveal()}>Show in folder</button>
-      {/if}
-      <!-- Sized to its own word and quiet, which is the whole of its design. This column is
-           where a chart is judged; the page carries the things it cannot, the full difficulty
-           matrix, the version check, the ABOUT table and the chips that search on a charter or
-           an album. A route that looked like the action beside it would put the page back as
-           the place every chart goes, and Explore already left that arrangement. -->
-      <button
-        class="act to-detail"
-        title="Everything else about this chart: every difficulty, where it came from, and whether Chorus has a newer version"
-        onclick={() => {
-          if (target !== null) onOpenDetail(target)
-        }}>All details</button
-      >
-    </div>
-    <!-- Only the failure. A download that was accepted says so in the player bar directly under
-         this column, where the percent, the failure and the retry already are; a second line here
-         would be the rail reporting on a queue it does not own. A refused reveal has no such
-         second place, and silence there reads as a button that does nothing. -->
-    {#if actionError !== null}
-      <p class="act-error" role="alert">{actionError}</p>
-    {/if}
+    <!-- The highway, directly under the name, which is the order the design puts them in: the
+         cover says which chart and the highway says what playing it looks like, and everything
+         below is detail on those two.
 
+         The badge is the design's, and names the track the Play button would open. The score
+         and multiplier it draws in the opposite corner are not here and cannot be: Encore's
+         preview renders notes and plays audio, and has no scoring engine behind it, so a
+         figure in that corner would be a number nobody computed. -->
     <section class="preview" aria-label="Preview">
-      <!-- The controller appends `<chart-preview-player>` here; Svelte never renders into it. -->
-      <div class="viewport" bind:this={viewportEl}></div>
+      <div class="hw">
+        <!-- The controller appends `<chart-preview-player>` here; Svelte never renders into it. -->
+        <div class="viewport" bind:this={viewportEl}></div>
+        <span class="hwt mono" aria-hidden="true">{trackLabel}</span>
+      </div>
       <div class="transport">
         <button
           class="play"
@@ -465,7 +613,7 @@
           {#if instrumentVar}
             <span class="swatch" style="background: var({instrumentVar})" aria-hidden="true"></span>
           {/if}
-          INSTRUMENT
+          INST
         </span>
         <select bind:value={instrument} onchange={reopenIfPlaying}>
           {#each instrumentList as opt (opt.value)}
@@ -474,7 +622,7 @@
         </select>
       </label>
       <label class="pick">
-        <span class="pick-label mono">DIFFICULTY</span>
+        <span class="pick-label mono">DIFF</span>
         <select bind:value={difficulty} onchange={reopenIfPlaying}>
           {#each difficultyList as opt (opt.value)}
             <option value={opt.value}>{opt.label}</option>
@@ -483,64 +631,153 @@
       </label>
     </section>
 
-    <!-- Directly under the two selects, because two of the three numbers are answers to them.
-         Labelled by the track it is about, so "1,420 notes" is never read as the chart's total. -->
-    <section class="stats" aria-label="Selected track">
-      <div class="stat">
-        <span class="stat-label mono">NOTES</span>
-        <span class="stat-value mono"
-          >{selectedNotes === null ? '—' : selectedNotes.toLocaleString()}</span
-        >
-      </div>
-      <div class="stat">
-        <span class="stat-label mono">PEAK NPS</span>
-        <span class="stat-value mono">{selectedNps === null ? '—' : selectedNps.toFixed(1)}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label mono">LENGTH</span>
-        <span class="stat-value mono">{msToTime(songLength)}</span>
-      </div>
-      {#if doubleKick}
-        <span class="flag mono" title="The drum chart uses a double pedal.">2X KICK</span>
+    <!-- One row: the action this kind of chart has, and the way through to its full page. The
+         action takes the width left over rather than being sized to its word, because a button
+         floating at the left of a 374px column reads as the leftover of a row that lost its
+         second control. -->
+    <div class="actions">
+      {#if chart}
+        <button class="act primary" onclick={() => void download()}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"
+            ><path d="M12 4v10m0 0 3.5-3.5M12 14l-3.5-3.5M5 19h14" /></svg
+          >Download
+        </button>
+      {:else if record}
+        <button class="act" onclick={() => void reveal()}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"
+            ><path
+              d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+            /></svg
+          >Show in folder
+        </button>
       {/if}
+      <!-- Sized to its own word and quiet, which is the whole of its design. This column is
+           where a chart is judged; the page carries the things it cannot, the full difficulty
+           matrix, the version check, the ABOUT table and the chips that search on a charter or
+           an album. A route that looked like the action beside it would put the page back as
+           the place every chart goes, and Explore already left that arrangement. -->
+      <button
+        class="act to-detail"
+        title="Everything else about this chart: every difficulty, where it came from, and whether Chorus has a newer version"
+        onclick={() => {
+          if (target !== null) onOpenDetail(target)
+        }}>All details</button
+      >
+    </div>
+    <!-- Only the failure. A download that was accepted says so in the player bar directly under
+         this column, where the percent, the failure and the retry already are; a second line here
+         would be the rail reporting on a queue it does not own. A refused reveal has no such
+         second place, and silence there reads as a button that does nothing. -->
+    {#if actionError !== null}
+      <p class="act-error" role="alert">{actionError}</p>
+    {/if}
+
+    <!-- Eight cells in two columns, the shape the design gives this card. The left column is
+         the track the two selects name and moves with them; the right column is the chart and
+         does not. Four of the design's own eight are not here and say so in `statCells`. -->
+    <section class="card stats" aria-label="Chart statistics">
+      <h2 class="card-head">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h13" /></svg>
+        Chart statistics
+        {#if doubleKick}
+          <!-- Beside the heading rather than in a ninth cell: the grid is eight and stays
+               eight, and a flag that appears only on a drum chart would otherwise make a drum
+               chart taller than every other chart. -->
+          <span class="chip mono" title="The drum chart uses a double pedal.">2X KICK</span>
+        {/if}
+      </h2>
+      <div class="kv">
+        {#each statCells as cell (cell.label)}
+          <div class="stat">
+            <span class="stat-label">{cell.label}</span>
+            <span class="stat-value mono">{cell.value}</span>
+          </div>
+        {/each}
+      </div>
     </section>
 
-    <section class="health" aria-label="Chart health">
-      <div class="health-head">
-        <span class="mono">CHART HEALTH</span>
+    <section class="card health" aria-label="Chart health">
+      <h2 class="card-head">
+        <svg viewBox="0 0 24 24" aria-hidden="true"
+          ><path d="M12 2 4 5.4v6.1c0 4.7 3.4 9.1 8 10.5 4.6-1.4 8-5.8 8-10.5V5.4z" /></svg
+        >
+        Chart health
         {#if summary}
-          <span class="mono count">{summary.present}/{summary.known}</span>
+          <!-- The denominator, next to the heading rather than inside the ring. A ring reading
+               67 with nothing to say what it is 67 of invites the reader to assume five checks
+               and a third of a check missing, which is not what happened. -->
+          <span class="count mono">{summary.present} of {summary.known} checks</span>
         {/if}
+      </h2>
+      <div class="hl">
+        {#if score !== null}
+          <div
+            class="ring"
+            role="img"
+            aria-label="{score} out of 100: {summary?.present} of {summary?.known} checks passed"
+          >
+            <svg width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+              <circle
+                cx="28"
+                cy="28"
+                r={RING_R}
+                fill="none"
+                stroke="var(--ground-4)"
+                stroke-width="6"
+              />
+              <circle
+                cx="28"
+                cy="28"
+                r={RING_R}
+                fill="none"
+                stroke={ringColor}
+                stroke-width="6"
+                stroke-linecap="round"
+                stroke-dasharray={RING_C}
+                stroke-dashoffset={ringOffset}
+              />
+            </svg>
+            <span class="ring-value mono" aria-hidden="true">{score}</span>
+          </div>
+        {/if}
+        <ul class="hlc">
+          {#each health as item (item.key)}
+            <!-- The claim, not the noun: "No lyrics" and "Lyrics unknown" and "Lyrics" are three
+                 different sentences, so the glyph's colour beside them is the second signal and
+                 never the only one. -->
+            <li class="health-row" data-state={item.state} data-key={item.key}>
+              {#if item.state === 'present'}
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7" /></svg>
+              {:else if item.state === 'missing'}
+                <svg viewBox="0 0 24 24" aria-hidden="true"
+                  ><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16.2v.01" /></svg
+                >
+              {:else}
+                <svg viewBox="0 0 24 24" aria-hidden="true"
+                  ><circle cx="12" cy="12" r="9" /><path d="M8.5 12h7" /></svg
+                >
+              {/if}
+              <span class="health-label">{healthPhrase(item)}</span>
+            </li>
+          {/each}
+        </ul>
       </div>
-      <ul>
-        {#each health as item (item.key)}
-          <li class="health-row" data-state={item.state}>
-            <span class="dot" aria-hidden="true"></span>
-            <span class="health-label">{item.label}</span>
-            <!-- The word, not only the dot: colour is the second signal here, never the only
-                 one, and "unknown" has no colour that could carry it on its own. -->
-            <span class="health-state mono"
-              >{item.state === 'present'
-                ? 'OK'
-                : item.state === 'missing'
-                  ? 'MISSING'
-                  : 'UNKNOWN'}</span
-            >
-          </li>
-        {/each}
-      </ul>
     </section>
   {/if}
 </aside>
 
 <style>
+  /* One step lighter than the content pane beside it, which is the design's arrangement: the
+     window is --ground-1, this column sits on it at --ground-2, and the two cards at the bottom
+     sit on the column at --ground-3. Three steps, each one readable against the one under it,
+     rather than a flat column with outlined boxes floating on it. */
   .rail {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px 16px;
+    gap: 13px;
+    padding: 14px;
     border-left: 1px solid var(--hairline);
-    background: var(--ground-1);
+    background: var(--ground-2);
     overflow-y: auto;
   }
   .empty {
@@ -572,23 +809,21 @@
     gap: 12px;
     align-items: flex-start;
   }
-  /* 80px rather than 88. The head's height is then set by the three lines naming the chart
+  /* 76px, the design's number. The head's height is then set by the four lines naming the chart
      rather than by the cover beside them, which is the right way round for a block whose job is
-     the name; an 8px cover is not what anyone is reading it for. */
+     the name. */
   .art {
-    width: 80px;
-    height: 80px;
+    width: 76px;
+    height: 76px;
     flex-shrink: 0;
     display: block;
     object-fit: cover;
     border-radius: var(--radius);
-    background: var(--ground-2);
+    background: var(--ground-3);
     box-shadow: var(--elev-2);
   }
-  /* The monogram box. --fs-display is the largest step below the wordmark's, which is as big as
-     a letter can be drawn in 88px and still sit inside the box rather than filling it. Quiet on
-     purpose: it stands in for a cover, and a bright letter would out-shout the title next to it,
-     which is the thing actually naming the chart. */
+  /* The monogram box. Quiet on purpose: it stands in for a cover, and a bright letter would
+     out-shout the title next to it, which is the thing actually naming the chart. */
   .art.placeholder {
     border: 1px solid var(--border-1);
     display: flex;
@@ -599,113 +834,15 @@
     font-weight: 600;
     color: var(--text-3);
   }
-  .actions {
-    display: flex;
-    gap: 8px;
-  }
-  .act {
-    flex: 1;
-    min-width: 0;
-    border-radius: var(--radius-sm);
-    padding: 7px 12px;
-    font-family: var(--font-ui);
-    font-size: var(--fs-secondary);
-    cursor: pointer;
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    color: var(--text-2);
-    transition:
-      filter var(--t-fast) var(--ease),
-      color var(--t-fast) var(--ease),
-      border-color var(--t-fast) var(--ease);
-  }
-  .act:hover {
-    color: var(--text-1);
-    border-color: var(--border-2);
-  }
-  .act.primary {
-    border: 0;
-    background: var(--accent-grad);
-    color: #fff;
-    font-weight: 600;
-  }
-  .act.primary:hover {
-    filter: brightness(1.12);
-  }
-  /**
-   * The way through to the chart page: as wide as its word, and no wider.
-   *
-   * `flex: 0 0 auto` rather than the `1` every other button in this row takes, so the action
-   * keeps the width and this keeps only what "All details" needs. Transparent rather than
-   * `--surface-1`, so the row reads as one action and one link out of it rather than two
-   * choices of equal weight. Measured with `scripts/measure-play-stats.mjs`, which prints every
-   * button in this row with its width and whether its word is clipped.
-   */
-  .to-detail {
-    flex: 0 0 auto;
-    background: none;
-    color: var(--text-3);
-  }
-  .to-detail:hover,
-  .to-detail:focus-visible {
-    color: var(--text-1);
-  }
-  /* Wraps rather than ellipsising: a reveal that failed says which path it refused and why, and
-     a clipped reason is a reason nobody can act on. It is also the only block in the column that
-     is absent almost always, so the height it takes is not height an ordinary chart spends. */
-  .act-error {
-    font-size: var(--fs-caption);
-    line-height: var(--lh-prose);
-    margin-top: -6px;
-    color: var(--danger);
-  }
-  .stats {
-    display: flex;
-    align-items: stretch;
-    gap: 10px;
-  }
-  .stat {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .stat-label {
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .stat-value {
-    font-size: var(--fs-emphasis);
-    line-height: var(--lh-tight);
-    color: var(--text-1);
-  }
-  /* Beside the three rather than under them, so a drum chart is exactly as tall as every other
-     chart. It shrinks last: the numbers can ellipsise their labels, and a half-printed 2X KICK
-     would be a claim in a shape nobody recognises. */
-  .flag {
-    align-self: center;
-    flex-shrink: 0;
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-2);
-    background: var(--ground-3);
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-sm);
-    padding: 3px 7px;
-  }
   .ident {
     min-width: 0;
     flex: 1;
   }
   .title {
     font-size: var(--fs-emphasis);
-    font-weight: 600;
-    line-height: var(--lh-snug);
+    font-weight: 700;
+    letter-spacing: var(--ls-tight);
+    line-height: var(--lh-display);
     color: var(--text-1);
     /* Two lines, then ellipsis: a rail this narrow will meet titles that do not fit, and a
        title that wraps without limit pushes the highway off the bottom of the column. */
@@ -715,40 +852,83 @@
     line-clamp: 2;
     overflow: hidden;
   }
-  .artist,
-  .charter {
+  /* The accent, which is the design's one use of it in this block: the artist is the second
+     thing read after the title and the only line here that is a link to anywhere in the user's
+     head. --accent-tint measures 10.4:1 on --ground-2. */
+  .artist {
+    margin-top: 2px;
     font-size: var(--fs-secondary);
+    font-weight: 500;
+    color: var(--accent-tint);
+  }
+  .context,
+  .charter {
+    margin-top: 2px;
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+  }
+  .charter {
+    margin-top: 5px;
     color: var(--text-2);
+  }
+  .artist,
+  .context,
+  .charter {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .charter {
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    margin-top: 2px;
+  /* A chart with no album, no year and no genre has no third line rather than a blank one. */
+  .context:empty {
+    display: none;
   }
   .preview {
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
-  /* The same aspect as the chart page's pane, which is the other place this player is mounted:
-     one highway drawn at two sizes rather than at two shapes. It was 16/10 here, which also made
-     the rail the taller of the two by 21px, and step five's stats and action row are what that
-     21px now pays for. */
+  /* The frame the badge is positioned against. The player is appended into `.viewport` inside
+     it, so nothing Svelte owns is ever a child of the element the controller writes into. */
+  .hw {
+    position: relative;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-2);
+    background: var(--ground-0);
+    overflow: hidden;
+    box-shadow: var(--elev-2);
+  }
+  /* 16/9 and not the design's 16/10. The two are 21px apart in a 374px column and this panel
+     has no 21px to spare; it is also the aspect the chart page's pane uses, so one highway is
+     drawn at two sizes rather than at two shapes. `scripts/measure-rail-panel.mjs` prints what
+     the column costs with this number in it. */
   .viewport {
     width: 100%;
     aspect-ratio: 16 / 9;
-    border-radius: var(--radius);
-    border: 1px solid var(--border-1);
-    background: var(--ground-0);
-    overflow: hidden;
+    display: block;
   }
   .viewport :global(chart-preview-player) {
     width: 100%;
     height: 100%;
     display: block;
+  }
+  .hwt {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+    color: var(--text-2);
+    background: rgba(7, 6, 16, 0.75);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    padding: 1px 7px;
+    backdrop-filter: blur(6px);
+    pointer-events: none;
+    max-width: calc(100% - 16px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .transport {
     display: flex;
@@ -782,7 +962,7 @@
     min-width: 0;
     height: 4px;
     border-radius: 999px;
-    background: var(--ground-3);
+    background: var(--ground-4);
     cursor: pointer;
   }
   .seek-fill {
@@ -808,34 +988,51 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Two boxes of equal width, each a label at the left and the pick at the right, which is the
+     shape the design draws them in. A real <select> rather than the design's fake button: the
+     pick has to be operable, and the arrow the UA draws is what says so. */
   .picks {
-    display: flex;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
   }
   .pick {
-    flex: 1;
     min-width: 0;
+    height: 33px;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 7px;
+    padding: 0 4px 0 10px;
+    background: var(--ground-3);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--t-fast) var(--ease);
+  }
+  .pick:hover {
+    border-color: var(--accent);
+  }
+  .pick:focus-within {
+    border-color: var(--accent);
   }
   .pick-label {
     display: flex;
     align-items: center;
     gap: 5px;
+    flex: none;
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
   }
   .pick select {
-    width: 100%;
-    background: var(--ground-0);
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-sm);
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
     color: var(--text-1);
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
-    padding: 4px 6px;
+    font-weight: 600;
+    text-align: right;
     cursor: pointer;
   }
   .swatch {
@@ -844,67 +1041,232 @@
     border-radius: 2px;
     flex-shrink: 0;
   }
-  .health {
-    background: var(--ground-2);
-    border: 1px solid var(--border-1);
+  .actions {
+    display: flex;
+    gap: 7px;
+  }
+  .act {
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     border-radius: var(--radius);
-    padding: 9px 11px;
+    padding: 0 12px;
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--ground-3);
+    border: 1px solid var(--border-2);
+    color: var(--text-2);
+    transition:
+      filter var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease);
+  }
+  .act svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .act:hover {
+    color: var(--text-1);
+    border-color: var(--accent);
+  }
+  /* The design lifts this one off the column with a violet cast. --elev-2 is the same lift in
+     the scale's own terms; a component that spells its own shadow out is the regression
+     tokens.test.ts exists to catch, and a glow token for one button is not worth a step. */
+  .act.primary {
+    border-color: transparent;
+    background: var(--accent-grad);
+    color: #fff;
     box-shadow: var(--elev-2);
   }
-  .health-head {
+  .act.primary:hover {
+    filter: brightness(1.12);
+  }
+  /**
+   * The way through to the chart page: as wide as its word, and no wider.
+   *
+   * `flex: 0 0 auto` rather than the `1` the action beside it takes, so the action keeps the
+   * width and this keeps only what "All details" needs. Transparent rather than a card surface,
+   * so the row reads as one action and one link out of it rather than two choices of equal
+   * weight. Measured with `scripts/measure-rail-panel.mjs`, which prints both buttons' widths
+   * and whether either word is clipped.
+   */
+  .to-detail {
+    flex: 0 0 auto;
+    background: none;
+    border-color: transparent;
+    color: var(--text-3);
+  }
+  .to-detail:hover,
+  .to-detail:focus-visible {
+    color: var(--text-1);
+    border-color: var(--border-2);
+  }
+  /* Wraps rather than ellipsising: a reveal that failed says which path it refused and why, and
+     a clipped reason is a reason nobody can act on. It is also the only block in the column that
+     is absent almost always, so the height it takes is not height an ordinary chart spends. */
+  .act-error {
+    font-size: var(--fs-caption);
+    line-height: var(--lh-prose);
+    margin-top: -7px;
+    color: var(--danger);
+  }
+  .card {
+    background: var(--ground-3);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    padding: 12px 13px;
+    box-shadow: var(--elev-1);
+  }
+  .card-head {
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .card-head svg {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    fill: none;
+    stroke: var(--text-3);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .card-head .count {
+    margin-left: auto;
+    font-size: var(--fs-caption);
+    font-weight: 400;
+    color: var(--text-3);
+  }
+  .card-head .chip {
+    margin-left: auto;
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-2);
+    background: var(--ground-4);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+  }
+  /* Two columns, four rows, and the column gap wider than the row gap so the two halves read as
+     two lists rather than as one four-wide table. */
+  .kv {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 14px;
+  }
+  .stat {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-    margin-bottom: 4px;
-  }
-  .health-head .count {
-    color: var(--text-2);
-  }
-  .health ul {
-    list-style: none;
-  }
-  .health-row {
-    display: flex;
-    align-items: center;
     gap: 8px;
-    padding: 2px 0;
-    font-size: var(--fs-secondary);
-    color: var(--text-2);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ground-4);
+    font-size: var(--fs-caption);
   }
-  .health-label {
-    flex: 1;
-    min-width: 0;
+  .stat-label {
+    color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .health-state {
+  /* Tabular figures, so the right-hand edge of the two columns does not shuffle when the
+     instrument pick changes a 1,420 into a 987. */
+  .stat-value {
+    flex: none;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-1);
+  }
+  .hl {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+  .ring {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    flex: none;
+  }
+  /* From twelve o'clock, which is where a reader expects a dial to start. */
+  .ring svg {
+    display: block;
+    transform: rotate(-90deg);
+  }
+  .ring-value {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: var(--fs-emphasis);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-1);
+  }
+  .hlc {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+  }
+  .health-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
+    line-height: var(--lh-tight);
+    color: var(--text-2);
   }
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: var(--text-3);
+  .health-row svg {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
-  .health-row[data-state='present'] .dot {
-    background: var(--success);
+  .health-label {
+    min-width: 0;
   }
-  .health-row[data-state='missing'] .dot {
-    background: var(--warning);
+  .health-row[data-state='present'] svg {
+    stroke: var(--success);
+    stroke-width: 3.2;
   }
-  /* Unknown keeps the neutral dot and the neutral word. It is not a warning: nobody has
+  /* The missing rows are the ones somebody can act on, so they take --text-1 and the rest stay
+     at --text-2. The words differ too ("No lyrics" against "Lyrics"), which is what keeps the
+     amber glyph a second signal rather than the only one. */
+  .health-row[data-state='missing'] {
+    color: var(--text-1);
+  }
+  .health-row[data-state='missing'] svg {
+    stroke: var(--warning);
+  }
+  /* Unknown keeps the neutral glyph and the neutral word. It is not a warning: nobody has
      looked, and colouring it amber would send the user to the Asset Studio after a chart that
      may want nothing at all. */
-  .health-row[data-state='unknown'] .dot {
-    background: var(--ground-5);
-    border: 1px solid var(--border-2);
+  .health-row[data-state='unknown'] svg {
+    stroke: var(--text-3);
   }
   .mono {
     font-family: var(--font-mono);
