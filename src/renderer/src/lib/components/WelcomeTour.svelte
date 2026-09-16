@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * The welcome tour: five screens, one per thing Encore does, shown once on first run and again
+   * The welcome tour: six screens, one per thing Encore does, shown once on first run and again
    * from Settings or the shortcut sheet whenever asked.
    *
    * A modal on the shortcut sheet's pattern rather than a view of its own, for one reason: on a
@@ -32,13 +32,19 @@
   }
 
   /**
-   * The four view glyphs are the sidebar's own paths, copied rather than imported: Sidebar keeps
+   * The five view glyphs are the sidebar's own paths, copied rather than imported: Sidebar keeps
    * them in a private table, and this screen must show the shape the user is about to click, not a
    * near miss. WelcomeTour.svelte.test.ts reads them back out of Sidebar's source, so a redrawn
    * sidebar icon fails there instead of drifting here.
    *
    * Copy is written to be read once by someone who has never opened the app. No screen says more
-   * than the view it describes can do; the Issues claims are the ones fix.ts enforces.
+   * than the view it describes can do; the Issues claims are the ones fix.ts enforces, and the
+   * Stats screen's "only reads them" is what src/main/play/read-only.test.ts holds to.
+   *
+   * Two screens were rewritten when the shell moved under them. Installed gained filters and
+   * Explore's rows stopped opening a page, so "a filter box" and "open a chart" had both gone
+   * false; the preview both of them now point at is the rail beside the list, named here by
+   * what it does rather than by where it sits, because below 1120px it is not beside anything.
    */
   const SCREENS: readonly Screen[] = [
     {
@@ -53,16 +59,16 @@
       title: 'Installed',
       view: 'library',
       body:
-        'Every chart in your library, with a filter box to find one. Open a chart to see its ' +
-        'details and hear a preview.',
+        'Every chart in your library, with filters to narrow it down by artist, charter, year ' +
+        'or length. Pick one to see its difficulties and hear a preview.',
       glyph: 'M4 5h16M4 12h16M4 19h10'
     },
     {
       title: 'Explore',
       view: 'browse',
       body:
-        'Search Chorus Encore, the community chart database, and download what you find. Tick ' +
-        'several rows to download them all at once.',
+        'Search Chorus Encore, the community chart database. Pick a result to see what it holds ' +
+        'and hear it before you download, or tick several rows and take them all at once.',
       glyph: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm9 16-3.5-3.5'
     },
     {
@@ -83,6 +89,15 @@
         'lists the charts still missing something, so you can work through them.',
       glyph:
         'M12 3v10.5M9.5 12.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM12 6c2 0 3-1 5-1v4c-2 0-3 1-5 1'
+    },
+    {
+      title: 'Stats',
+      view: 'stats',
+      body:
+        'What Clone Hero says you have played, read from its own score files: how much of your ' +
+        'library you have touched, the charters you go back to, and what you played last. ' +
+        'Encore only reads them.',
+      glyph: 'M4 19.5h16M7 19V11m5 8V5.5m5 13.5v-6'
     }
   ]
 

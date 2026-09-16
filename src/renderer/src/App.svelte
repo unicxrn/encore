@@ -38,15 +38,16 @@
   import { railOnScreen } from './lib/rail-visible'
 
   let view = $state<ViewId>('home')
-  // Chart opened from Home or Explore. While set, Detail replaces the current
-  // view; Back clears it and returns to the view underneath.
+  // The chart page's subject: opened from Installed's rows, from the rail's All details, or by
+  // `selectChart` falling through at a width with no rail. While set, Detail replaces the
+  // current view; Back clears it and returns to the view underneath.
   let detailChart = $state<ChartTarget | null>(null)
   /**
    * The rail's subject: the last chart this launch picked out, and null before the first one.
    *
-   * Written three ways now. An Explore row picks a chart without navigating anywhere, an
-   * Installed row's Preview button does the same, and opening a chart page still points the rail
-   * at what the page is showing.
+   * Written four ways now. An Explore row picks a chart without navigating anywhere, a Home row
+   * does the same, an Installed row's Preview button does the same, and opening a chart page
+   * still points the rail at what the page is showing.
    *
    * Deliberately NOT cleared when Detail closes, and deliberately not cleared by navigating to
    * Settings or Stats. The rail is "what you are previewing", which is the same subject the
@@ -108,10 +109,10 @@
   /**
    * Point the rail at a chart, without taking the list away.
    *
-   * What Explore's rows do, and what Installed's per-row Preview button does. Browsing is a
-   * scanning task: the pips, the health dot, the statistics and the highway in the rail are the
-   * whole of "is this the version I want", and a page swap per chart is the wrong weight for a
-   * question answered that often. The chart page is still there, reached from the rail once a
+   * What Explore's rows do, what Home's rows do, and what Installed's per-row Preview button
+   * does. Browsing is a scanning task: the pips, the health dot, the statistics and the highway
+   * in the rail are the whole of "is this the version I want", and a page swap per chart is the
+   * wrong weight for a question answered that often. The chart page is still there, reached from the rail once a
    * chart is in it, for the four things only it has.
    *
    * The fallback is the width case. Below the shell's breakpoint the rail is `display: none`, so
@@ -225,8 +226,8 @@
    * Navigating closes the downloads panel.
    *
    * Keyed on `viewKey` rather than wired into each caller, because the callers are many and
-   * scattered: the sidebar, `Mod+1-7`, the search field, Home's links, every card that opens a
-   * chart, Detail's Back and the error fallback's Go to Home. One of those forgetting to close
+   * scattered: the sidebar, `Mod+1-7`, the search field, Home's links, an Installed row, the
+   * rail's All details, Detail's Back and the error fallback's Go to Home. One of those forgetting to close
    * the panel would be the bug this exists to prevent, so the closing is attached to the one
    * thing every one of them does: change what the content pane shows.
    *
@@ -477,10 +478,11 @@
             {:else if $needsWelcome}
               <Welcome onNavigate={(id) => (view = id)} />
             {:else}
-              <Home
-                onNavigate={(id) => (view = id)}
-                onOpenChart={(target) => (detailChart = target)}
-              />
+              <!-- Home's chart rows land where Explore's do. Both are places a chart is
+                   scanned rather than read, so both hand the rail the chart and leave the page
+                   where it is; `selectChart` is also what falls through to the chart page at a
+                   width where there is no rail to fill. -->
+              <Home onNavigate={(id) => (view = id)} onSelectChart={selectChart} />
             {/if}
           {:else if view === 'browse'}
             <!-- Explore has one way out of a row and it does not navigate: the rail is where a
