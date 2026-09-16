@@ -306,28 +306,30 @@
 <section class="dupes">
   <div class="d-head">
     <h2 class="d-title">Duplicate charts</h2>
-    {#if report === null && loadError === null}
-      <span class="d-sum mono">READING THE CATALOGUE…</span>
-    {:else if loadError !== null}
-      <span class="d-sum mono">ERROR: {loadError}</span>
-    {:else}
-      <span class="d-sum">{summary}</span>
-      {#if anything}
+    {#if report !== null && loadError === null && anything}
+      <div class="d-acts">
         <button class="hairline" aria-expanded={open} onclick={() => (open = !open)}>
           {open ? 'Hide' : 'Show'}
         </button>
         <button class="hairline" onclick={() => void exportCsv()}>Export CSV</button>
-      {/if}
+      </div>
     {/if}
   </div>
+  {#if report === null && loadError === null}
+    <p class="d-sum mono">READING THE CATALOGUE…</p>
+  {:else if loadError !== null}
+    <p class="d-sum mono">ERROR: {loadError}</p>
+  {:else}
+    <p class="d-sum">{summary}</p>
+  {/if}
 
   <!-- Said whenever it is not zero, and above the lists rather than under them: without it "no
        identical copies" reads as a finding, when on a catalogue scanned by an older build it
        means the comparison had nothing to work with. -->
   {#if report !== null && report.unidentifiedCharts > 0}
     <p class="d-note">
-      {report.unidentifiedCharts} of your {report.totalCharts} charts carry no chart ID yet, so they cannot
-      be compared to the rest. Scanning your library again fills those in.
+      {report.unidentifiedCharts} of your {report.totalCharts} charts carry no chart ID yet and are not
+      compared here. Scanning your library again fills those in.
     </p>
   {/if}
 
@@ -539,32 +541,53 @@
 {/snippet}
 
 <style>
+  /* A card among the issue cards, and the last of them, because it answers a different question
+     from a different source: the issue scan walks the filesystem on a button press, this reads the
+     catalogue on mount. One line until it is opened, so the view still leads with what the scan
+     found. */
   .dupes {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 16px 12px;
-    border-bottom: 1px solid var(--hairline);
+    gap: 7px;
+    background: var(--ground-3);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    box-shadow: var(--elev-1);
+    padding: 11px 13px;
     flex-shrink: 0;
   }
+  /* The title and the two buttons on one line, the summary under them across the whole card.
+     Measured: with the summary sharing the line, the 430px left beside the buttons wrapped three
+     clauses into four lines and the closed card stood 141px tall. Given the full width it is two,
+     and the 30px that saves is 30px the issue rows below get instead. */
   .d-head {
     display: flex;
     align-items: baseline;
+    justify-content: space-between;
     gap: 10px;
-    flex-wrap: wrap;
+  }
+  .d-title {
+    flex-shrink: 0;
+  }
+  .d-acts {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
   }
   .d-title {
     margin: 0;
     font-size: var(--fs-emphasis);
+    line-height: var(--lh-tight);
     font-weight: 600;
     color: var(--text-1);
   }
   .d-sum {
-    flex: 1;
-    min-width: 0;
+    margin: 0;
     font-size: var(--fs-secondary);
     color: var(--text-2);
-    line-height: var(--lh-prose);
+    line-height: var(--lh-snug);
+    max-width: 78ch;
+    min-width: 0;
   }
   .d-note,
   .d-safety {
@@ -588,9 +611,9 @@
     letter-spacing: var(--ls-caps);
   }
   .hairline {
-    background: var(--surface-1);
+    background: var(--ground-4);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-size: var(--fs-secondary);
     padding: 4px 11px;
@@ -599,17 +622,23 @@
     flex-shrink: 0;
     transition:
       color var(--t-fast) var(--ease),
-      border-color var(--t-fast) var(--ease);
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
   }
-  .hairline:hover {
+  .hairline:hover:not(:disabled) {
     color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
+    background: var(--ground-5);
+  }
+  .hairline:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .tier {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 10px;
+    margin-top: 6px;
   }
   .t-head {
     display: flex;
@@ -634,8 +663,9 @@
     color: var(--text-3);
   }
   /* The alternate-charts tier. Nothing about it is a warning, so its heading is the same weight
-     as the others but its rule is the accent rather than the plain hairline: it reads as an
-     aside, which is what it is. */
+     as the others but quieter, and its rule is the accent rather than the plain hairline: it
+     reads as an aside, which is what it is. Every sentence in it says the same thing in words,
+     because colour is not where a claim this important is allowed to live. */
   .calm .t-title {
     color: var(--text-2);
   }
@@ -646,14 +676,17 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 6px 0 6px 10px;
+    padding: 7px 0 7px 10px;
     border-left: 2px solid var(--hairline);
+    background: var(--ground-2);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
   .g-head {
     display: flex;
     align-items: baseline;
     gap: 8px;
     flex-wrap: wrap;
+    padding-right: 10px;
   }
   .g-name {
     font-size: var(--fs-secondary);
@@ -669,6 +702,7 @@
   }
   .g-note {
     margin: 2px 0;
+    padding-right: 10px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
@@ -678,11 +712,15 @@
     font-size: var(--fs-caption);
     color: var(--text-2);
   }
+  /* Wraps rather than crushing. At the 509px the view column narrows to with the preview rail
+     up, a path and two buttons do not fit on one line, and a path is the one thing in this row
+     that has to stay readable: it is how a user tells two copies of one chart apart. */
   .copy {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 2px 0;
+    flex-wrap: wrap;
+    padding: 3px 10px 3px 0;
   }
   .c-type {
     font-size: var(--fs-caption);
@@ -690,7 +728,7 @@
     flex-shrink: 0;
   }
   .c-path {
-    flex: 1;
+    flex: 1 1 200px;
     min-width: 0;
     font-size: var(--fs-caption);
     color: var(--text-2);
@@ -700,6 +738,7 @@
   }
   .c-error {
     margin: 0 0 4px;
+    padding-right: 10px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-2);
@@ -709,7 +748,7 @@
      with" clause is a sentence first and a brighter one second. */
   .c-holds {
     margin: 0 0 2px;
-    padding-left: 62px;
+    padding: 0 10px 0 50px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
@@ -721,11 +760,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin: 4px 0 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--surface-1);
+    margin: 4px 10px 8px 0;
+    padding: 9px 11px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm);
+    background: var(--ground-4);
   }
   .cf-text {
     margin: 0;

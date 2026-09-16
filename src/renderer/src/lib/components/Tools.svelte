@@ -112,6 +112,28 @@
     portability: 'portability'
   }
 
+  /**
+   * Whether the repair card is showing its four actions, and why it starts closed.
+   *
+   * Measured rather than guessed. With every card drawn open, `scripts/measure-issue-cards.mjs`
+   * put the first chart 926px down a 629px scroller at the default 1280x800 window: a screen of
+   * summary with the report itself entirely below the fold. The repair card is the one that can
+   * carry four rows, so it is the one that folds, and its heading keeps the count on screen, which
+   * is the part that had to be seen. The conversion card can only ever hold one action
+   * (`badVideo`) and the undo card only exists after a repair, so neither folds.
+   */
+  let openRepairs = $state(false)
+
+  /**
+   * Whether the undo card is showing its entries, on the same measurement and a sharper case.
+   *
+   * A backup list survives the session, so this card is on screen every visit once a user has
+   * repaired anything, and drawn open it was 119px of the 629px a default window leaves. Undo is
+   * not something anyone reads on the way past; it is something they go to once, and the heading
+   * says how many there are to go to.
+   */
+  let openUndo = $state(false)
+
   // Inline CSV export state. rowCount is set only when a kind filter was
   // active at export time, so the SAVED line can show how many rows went out.
   type CsvState =
@@ -225,15 +247,6 @@
   const counts = $derived(countBySeverity(explainedRows))
   const qualityCount = $derived(counts.quality.findings)
   const portabilityCount = $derived(counts.portability.findings)
-
-  /**
-   * Whether this machine can grade anything `portability` at all.
-   *
-   * Asked of the shared severity model rather than by listing platforms here: `badVideo` is the
-   * only code that reaches that grade, and on Linux it is breakage instead, so the card would be
-   * a permanently empty category there. Constant, because the platform is.
-   */
-  const canBePortable = explainIssue('badVideo', undefined, platform).severity === 'portability'
 
   // Only categories that actually turned something up become chips: an empty
   // "Missing files" filter is noise.
@@ -1010,15 +1023,18 @@
 
     <div class="cards">
       <!-- ── the state of the library, before a single row ────────────────────
-           Two cards on Linux and three everywhere else, each counting charts across the whole
-           report rather than across the visible rows, and each one the control that puts its own
-           rows in the list below. They replace two dashed chips that sat among the category
-           filters and read as one more filter, which is what kept ~24,000 charting notes and the
-           handful of genuinely broken charts looking like the same kind of thing.
+           One grid for every card in this view. Two state cards on Linux and three everywhere
+           else, then the offers, then the duplicate report: each one counts something across the
+           whole report rather than across the visible rows, and each is the control for what it
+           counts. The state cards replace two dashed chips that sat among the category filters
+           and read as one more filter, which is what kept ~24,000 charting notes and the handful
+           of genuinely broken charts looking like the same kind of thing.
 
-           A chart with no audio and a hundred short sustains is counted by two of these cards.
-           The sentence on the second one says so, because counts that overlap without saying so
-           are how a summary loses an argument with the list under it. -->
+           They share a grid rather than stacking because height is the scarce thing here. Every
+           card in a column of its own put the first chart 926px down a 629px scroller at a
+           default 1280x800 window, which is a screen of summary with the report below the fold.
+           `scripts/measure-issue-cards.mjs` is where that number comes from and where it is
+           checked again. -->
       {#if rows.length > 0}
         <div class="strip">
           {@render stateCard(
@@ -1035,22 +1051,8 @@
             'Charting notes',
             counts.quality.charts === 0
               ? 'Nothing was found about how these charts were made.'
-              : 'These play. This is scan-chart on how they were charted, and Encore counts none ' +
-                  'of it against a chart. The same charts can be broken as well, and are counted ' +
-                  'to the left if they are.'
+              : 'These play. It is scan-chart on how they were charted, not on whether they work.'
           )}
-          <!-- Only where the grade is reachable at all. On Linux an mp4 background is breakage
-               and is counted by the first card, so this one would be a category that can never
-               hold anything. -->
-          {#if canBePortable && portabilityCount > 0}
-            {@render stateCard(
-              'portability',
-              counts.portability,
-              'Plays here, not everywhere',
-              'These charts are fine on this machine. They carry a file another platform Clone ' +
-                'Hero runs on cannot use.'
-            )}
-          {/if}
         </div>
       {/if}
 
@@ -1061,29 +1063,37 @@
            charts over the 219-chart reference library, not "62 of 71", which added per-code chart
            counts together and double-counts every chart carrying more than one code.) -->
       {#if repairGroups.length > 0 && fixable !== null}
-        <section class="card offer">
+        <section class="card offer" class:open={openRepairs}>
           <div class="fx-head">
-            <h2 class="fx-title">
-              Encore can fix {fixableChartCount} of these chart{fixableChartCount === 1 ? '' : 's'}
-            </h2>
-            {#if hiddenFixableCount > 0}
-              <p class="fx-note">
+            <div class="o-line">
+              <h2 class="fx-title">
+                Encore can fix {fixableChartCount} of these chart{fixableChartCount === 1
+                  ? ''
+                  : 's'}
+              </h2>
+              <button
+                class="hairline"
+                class:on={openRepairs}
+                aria-expanded={openRepairs}
+                onclick={() => (openRepairs = !openRepairs)}
+              >
+                {openRepairs ? 'Hide' : 'Show the repairs'}
+              </button>
+            </div>
+            <p class="fx-note">
+              {#if hiddenFixableCount > 0}
                 {hiddenFixableCount} of them {hiddenFixableCount === 1 ? 'is' : 'are'} hidden by the cards
-                above. Show puts {hiddenFixableCount === 1 ? 'it' : 'them'} on screen without touching
-                them.
-              </p>
-            {/if}
+                above, and the repairs reach {hiddenFixableCount === 1 ? 'it' : 'them'} anyway.
+              {:else}
+                Each one is a single press, and Encore checks the chart's identity afterwards.
+              {/if}
+            </p>
           </div>
-          {#each repairGroups as group (group.actionCode)}
-            {@render fixRow(group, 'Fix', 'FIXES')}
-          {/each}
-          <!-- The two findings that look repairable and are not, said where the offer is made
-               rather than left for a user to work out from a row with no button on it. Each row
-               carries the whole reason; this is the line that sends them to it. -->
-          <p class="fx-refusal">
-            Two findings are left alone on purpose: a chart carrying two chart files, and a
-            difficulty rating nobody set. Neither is a gap in Encore, and each row says why.
-          </p>
+          {#if openRepairs}
+            {#each repairGroups as group (group.actionCode)}
+              {@render fixRow(group, 'Fix', 'FIXES')}
+            {/each}
+          {/if}
         </section>
       {/if}
 
@@ -1093,20 +1103,42 @@
            and the sentence under it says what the conversion buys and what it costs, because the
            answer to "why would I re-encode a video that works" has to be on screen beside the
            button. -->
-      {#if portabilityGroups.length > 0 && fixable !== null}
+      {#if portabilityGroups.length > 0}
         <section class="card offer portable">
           <div class="fx-head">
-            <h2 class="fx-title">
-              {portabilityChartCount} chart{portabilityChartCount === 1 ? '' : 's'}
-              {portabilityChartCount === 1 ? 'has' : 'have'} a video Clone Hero cannot play on Linux
-            </h2>
+            <div class="o-line">
+              <h2 class="fx-title">
+                {portabilityChartCount} chart{portabilityChartCount === 1 ? '' : 's'}
+                {portabilityChartCount === 1 ? 'has' : 'have'} a video Clone Hero cannot play on Linux
+              </h2>
+              <!-- The card's own severity toggle, and the only one these rows have.
+                   
+                   It used to be a state card in the strip AND this card, two boxes counting the
+                   same three charts, which cost 122px on exactly the platform that can least
+                   spare it: Windows is where this card exists at all, and where the strip is
+                   already carrying a third of the screen. One card, one control, and the rows it
+                   shows are the rows it converts. -->
+              <button
+                class="hairline"
+                class:on={shown.portability}
+                aria-pressed={shown.portability}
+                aria-label={`${shown.portability ? 'Showing' : 'Show'}: Plays here, not everywhere`}
+                onclick={() => (shown.portability = !shown.portability)}
+              >
+                {shown.portability ? 'Showing' : 'Show them'}
+              </button>
+            </div>
             {#if conversionPurpose}
               <p class="fx-note">{conversionPurpose}</p>
             {/if}
           </div>
-          {#each portabilityGroups as group (group.actionCode)}
-            {@render fixRow(group, 'Convert', 'VIDEOS')}
-          {/each}
+          <!-- The offer itself only once main has said the conversion can run. The heading and
+               the rows above stay either way: they are about the charts, not about ffmpeg. -->
+          {#if fixable !== null}
+            {#each portabilityGroups as group (group.actionCode)}
+              {@render fixRow(group, 'Convert', 'VIDEOS', false)}
+            {/each}
+          {/if}
         </section>
       {/if}
 
@@ -1115,17 +1147,29 @@
            what Encore can do to the library, the other is what it can take back. Nothing is drawn
            when there is nothing to undo, which is the normal state. -->
       {#if backups.length > 0}
-        <section class="card offer">
+        <section class="card offer" class:open={openUndo}>
           <div class="fx-head">
-            <h2 class="fx-title">
-              {backups.length} fix{backups.length === 1 ? '' : 'es'} can be undone
-            </h2>
-            <p class="fx-note">
-              Encore kept what each fix replaced, so any of them can be put back exactly as it was.
-              The copies stay until you clear them in Settings.
-            </p>
+            <div class="o-line">
+              <h2 class="fx-title">
+                {backups.length} fix{backups.length === 1 ? '' : 'es'} can be undone
+              </h2>
+              <button
+                class="hairline"
+                class:on={openUndo}
+                aria-expanded={openUndo}
+                onclick={() => (openUndo = !openUndo)}
+              >
+                {openUndo ? 'Hide' : 'Show what can be put back'}
+              </button>
+            </div>
+            {#if openUndo}
+              <p class="fx-note">
+                Each one goes back exactly as it was. The copies stay until you clear them in
+                Settings.
+              </p>
+            {/if}
           </div>
-          {#each visibleBackups as backup (backup.id)}
+          {#each openUndo ? visibleBackups : [] as backup (backup.id)}
             <div class="ub-row">
               <div class="ub-text">
                 <span class="ub-chart">{fallbackChartName(backup.chartPath)}</span>
@@ -1152,19 +1196,30 @@
               <p class="ub-error">{undoErrors[backup.id]}</p>
             {/if}
           {/each}
-          {#if backups.length > UNDO_VISIBLE}
+          {#if openUndo && backups.length > UNDO_VISIBLE}
             <button class="hairline ub-more" onclick={() => (showAllBackups = !showAllBackups)}>
               {showAllBackups ? 'Show fewer' : `Show all ${backups.length}`}
             </button>
           {/if}
         </section>
       {/if}
-    </div>
+      <!-- One of the cards rather than a panel above them: it answers a different question from a
+           different source, and a user reading down the state of their library meets "is anything
+           installed twice" beside "what can Encore fix" rather than instead of it. Closed it is a
+           card like the rest; opened it takes the row to itself. -->
+      <Duplicates />
 
-    <!-- Answers a different question from a different source: the issue scan walks the filesystem
-         on a button press, and this reads the catalogue on mount. It is one line until it is
-         opened, so the view still leads with what the scan found. -->
-    <Duplicates />
+      <!-- The two findings that look repairable and are not, said under the offers rather than
+           inside them: a user who wonders why a row has no button reads it here, and the row
+           itself carries the whole reason. One line, because the cards above it are already as
+           much of this screen as the rows below can afford. -->
+      {#if rows.length > 0}
+        <p class="fx-refusal">
+          A chart can be counted by more than one card. Two findings are left alone on purpose, and
+          each of those rows says why.
+        </p>
+      {/if}
+    </div>
 
     {#if rows.length > 0}
       <!-- Sticky, because it is the control for the list under it and the cards above it are tall
@@ -1414,15 +1469,13 @@
      "0 CHARTS / Broken" is the best news this screen has. -->
 {#snippet stateCard(id: CardId, count: SeverityCount, title: string, say: string)}
   <section class="card state" class:on={shown[id]}>
-    <p class="s-count">
-      <span class="s-n">{count.charts}</span>
-      <span class="s-unit mono">{count.charts === 1 ? 'CHART' : 'CHARTS'}</span>
-    </p>
-    <h2 class="s-title">{title}</h2>
+    <h2 class="s-title"><span class="s-n">{count.charts}</span> {title}</h2>
     <p class="s-say">{say}</p>
     <div class="s-foot">
       <span class="s-findings mono">
-        {count.findings} FINDING{count.findings === 1 ? '' : 'S'}
+        {count.charts === 1 ? 'CHART' : 'CHARTS'} · {count.findings} FINDING{count.findings === 1
+          ? ''
+          : 'S'}
       </span>
       {#if count.findings > 0}
         <button
@@ -1442,7 +1495,7 @@
 <!-- One action of an offer card. `verb` is what separates a repair from a conversion of something
      that is not broken here, and it is the caller's to pass rather than this snippet's to infer:
      the two cards exist precisely because that distinction is not a property of the row. -->
-{#snippet fixRow(group: FixGroup, verb: 'Fix' | 'Convert', unit: string)}
+{#snippet fixRow(group: FixGroup, verb: 'Fix' | 'Convert', unit: string, focusable = true)}
   {@const blocked = fixBlockedReason(group.actionCode)}
   <div class="fx-row">
     <span class="fx-label">{group.title}</span>
@@ -1454,15 +1507,19 @@
       {/if}
     </span>
     <!-- Labelled with what it will show: four of these can sit in a column, and "Show" on its own
-         is the same name four times over to anyone not reading the row it is in. -->
-    <button
-      class="hairline"
-      class:on={fixFocus === group.actionCode}
-      aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
-      onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
-    >
-      {fixFocus === group.actionCode ? 'Showing' : 'Show'}
-    </button>
+         is the same name four times over to anyone not reading the row it is in. The conversion
+         card passes `false`: its rows are the whole of one severity, so the card's own toggle is
+         what shows them and a second control here would be the same job under a second name. -->
+    {#if focusable}
+      <button
+        class="hairline"
+        class:on={fixFocus === group.actionCode}
+        aria-label={`${fixFocus === group.actionCode ? 'Showing' : 'Show'}: ${group.title}`}
+        onclick={() => (fixFocus = fixFocus === group.actionCode ? null : group.actionCode)}
+      >
+        {fixFocus === group.actionCode ? 'Showing' : 'Show'}
+      </button>
+    {/if}
     {#if blocked === null}
       <button
         class="btn-primary fx-fix"
@@ -1607,10 +1664,16 @@
      then the offers, then what can be taken back. They share a shell so that the difference
      between them is the wording rather than the drawing, which is the point of putting the state
      of a library on screen before any of its rows. */
+  /* One grid for every card. `auto-fit` with a floor rather than a column count: the view column
+     is 668px at a default window, 882px at 1120 and 509px at 1121 with the preview rail up, so
+     what fits across is a different number at each of them and none of those numbers belongs in
+     this file. `minmax(0, 1fr)` is the half that stops a long word widening a track past its
+     share and scrolling the view sideways. */
   .cards {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(244px, 1fr));
+    align-items: start;
+    gap: 8px;
     padding: 12px 16px 0;
     flex-shrink: 0;
   }
@@ -1620,19 +1683,10 @@
     border-radius: var(--radius);
     box-shadow: var(--elev-1);
   }
-  /* auto-fit rather than a fixed count: two cards on Linux and three elsewhere, and at the 509px
-     the view column narrows to with the preview rail up, three across would leave each one too
-     narrow for the sentence it carries. `minmax(0, 1fr)` is what stops a long word widening a
-     track past its share and scrolling the view sideways. */
-  .strip {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(212px, 1fr));
-    gap: 10px;
-  }
   .state {
     display: flex;
     flex-direction: column;
-    padding: 12px 14px 11px;
+    padding: 11px 13px 10px;
     min-width: 0;
   }
   /* The lit state is a border and a ground step, not a colour: which card is showing its rows is
@@ -1642,28 +1696,24 @@
     border-color: var(--border-2);
     background: var(--ground-4);
   }
-  .s-count {
+  /* The count leads the title on one line rather than sitting above it. Two lines of heading per
+     card cost 30px each, and with five cards in the column that was 150px of the 629px a default
+     window leaves for everything, which came straight out of the rows. */
+  .s-title {
     margin: 0;
     display: flex;
     align-items: baseline;
-    gap: 7px;
-  }
-  .s-n {
-    font-size: var(--fs-display);
-    line-height: var(--lh-display);
+    gap: 8px;
+    font-size: var(--fs-emphasis);
+    line-height: var(--lh-tight);
     font-weight: 600;
-    letter-spacing: var(--ls-tight);
     color: var(--text-1);
   }
-  .s-unit {
-    font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
-    color: var(--text-3);
-  }
-  .s-title {
-    margin: 2px 0 0;
-    font-size: var(--fs-emphasis);
-    font-weight: 600;
+  .s-n {
+    font-size: var(--fs-heading);
+    line-height: var(--lh-display);
+    font-weight: 700;
+    letter-spacing: var(--ls-tight);
     color: var(--text-1);
   }
   .s-say {
@@ -1680,7 +1730,7 @@
     justify-content: space-between;
     gap: 8px;
     margin-top: auto;
-    padding-top: 10px;
+    padding-top: 9px;
   }
   .s-findings {
     font-size: var(--fs-caption);
@@ -1694,7 +1744,40 @@
 
   /* ── an offer: what Encore can do, and what it can take back ─────────────── */
   .offer {
-    padding: 12px 14px 12px;
+    padding: 11px 13px 11px;
+    min-width: 0;
+  }
+  /* The state cards share a row; every other card takes one to itself.
+     
+     Measured, not assumed. Letting the offers pair off with each other looked like free height
+     and was not: the duplicate card's summary is three clauses long, and in a 306px cell at a
+     default window it wrapped to 295px tall, which is more than the two it saved. A band that is
+     wide is two lines; the same words in half the width are nine. */
+  .strip,
+  .offer,
+  .fx-refusal,
+  .cards > :global(.dupes) {
+    grid-column: 1 / -1;
+  }
+  /* The state cards in a grid of their own, so `auto-fit` has only them to fit and collapses the
+     track it does not need. Sharing the outer grid put them in three tracks at an 882px view
+     because the full-width cards below kept the third one from being empty, which left each state
+     card 272px wide at a window 200px wider than one where they were 306px, and clipped
+     "CHARTS · 60 FINDINGS" in the foot. */
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(244px, 1fr));
+    gap: 8px;
+  }
+  .cards > :global(.dupes) {
+    min-width: 0;
+  }
+  /* The heading and its disclosure on one line, so a closed offer card is two lines tall. */
+  .o-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
   /* The conversion card is set back from the repair card on purpose: same kind of offer, lower
      stakes, and nothing here is broken. jsdom can verify none of that; what the tests pin is that
@@ -1704,7 +1787,7 @@
     color: var(--text-2);
   }
   .fx-head {
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
   .fx-title {
     margin: 0;
@@ -1723,7 +1806,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 0;
+    padding: 6px 0;
     border-top: 1px solid var(--hairline);
   }
   .fx-label {
@@ -1755,16 +1838,15 @@
     margin-left: 6px;
     vertical-align: baseline;
   }
-  /* The refusals, under the repairs and in the same card, because they are answers to the same
-     question. Quiet, and no border of their own: a decision is not a warning. */
+  /* The refusals, under the cards rather than in one of them: they are the answer to a question
+     asked at a row. Quiet, and with no border or ground of its own, because a decision is not a
+     warning and this is not a fifth card. */
   .fx-refusal {
-    margin: 9px 0 0;
-    padding-top: 9px;
-    border-top: 1px solid var(--hairline);
+    margin: 2px 2px 0;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
-    max-width: 78ch;
+    max-width: 82ch;
   }
   .ub-row {
     display: flex;
@@ -1871,18 +1953,23 @@
     position: sticky;
     top: 0;
     z-index: var(--z-raised);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     background: var(--bg);
     border-bottom: 1px solid var(--hairline);
-    padding-top: 12px;
-    margin-top: 12px;
+    padding: 8px 0 7px;
+    margin-top: 10px;
     flex-shrink: 0;
   }
   .chips {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 16px;
+    padding: 0 0 0 16px;
     flex-wrap: wrap;
+    min-width: 0;
   }
   .chips-label {
     font-family: var(--font-mono);
@@ -1926,16 +2013,19 @@
     color: var(--text-1);
   }
   .totals {
-    padding: 6px 16px 8px;
+    margin: 0;
+    padding: 0 16px;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     color: var(--text-3);
     letter-spacing: var(--ls-caps);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   /* ── the rows ─────────────────────────────────────────────────────────── */
   .results {
-    padding: 10px 16px 20px;
+    padding: 8px 16px 24px;
     display: flex;
     flex-direction: column;
     gap: 8px;
