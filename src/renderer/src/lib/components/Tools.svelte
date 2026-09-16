@@ -22,7 +22,10 @@
   import { countBySeverity, unrepairableNote, type SeverityCount } from '../issue-cards'
   import { assetJobs } from '../stores/assets'
   import { encore } from '../stores/bridge'
-  import Duplicates from './Duplicates.svelte'
+  import { spareCopies } from '../stores/duplicates'
+  import type { ViewId } from './Sidebar.svelte'
+
+  let { onNavigate }: { onNavigate: (id: ViewId) => void } = $props()
 
   // A row plus its human explanation. The raw code stays on the row so it can still be
   // read off the screen and exported.
@@ -1203,11 +1206,25 @@
           {/if}
         </section>
       {/if}
-      <!-- One of the cards rather than a panel above them: it answers a different question from a
-           different source, and a user reading down the state of their library meets "is anything
-           installed twice" beside "what can Encore fix" rather than instead of it. Closed it is a
-           card like the rest; opened it takes the row to itself. -->
-      <Duplicates />
+      <!-- The duplicate report used to be the last of these cards, and is a destination of its
+           own now. This is what took its place rather than nothing at all: a view that quietly
+           stopped answering a question it used to answer sends the user looking for a card that
+           is not there. It says why duplicates are not in this report, which is the same reason
+           they were never rows in it: two of the three kinds are not faults. -->
+      <section class="card elsewhere">
+        <h2 class="fx-title">Charts installed more than once</h2>
+        <p class="fx-note">
+          Not in this report, and not because nobody looked. A scan finds what is wrong with a
+          chart, and a song you own two charts of is not wrong with anything. Duplicates sorts them
+          into the ones that are the same chart file twice, the ones that are different versions,
+          and the ones that are different charters, and offers a removal on the first only.
+        </p>
+        <button class="hairline" onclick={() => onNavigate('duplicates')}>
+          {$spareCopies !== null && $spareCopies > 0
+            ? `Open Duplicates · ${$spareCopies} spare ${$spareCopies === 1 ? 'copy' : 'copies'}`
+            : 'Open Duplicates'}
+        </button>
+      </section>
 
       <!-- The two findings that look repairable and are not, said under the offers rather than
            inside them: a user who wonders why a row has no button reads it here, and the row
@@ -1849,6 +1866,15 @@
   /* The refusals, under the cards rather than in one of them: they are the answer to a question
      asked at a row. Quiet, and with no border or ground of its own, because a decision is not a
      warning and this is not a fifth card. */
+  /* The pointer at Duplicates. Quieter than the cards above it on purpose: it reports nothing
+     about this library, it only says where the other report went. */
+  .elsewhere {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 11px 13px;
+  }
   .fx-refusal {
     margin: 2px 2px 0;
     font-size: var(--fs-caption);

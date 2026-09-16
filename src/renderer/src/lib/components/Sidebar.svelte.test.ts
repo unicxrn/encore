@@ -57,6 +57,7 @@ describe('Sidebar: the page row and the panel row', () => {
       'Installed',
       'Asset Studio',
       'Statistics',
+      'Duplicates',
       'Settings'
     ]) {
       expect(row(other).getAttribute('aria-current')).toBeNull()
@@ -96,6 +97,7 @@ describe('Sidebar: the page row and the panel row', () => {
       'Asset Studio',
       'Statistics',
       'Issues',
+      'Duplicates',
       'Settings'
     ]) {
       expect(row(name).classList.contains('open')).toBe(false)
@@ -116,12 +118,12 @@ describe('Sidebar: the page row and the panel row', () => {
 })
 
 /**
- * `Mod+1…7` is the sidebar read top to bottom, and nothing else says so.
+ * `Mod+1…8` is the sidebar read top to bottom, and nothing else says so.
  *
  * `SHORTCUT_VIEWS` is a list in shortcuts.ts and the nav is a list in this component, and the
  * digits only mean what the sheet says they mean while the two are in the same order. Adding
- * the Stats row is what made this worth pinning: a row inserted higher up moves every digit
- * below it, and the only symptom would be a help sheet quietly describing the wrong keys.
+ * the Duplicates row is what made this worth pinning again: a row inserted higher up moves every
+ * digit below it, and the only symptom would be a help sheet quietly describing the wrong keys.
  */
 describe('Sidebar order and the view shortcuts', () => {
   it('lists the views in the order the digits follow', () => {
@@ -142,6 +144,15 @@ describe('Sidebar order and the view shortcuts', () => {
     const spec = SHORTCUTS.find((s) => s.id === 'go:stats')
     expect(spec?.what).toBe('Go to Statistics')
     expect(renderKeys(spec?.keys ?? '', 'Linux x86_64')).toEqual(['Ctrl', '5'])
+  })
+
+  // Duplicates went in beside Issues, which is what moved Settings off the seventh digit. Both
+  // are pinned, because the cost of the insert is exactly that Settings moved.
+  it('gives Duplicates the seventh digit and Settings the eighth', () => {
+    const digitOf = (id: string): string[] =>
+      renderKeys(SHORTCUTS.find((s) => s.id === id)?.keys ?? '', 'Linux x86_64')
+    expect(digitOf('go:duplicates')).toEqual(['Ctrl', '7'])
+    expect(digitOf('go:settings')).toEqual(['Ctrl', '8'])
   })
 })
 

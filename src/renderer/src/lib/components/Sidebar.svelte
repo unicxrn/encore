@@ -1,5 +1,6 @@
 <script lang="ts" module>
-  export type ViewId = 'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'settings'
+  export type ViewId =
+    'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'duplicates' | 'settings'
 </script>
 
 <script lang="ts">
@@ -30,13 +31,13 @@
   }
 
   /**
-   * Two groups where there were three, and the ORDER inside them is byte for byte what it was.
+   * Two groups, and the ORDER inside them is what `Mod+1…8` means.
    *
-   * That is the whole of the care this needed. `Mod+1…7` is this list read top to bottom
-   * (SHORTCUT_VIEWS in shortcuts.ts, pinned against this component by its own test), so moving a
-   * row between groups is free and moving one past another is not. Home and Explore left the
-   * MENU header for the top of LIBRARY, and Stats left the bottom of LIBRARY for the top of
-   * TOOLS; neither crossed anything, so every digit reaches the view it reached before.
+   * SHORTCUT_VIEWS in shortcuts.ts is this list read top to bottom, pinned against this component
+   * by its own test, so moving a row between groups is free and moving one past another is not.
+   * Duplicates went in beside Issues, which is where the approved design puts it and which pushed
+   * Settings from the seventh digit to the eighth. shortcuts.ts records why that was the trade
+   * worth making.
    */
   const SECTIONS: { header: string; items: NavItem[] }[] = [
     {
@@ -76,6 +77,12 @@
           view: 'tools',
           label: 'Issues',
           d: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm7 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z'
+        },
+        {
+          view: 'duplicates',
+          label: 'Duplicates',
+          // Two overlapping squares, the shape every file manager uses for a copy.
+          d: 'M8 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Zm7 0V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2'
         },
         {
           view: 'settings',

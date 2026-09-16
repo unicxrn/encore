@@ -25,7 +25,7 @@
  *
  * - `Mod+K`: focus search. Already the app's binding, and already advertised on
  *   the search field itself. Kept, not moved.
- * - `Mod+1…7`: the seven sidebar views in sidebar order. Digits are read off
+ * - `Mod+1…8`: the eight sidebar views in sidebar order. Digits are read off
  *   `code`, not `key`: on AZERTY the unshifted digit row produces `&`, `é`, `"`,
  *   so a `key`-based match would leave these unreachable for those users.
  *   Letters stay on `key`, where the mnemonic matters more than the position.
@@ -46,8 +46,9 @@
  * a shortcut.
  */
 
-/** The seven sidebar views, in sidebar order, which is the order `Mod+1…7` follows. */
-export type ShortcutView = 'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'settings'
+/** The eight sidebar views, in sidebar order, which is the order `Mod+1…8` follows. */
+export type ShortcutView =
+  'home' | 'browse' | 'library' | 'assets' | 'stats' | 'tools' | 'duplicates' | 'settings'
 
 export type ShortcutId =
   'focus-search' | 'toggle-play' | 'dismiss' | 'show-shortcuts' | `go:${ShortcutView}`
@@ -84,7 +85,16 @@ export interface ShortcutSpec {
   group: 'Navigation' | 'Playback' | 'General'
 }
 
-/** Sidebar order. Index + 1 is the digit that reaches each view. */
+/**
+ * Sidebar order. Index + 1 is the digit that reaches each view.
+ *
+ * Duplicates was inserted here rather than appended, and Settings moved from `Mod+7` to `Mod+8`
+ * with it. That is a real cost and it was paid deliberately: the one thing a user can be told
+ * about these keys is that they are the sidebar read top to bottom, and Duplicates belongs beside
+ * Issues on that list. Appending it as an eighth digit while drawing it seventh would have kept
+ * one habit and broken the only rule, which is the worse trade. Settings is the digit least
+ * likely to be in anybody's fingers: it is also a link in the sidebar's own footer.
+ */
 export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
   'home',
   'browse',
@@ -92,6 +102,7 @@ export const SHORTCUT_VIEWS: readonly ShortcutView[] = [
   'assets',
   'stats',
   'tools',
+  'duplicates',
   'settings'
 ]
 
@@ -107,6 +118,7 @@ const VIEW_LABELS: Record<ShortcutView, string> = {
   assets: 'Asset Studio',
   stats: 'Statistics',
   tools: 'Issues',
+  duplicates: 'Duplicates',
   settings: 'Settings'
 }
 

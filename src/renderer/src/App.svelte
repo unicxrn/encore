@@ -3,6 +3,7 @@
   import Assets from './lib/components/Assets.svelte'
   import Browse from './lib/components/Browse.svelte'
   import Detail from './lib/components/Detail.svelte'
+  import Duplicates from './lib/components/Duplicates.svelte'
   import ErrorFallback from './lib/components/ErrorFallback.svelte'
   import Home, { type ChartTarget } from './lib/components/Home.svelte'
   import Icon from './lib/components/Icon.svelte'
@@ -32,6 +33,7 @@
   import { initDownloads } from './lib/stores/downloads'
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
+  import { initDuplicates } from './lib/stores/duplicates'
   import { appUpdate, downloadAppUpdate, initAppUpdate } from './lib/stores/app-update'
   import { offeredUpdate } from '../../shared/app-update'
   import { globalQuery } from './lib/stores/global-search'
@@ -73,6 +75,7 @@
     assets: 'Asset Studio',
     stats: 'Statistics',
     tools: 'Issues',
+    duplicates: 'Duplicates',
     settings: 'Settings'
   }
 
@@ -419,6 +422,9 @@
     const offDownloads = initDownloads()
     const offScan = initScan()
     const offAssets = initAssets()
+    // Read once for the launch rather than once per visit to the view, because the sidebar draws
+    // a count off it and the sidebar is always mounted. See the store for what one read costs.
+    const offDuplicates = initDuplicates()
     // Subscribed here rather than in Settings, because the two states that arrive unasked (the
     // startup check's result, and download progress) land while that tab is closed as often as
     // not, and a subscription that only exists while the panel is mounted would miss them.
@@ -432,6 +438,7 @@
       offDownloads()
       offScan()
       offAssets()
+      offDuplicates()
       offAppUpdate()
       offWhatsNew()
       window.removeEventListener('keydown', onKeydown)
@@ -613,7 +620,12 @@
           {:else if view === 'stats'}
             <Stats />
           {:else if view === 'tools'}
-            <Tools />
+            <!-- Issues points at Duplicates rather than holding it. The report moved out to a
+                 destination of its own, and a view that simply stopped mentioning what it used to
+                 answer would leave the user hunting for it. -->
+            <Tools onNavigate={goTo} />
+          {:else if view === 'duplicates'}
+            <Duplicates />
           {:else if view === 'settings'}
             <Settings />
           {/if}

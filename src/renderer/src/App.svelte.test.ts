@@ -94,6 +94,16 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
     }),
     catalogQuery: vi.fn().mockResolvedValue([]),
     catalogCount: vi.fn().mockResolvedValue(0),
+    // Read once for the launch, for the sidebar's count and for the view: an empty report is the
+    // right answer here, since a library with duplicates in it would put paths and buttons on
+    // screen for every test below to step around.
+    catalogDuplicates: vi.fn().mockResolvedValue({
+      identical: [],
+      versions: [],
+      alternates: [],
+      totalCharts: 0,
+      unidentifiedCharts: 0
+    }),
     sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),
     windowControl: vi.fn().mockResolvedValue(undefined),
     backupsList: vi.fn().mockResolvedValue({ backups: [], totalBytes: 0 }),
@@ -306,7 +316,8 @@ describe('App keyboard shortcuts', () => {
     ['Digit4', 'Asset Studio'],
     ['Digit5', 'Statistics'],
     ['Digit6', 'Issues'],
-    ['Digit7', 'Settings']
+    ['Digit7', 'Duplicates'],
+    ['Digit8', 'Settings']
   ])('Ctrl+%s goes to %s', async (code, label) => {
     render(App)
     press(document.body, { key: 'x', code, ctrlKey: true })
