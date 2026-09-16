@@ -53,6 +53,23 @@ release.
   is drawn to, since charters rate past it and the service answers on what they wrote. There is
   no Vocals filter: Chorus Encore refuses one, though a chart's vocal difficulty still shows on
   its row.
+- Explore's advanced panel speaks the same language as the filter row it drops out of. Its boxes,
+  its toggles and its group labels are the chips that row already uses, and it reads as the header
+  getting taller rather than as a card that landed on the list. Exact and Exclude are pressed
+  pills now, like the chart features beside them, instead of twelve checkboxes asking one kind of
+  question a second way. The fields are grouped by what they ask rather than by their shape in the
+  request: words, numbers, what the chart has, and one exact chart.
+- The panel's intensity boxes are off until an instrument is chosen, the way the filter row's own
+  band is. A chart is rated one instrument at a time, and with none chosen a maximum of 1 answers
+  with 95,093 of the 95,299 charts there are. The boxes stay, because they take a tier the row's
+  two lists do not offer: a ceiling of 0, and either end above 6.
+- The open panel no longer takes the results off the screen. It never fitted the window: at
+  1280x800 the form was 846px tall and the list under it was 1px. It now takes what the window has
+  spare and scrolls itself, with Search and Clear always in reach, so there is still a list under
+  it at every size the window supports.
+- The panel no longer repeats how many filters are applied, which the Advanced button beside it
+  says already, open or shut. In its place it says when the boxes hold something nothing has been
+  searched for yet, which nothing on screen admitted to before.
 - Explore can put the results in an order. Eleven of them, reaching all eight fields Chorus
   Encore sorts by, including the charts changed most recently, which nothing surfaced before.
   There is no download or popularity order, because Chorus Encore does not keep one.
