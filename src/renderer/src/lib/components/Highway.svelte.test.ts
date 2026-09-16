@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { render } from '@testing-library/svelte'
 import { describe, expect, it } from 'vitest'
 import Highway from './Highway.svelte'
-import { HIGHWAY_FRETS } from '../highway'
+import { HIGHWAY_FRETS, HIGHWAY_HEIGHT, HIGHWAY_WIDTH } from '../highway'
 
 /**
  * What this can check, and what `highway.test.ts` checks instead.
@@ -52,12 +52,44 @@ describe('Highway: what is in the drawing', () => {
     const ids = (root: HTMLElement): string[] =>
       [...root.querySelectorAll('defs > *')].map((el) => el.id)
 
-    expect(ids(a)).toHaveLength(2)
-    expect(ids(b)).toHaveLength(2)
-    expect(new Set([...ids(a), ...ids(b)]).size).toBe(4)
-    // And the lane actually references its own pair rather than a hardcoded name.
+    expect(ids(a).length).toBeGreaterThan(0)
+    expect(ids(b)).toHaveLength(ids(a).length)
+    expect(new Set([...ids(a), ...ids(b)]).size).toBe(ids(a).length * 2)
+    // And the lane actually references its own rather than a hardcoded name.
     for (const id of ids(a)) {
       expect(a.innerHTML).toContain(`url(#${id})`)
+    }
+  })
+
+  /**
+   * How the drawing meets the box, which is the whole of what makes the swap invisible.
+   *
+   * The geometry is the package's camera worked out in advance, and that camera scales the lane
+   * against the box's HEIGHT: `slice` scales this viewBox to the height and crops the width, so
+   * the lane lands where the renderer will put it a moment later. `none` would stretch it to the
+   * box and `meet` would letterbox it, and either is a lane that jumps when a user presses Play.
+   *
+   * The crop only holds while the box is no wider than the viewBox, so the two boxes that draw
+   * this are pinned to the aspect they are written at. jsdom computes no layout, so the rule is
+   * read out of the source the same way the reduced-motion rules below are.
+   */
+  it('scales itself to the height of the box and crops the width, which is what the camera does', () => {
+    const { container } = render(Highway)
+    const svg = lane(container)
+    expect(svg.getAttribute('preserveAspectRatio')).toBe('xMidYMid slice')
+    expect(svg.getAttribute('viewBox')).toBe(`0 0 ${HIGHWAY_WIDTH} ${HIGHWAY_HEIGHT}`)
+    expect(HIGHWAY_WIDTH / HIGHWAY_HEIGHT).toBeGreaterThan(16 / 9)
+  })
+
+  it('is drawn in two boxes and neither is wider than the aspect it is cropped for', () => {
+    for (const file of ['Rail.svelte', 'PreviewPane.svelte']) {
+      const source = readFileSync(join(__dirname, file), 'utf8')
+      // The highway box in each, which is what this lane is drawn into.
+      expect(source).toMatch(/aspect-ratio:\s*16\s*\/\s*9/)
+      // And no box either file declares is wider than the crop, highway or otherwise.
+      for (const [, w, h] of source.matchAll(/aspect-ratio:\s*(\d+)\s*\/\s*(\d+)/g)) {
+        expect(Number(w) / Number(h)).toBeLessThanOrEqual(HIGHWAY_WIDTH / HIGHWAY_HEIGHT)
+      }
     }
   })
 

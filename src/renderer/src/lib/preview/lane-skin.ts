@@ -7,6 +7,10 @@
  * two different pictures of the same thing one button apart. This builds the still lane's look as
  * two canvases and hands them to the renderer in place of the package's art.
  *
+ * The art is half of it. The other half is the frame: `../highway.ts` projects the still lane the
+ * way the package's camera projects this one, and the two modules share every size the two lanes
+ * have in common.
+ *
  * ── the seam ──
  * `prepareChartData` returns a `textures` object that `ChartPreview.create` then consumes:
  * `highwayTexture` becomes the map of the scrolling highway plane, `strikelineTexture` the map of
@@ -40,7 +44,17 @@
  * package set them, and leaves one thing changed, which is the picture.
  */
 
-import { HIGHWAY_FRET_COLOURS } from '../highway'
+import {
+  HIGHWAY_BEATS_PER_TILE,
+  HIGHWAY_FRET_COLOURS,
+  HIGHWAY_FRET_FLATTEN,
+  HIGHWAY_FRET_RX,
+  HIGHWAY_GLOW_ALPHA,
+  HIGHWAY_GLOW_R,
+  HIGHWAY_LINE_W,
+  HIGHWAY_STRIKE_W
+} from '../highway'
+import type { HighwayLane } from '../highway'
 
 /**
  * What colour a fret is, per instrument type.
@@ -91,16 +105,11 @@ const NOTE_SPAN_WIDTH = 0.95
 /** One lane's width. The package's own step between two neighbouring lanes. */
 const PITCH = (NOTE_SPAN_WIDTH - SCALE) / 5
 
-export interface LaneLayout {
-  /** How wide the highway plane is, and so how wide one tile of the highway texture is. */
-  planeWidth: number
-  /** Lane centres in world x, left to right. */
-  centres: number[]
-  /** The strike line sprite's height in world units, which the renderer fixes by type. */
-  strikeHeight: number
-  /** The fret colours for those lanes, left to right. */
-  frets: string[]
-}
+/**
+ * The lane, which is `HighwayLane`: the still lane draws the same one, and one description of it
+ * is what keeps the two lanes one lane.
+ */
+export type LaneLayout = HighwayLane
 
 /** The layout for one of the package's three instrument types. */
 export function laneLayout(instrumentType: number): LaneLayout {
@@ -181,10 +190,11 @@ function fade(hex: string, alpha: number): string {
 }
 
 /**
- * The still lane's own values, which is what makes the two lanes one lane.
+ * The still lane's own colours, which is half of what makes the two lanes one lane.
  *
- * Every number here is the matching rule in `Highway.svelte`, converted from that component's
- * 320x180 viewBox into a fraction of a lane's width so it means the same thing at this scale.
+ * The other half is the sizes, and those are imported: `../highway` declares every mark on the
+ * lane as a fraction of a lane's width and both sides read the same number. These four are the
+ * matching rules in `Highway.svelte`, which cannot import a value into a stylesheet.
  */
 /** The lane floor, in two values a hair apart, so the lanes read as a gradient in brightness. */
 const LANE_FILL = ['rgba(255, 255, 255, 0.006)', 'rgba(255, 255, 255, 0.018)']
@@ -192,21 +202,6 @@ const LANE_FILL = ['rgba(255, 255, 255, 0.006)', 'rgba(255, 255, 255, 0.018)']
 const LINE = 'rgba(255, 255, 255, 0.05)'
 /** The outer two rails, which carry the lane's edge in the app's own colour. */
 const EDGE_ALPHA = 0.3
-/** A rail's width, as a fraction of a lane. The component's 1 unit against a 55.65 unit lane. */
-const RAIL_W = 1 / 55.65
-/** The strike line's, from the same pair: 2.2 units across the same lane. */
-const STRIKE_W = 2.2 / 55.65
-
-/**
- * How many beat lines one tile carries.
- *
- * The still lane draws four across a lane two tiles deep, so two to a tile is the same spacing,
- * and an even division is what lets the tile meet itself when the renderer scrolls it. They are
- * decoration and not beats: the renderer scrolls this texture at 1.35 world units a second while
- * the notes travel at 1.333, so anything in it drifts against the music by about one part in
- * eighty. Four lines a lane is what the resting picture shows, and that is all this claims.
- */
-const BEATS_PER_TILE = 2
 
 /** Resolution. One tile is a lane's depth, so height is the axis that carries the beat lines. */
 const TILE_PX = 512
@@ -214,12 +209,11 @@ const TILE_PX = 512
 /**
  * The highway floor: one tile of lane, drawn so that its top edge meets its bottom one.
  *
- * The still lane's ground runs --ground-0 at the horizon to --ground-3 at the strike line, and
- * that gradient cannot come across: the renderer scrolls this texture past the camera, so anything
- * that varies down the tile runs down the lane twice a second. The depth that gradient was
- * imitating is drawn here by a real perspective camera instead, and the two steps it spans are
- * spent across the lane rather than down it: the lane itself is the lifted step and the apron
- * outside the rails is the recessed one.
+ * Nothing in it may vary down the tile: the renderer scrolls this texture past the camera, so a
+ * gradient down the lane would run down the lane twice a second. The two ground steps are
+ * therefore spent across the lane rather than down it, the lane itself being the lifted step and
+ * the apron outside the rails the recessed one, and the depth is left to the camera, which has a
+ * real one. The still lane paints the same two steps the same way round.
  */
 export function drawHighwayTile(
   canvas: HTMLCanvasElement,
@@ -234,7 +228,7 @@ export function drawHighwayTile(
 
   const x = (world: number): number => (0.5 + world / layout.planeWidth) * w
   const rails = laneRails(layout)
-  const railW = Math.max(1, RAIL_W * PITCH * TILE_PX)
+  const railW = Math.max(1, HIGHWAY_LINE_W * PITCH * TILE_PX)
 
   ctx.fillStyle = colours.ground
   ctx.fillRect(0, 0, w, TILE_PX)
@@ -248,10 +242,10 @@ export function drawHighwayTile(
 
   // Beat lines before the rails, so a rail crosses one rather than being broken by it.
   ctx.fillStyle = LINE
-  for (let i = 0; i < BEATS_PER_TILE; i++) {
+  for (let i = 0; i < HIGHWAY_BEATS_PER_TILE; i++) {
     // Offset by half a step, so no beat line lands on the tile's own edge and gets split in two
     // by the wrap.
-    const y = ((i + 0.5) / BEATS_PER_TILE) * TILE_PX
+    const y = ((i + 0.5) / HIGHWAY_BEATS_PER_TILE) * TILE_PX
     ctx.fillRect(0, y - railW / 2, w, railW)
   }
 
@@ -261,16 +255,6 @@ export function drawHighwayTile(
     ctx.fillRect(x(rail) - railW / 2, 0, railW, TILE_PX)
   }
 }
-
-/** How wide a fret ring is, as a fraction of a lane. See `drawStrikeline`. */
-const FRET_RX = 0.44
-/** How flat it is: the angle the package's camera looks at the highway from is 60 degrees. */
-const FRET_FLATTEN = 0.5
-/** The ring's outline, on the same scale as the strike line it sits on. */
-const FRET_STROKE_W = STRIKE_W
-/** The light over the strike line, as a fraction of a lane. The still lane's radial gradient. */
-const GLOW_R = 3.4
-const GLOW_ALPHA = 0.16
 
 /** Resolution across the strike line. Its height falls out of the aspect the renderer needs. */
 const STRIKE_PX = 1024
@@ -283,11 +267,9 @@ const STRIKE_PX = 1024
  * type, is exactly the lane's full width: that is the only handle on where anything in this image
  * lands, because the renderer centres the sprite on the highway and scales it from the image.
  *
- * The ring is `FRET_RX` of a lane wide where the still lane's is 0.185, and that is the one number
- * of the still lane's this does not keep. A ring at 0.185 is a third of the width of the note that
- * lands in it, so every note would cover its own fret and half the lane either side; the resting
- * lane has no notes and can draw the button small. The ring is drawn at the width of the package's
- * note sprite instead, which is what a fret on a strike line is for.
+ * The ring is `HIGHWAY_FRET_RX` of a lane wide, which is about the width of the note that lands
+ * in it: a fret on a strike line is the mark the note is aimed at, and a ring a third of the note
+ * would sit inside every note that passed over it. The still lane draws it at the same width.
  */
 export function drawStrikeline(
   canvas: HTMLCanvasElement,
@@ -314,9 +296,9 @@ export function drawStrikeline(
   // drawn into this sprite rather than over the whole viewport, which would sit over the notes.
   // Squashed to the sprite's own height so it reaches zero at the top and bottom edges: a radial
   // gradient still at 10% where the image ends is a hard horizontal seam across the lane.
-  const glowR = GLOW_R * PITCH * px
+  const glowR = HIGHWAY_GLOW_R * PITCH * px
   const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR)
-  glow.addColorStop(0, fade(colours.accent, GLOW_ALPHA))
+  glow.addColorStop(0, fade(colours.accent, HIGHWAY_GLOW_ALPHA))
   glow.addColorStop(1, fade(colours.accent, 0))
   ctx.save()
   ctx.translate(x(0), midY)
@@ -325,9 +307,9 @@ export function drawStrikeline(
   ctx.fillRect(-glowR, -glowR, glowR * 2, glowR * 2)
   ctx.restore()
 
-  const rx = FRET_RX * PITCH * px
-  const ry = rx * FRET_FLATTEN
-  const strokeW = Math.max(1, FRET_STROKE_W * PITCH * px)
+  const rx = HIGHWAY_FRET_RX * PITCH * px
+  const ry = rx * HIGHWAY_FRET_FLATTEN
+  const strokeW = Math.max(1, HIGHWAY_STRIKE_W * PITCH * px)
 
   // The strike line, lit. `shadowBlur` is the sprite's own drop shadow: the component declares
   // `filter: drop-shadow(0 0 5px var(--accent))` on the same line, and this is that.
