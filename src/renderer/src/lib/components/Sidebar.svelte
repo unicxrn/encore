@@ -269,6 +269,22 @@
   })
 
   /**
+   * Whether the footer card is the lit one.
+   *
+   * Three of the seven states are Encore holding a release for the user: one offered, one coming
+   * down, one waiting to be installed. Those are the states the approved design draws as a card
+   * with an accent border and an accent wash behind it, and the other four are the states where
+   * there is nothing to act on. A card lit in every state would be lit in none of them.
+   *
+   * `state` is read through two optional chains because it is cast rather than parsed (see
+   * `updateLine`): a payload whose `state` is a bare string reaches this, and `.kind` on a string
+   * is undefined, which is not one of the three and leaves the card quiet.
+   */
+  const updateWaiting = $derived(
+    ['available', 'downloading', 'ready'].includes($appUpdate?.state?.kind ?? '')
+  )
+
+  /**
    * How many charts the catalog holds.
    *
    * `catalogCount({})` is what Home's hero asks for the same figure, on the same channel: this is
@@ -314,20 +330,32 @@
 <!-- Named because it is not the only navigation landmark a screen reader will
      find in this window, and "navigation" twice over is no help to anyone. -->
 <nav class="sidebar" aria-label="Sections">
-  <!-- The mark from build/logo/encore-small.svg: the strike bar and the five frets, without
-       the rounded square the icon files paint behind them (the sidebar IS that colour). This
-       is the only place the real mark appears in the app; everywhere else the brand is the
-       word. Decorative: the word beside it is the name. -->
+  <!-- The mark from build/logo/encore-small.svg: the strike bar and the five frets, back on the
+       rounded square the icon files paint behind them. The square was dropped when the sidebar
+       was the same colour as the icon's ground and so drew nothing; it is here now because the
+       tile is the accent gradient rather than that ground, which is what the approved design
+       asks the mark to be. The bar is white at half strength rather than the file's #4b4270:
+       that value was picked to sit on a near-black square and is invisible on violet.
+
+       This is the only place the real mark appears in the app; everywhere else the brand is the
+       word. Decorative: the words beside it are the name. -->
   <div class="brand">
-    <svg class="mark" viewBox="17 80 116 24" aria-hidden="true">
-      <rect x="17" y="97" width="116" height="5" rx="2.5" fill="#4b4270" />
-      <rect x="19" y="82" width="20" height="15" rx="7" fill="#35c759" />
-      <rect x="42" y="82" width="20" height="15" rx="7" fill="#ff453a" />
-      <rect x="65" y="82" width="20" height="15" rx="7" fill="#ffd60a" />
-      <rect x="88" y="82" width="20" height="15" rx="7" fill="#0a84ff" />
-      <rect x="111" y="82" width="20" height="15" rx="7" fill="#ff9f0a" />
-    </svg>
-    <span>ENC<span class="o">O</span>RE</span>
+    <span class="mark-tile" aria-hidden="true">
+      <svg class="mark" viewBox="17 80 116 24">
+        <rect x="17" y="97" width="116" height="5" rx="2.5" fill="rgba(255, 255, 255, 0.5)" />
+        <rect x="19" y="82" width="20" height="15" rx="7" fill="#35c759" />
+        <rect x="42" y="82" width="20" height="15" rx="7" fill="#ff453a" />
+        <rect x="65" y="82" width="20" height="15" rx="7" fill="#ffd60a" />
+        <rect x="88" y="82" width="20" height="15" rx="7" fill="#0a84ff" />
+        <rect x="111" y="82" width="20" height="15" rx="7" fill="#ff9f0a" />
+      </svg>
+    </span>
+    <span class="brand-words">
+      <span class="wordmark">ENC<span class="o">O</span>RE</span>
+      <!-- What the app is, under what it is called. Mono and tracked out, so the two lines are
+           told apart by their faces rather than only by their sizes. -->
+      <span class="brand-sub">CHART MANAGER</span>
+    </span>
   </div>
 
   <!-- A radiogroup and not a tablist: these pick which library Encore is looking at, which is a
@@ -342,8 +370,13 @@
         disabled={entry.id !== game}
         title={entry.id === game ? undefined : 'Encore reads Clone Hero libraries'}
       >
+        <!-- Lit on the tile that is the library Encore is reading, and drawn by the
+             stylesheet on that tile alone. Violet rather than the design's green: selection in
+             this app is violet everywhere else, and a second colour for the same idea here
+             would be a second idea. -->
+        <span class="game-dot" aria-hidden="true"></span>
         <span class="game-label">{entry.label}</span>
-        <span class="game-note mono">{entry.note}</span>
+        <span class="game-note">{entry.note}</span>
       </button>
     {/each}
   </div>
@@ -354,16 +387,22 @@
          will change shape later. `title` carries the reason; `disabled` keeps it out of the tab
          order and out of every click. Surprise me was the other one and is a control now. -->
     <button class="quick-btn" disabled title="Playlist import is not built yet">
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        aria-hidden="true"
-      >
-        <path d="M4 6h11M4 11h11M4 16h7M17.5 10v9m0 0 3-3m-3 3-3-3" />
-      </svg>
-      Import playlist
+      <!-- The block is the design's, and its colour is not: the design fills this one with
+           Spotify's green, which on a control that cannot import anything would be advertising
+           an integration that does not exist. It gets the neutral fill until the row is built,
+           and the live row beside it is the one carrying the accent. -->
+      <span class="quick-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M4 6h11M4 11h11M4 16h7M17.5 10v9m0 0 3-3m-3 3-3-3" />
+        </svg>
+      </span>
+      <span class="quick-text">
+        <b>Import playlist</b>
+        <!-- aria-hidden for the reason the nav's figures are: `title` already carries this to a
+             screen reader as the button's description, and said twice it would be read twice.
+             It is on screen because a reason only a hover can reach is no reason at all. -->
+        <span class="quick-note" aria-hidden="true">Not built yet</span>
+      </span>
     </button>
     <!-- Goes to Explore and fills it, which is why the title says where: a quick action that
          changes the view has to say so before it is pressed, or the list the user was looking at
@@ -373,110 +412,147 @@
       title="Five charts you do not have, drawn at random. Opens Explore."
       onclick={onSurprise}
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        aria-hidden="true"
-      >
-        <path d="M5 5h4l10 14h-4M5 19h4l2-3m5-8 3-3m0 0-3-3m3 3h-4l-1 1.5M19 19l-3-3m3 3-3 3" />
-      </svg>
-      Surprise me
+      <span class="quick-icon live" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M5 5h4l10 14h-4M5 19h4l2-3m5-8 3-3m0 0-3-3m3 3h-4l-1 1.5M19 19l-3-3m3 3-3 3" />
+        </svg>
+      </span>
+      <span class="quick-text">
+        <b>Surprise me</b>
+        <span class="quick-note" aria-hidden="true">Five charts at random</span>
+      </span>
     </button>
   </div>
 
-  <div class="source" role="radiogroup" aria-label="Chart source">
-    {#each SOURCES as entry (entry.id)}
-      <button
-        class="seg"
-        class:on={source === entry.id}
-        role="radio"
-        aria-checked={source === entry.id}
-        disabled={!entry.live}
-        title={entry.live ? undefined : NOT_WIRED}
-      >
-        {entry.label}
-      </button>
-    {/each}
-  </div>
-  <!-- Said once in text rather than three times in tooltips: a tooltip is not an answer for
-       someone who never hovers, and the two dead segments need one between them. -->
-  <p class="source-note">{NOT_WIRED}</p>
+  <!-- Everything from the source switcher down is one scroller, which is the approved design's
+       shape and not an arrangement of convenience. The brand, the game tiles and the two quick
+       actions are the chrome that says which library this is, and the footer is the card that
+       says what the app is doing; none of the four should leave the screen because the nav is
+       long. What scrolls is the list, and the source box scrolls with it, so a user who wants
+       the whole nav can push the box they are not using out of the way. -->
+  <div class="navwrap">
+    <!-- Named on screen rather than only in the group's `aria-label`. The block below is three
+         rows in a well and nothing above it said what they pick between. -->
+    <div class="group-label">SOURCE</div>
+    <!-- Rows in a well, not three pills in a strip. The strip was the defect: three segments
+         sharing 198px gave each about 66, and "Chorus Encore" needs 82 and "RhythmVerse" 71, so
+         every one of the three arrived ellipsised and the user was choosing between
+         "Chorus Enc...", "RhythmVe..." and "B...". A name the user cannot read is not a choice.
+         Stacked, each row has the whole track and the widest of the three has 100px to spare.
 
-  {#each SECTIONS as section (section.header)}
-    <!-- The visible header names the group, so it is pointed at rather than
-         duplicated into an aria-label. Without this the three headers are
-         decoration and the sidebar is one flat run of eight buttons. -->
-    <div class="section" role="group" aria-labelledby="sidebar-{section.header}">
-      <div class="section-header" id="sidebar-{section.header}">{section.header}</div>
-      {#each section.items as item (item.label)}
-        {@const count = countOf(item)}
-        <!-- Two different kinds of item share this button, and they need
-             different state words. A view is a destination, so the active one is
-             `aria-current="page"`, not `aria-selected`, which only means
-             anything inside a tablist or a listbox. Downloads is not a
-             destination at all: it opens a panel over the app, which is
-             `aria-expanded`. Svelte drops an attribute whose value is
-             `undefined`, so each item carries exactly one of the two.
-
-             The classes split the same way, and that is the visual half of the
-             same distinction. `active` is the page marker; `open` is the panel's
-             own state, styled to read as "expanded" (see the rules below). The
-             Downloads row used to borrow `active` while the panel was open, so on
-             Issues or Settings two rows lit identically and a sighted user had no
-             way to tell the page from the panel; aria-current got it right and
-             the paint did not. -->
+         No figures on these rows, which is where the design puts 95,299 and 61,402. A count
+         beside RhythmVerse would be sizing a catalogue the download queue cannot fetch from. -->
+    <div class="source" role="radiogroup" aria-label="Chart source">
+      {#each SOURCES as entry (entry.id)}
         <button
-          class="item"
-          class:active={item.view !== undefined && view === item.view}
-          class:open={item.view === undefined && downloadsOpen}
-          aria-current={item.view !== undefined && view === item.view ? 'page' : undefined}
-          aria-expanded={item.view === undefined ? downloadsOpen : undefined}
-          aria-label={count === null ? undefined : `${item.label}, ${count.says}`}
-          title={count === null ? undefined : count.says}
-          onclick={() => (item.view ? onNavigate(item.view) : item.action?.())}
+          class="seg"
+          class:on={source === entry.id}
+          role="radio"
+          aria-checked={source === entry.id}
+          disabled={!entry.live}
+          title={entry.live ? undefined : NOT_WIRED}
         >
-          <!-- Decorative: every item's name is the text beside the glyph. -->
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            aria-hidden="true"
-          >
-            <path d={item.d} />
-          </svg>
-          <!-- The label is its own box so it can ellipsise against the figure beside it rather
-               than pushing it out of the 238px column. -->
-          <span class="label">{item.label}</span>
-          <!-- aria-hidden because the row's own `aria-label` already reads the figure with its
-               unit attached; announced here as well it would be a bare number after a noun. -->
-          {#if count !== null}
-            <span class="count" class:pill={count.pill} aria-hidden="true">{count.figure}</span>
-          {/if}
+          <i class="seg-dot" aria-hidden="true"></i><span class="seg-label">{entry.label}</span>
         </button>
       {/each}
     </div>
-  {/each}
-  <div class="bottom">
-    <div class="status-card">
-      <!-- The update state, read from the same store Settings reads, so the footer cannot say
-           something the Updates row disagrees with. Polite: it rewrites itself when the startup
-           check answers, which is seconds after mount and nowhere near the user's attention. -->
-      <div class="status-line" role="status">{updateLine}</div>
+    <!-- Said once in text rather than three times in tooltips: a tooltip is not an answer for
+         someone who never hovers, and the two dead segments need one between them. -->
+    <p class="source-note">{NOT_WIRED}</p>
+
+    {#each SECTIONS as section (section.header)}
+      <!-- The visible header names the group, so it is pointed at rather than
+           duplicated into an aria-label. Without this the three headers are
+           decoration and the sidebar is one flat run of eight buttons. -->
+      <div class="section" role="group" aria-labelledby="sidebar-{section.header}">
+        <div class="section-header" id="sidebar-{section.header}">{section.header}</div>
+        {#each section.items as item (item.label)}
+          {@const count = countOf(item)}
+          <!-- Two different kinds of item share this button, and they need
+               different state words. A view is a destination, so the active one is
+               `aria-current="page"`, not `aria-selected`, which only means
+               anything inside a tablist or a listbox. Downloads is not a
+               destination at all: it opens a panel over the app, which is
+               `aria-expanded`. Svelte drops an attribute whose value is
+               `undefined`, so each item carries exactly one of the two.
+
+               The classes split the same way, and that is the visual half of the
+               same distinction. `active` is the page marker; `open` is the panel's
+               own state, styled to read as "expanded" (see the rules below). The
+               Downloads row used to borrow `active` while the panel was open, so on
+               Issues or Settings two rows lit identically and a sighted user had no
+               way to tell the page from the panel; aria-current got it right and
+               the paint did not. -->
+          <button
+            class="item"
+            class:active={item.view !== undefined && view === item.view}
+            class:open={item.view === undefined && downloadsOpen}
+            aria-current={item.view !== undefined && view === item.view ? 'page' : undefined}
+            aria-expanded={item.view === undefined ? downloadsOpen : undefined}
+            aria-label={count === null ? undefined : `${item.label}, ${count.says}`}
+            title={count === null ? undefined : count.says}
+            onclick={() => (item.view ? onNavigate(item.view) : item.action?.())}
+          >
+            <!-- Decorative: every item's name is the text beside the glyph. -->
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              aria-hidden="true"
+            >
+              <path d={item.d} />
+            </svg>
+            <!-- The label is its own box so it can ellipsise against the figure beside it rather
+                 than pushing it out of the 238px column. -->
+            <span class="label">{item.label}</span>
+            <!-- aria-hidden because the row's own `aria-label` already reads the figure with its
+                 unit attached; announced here as well it would be a bare number after a noun. -->
+            {#if count !== null}
+              <span class="count" class:pill={count.pill} aria-hidden="true">{count.figure}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/each}
+  </div>
+  <div class="foot">
+    <!-- One card, lit only when there is a release to act on. The design draws it lit, because
+         the design draws the one state where Encore is holding an update; the other four states
+         have nothing to press and the card says so quietly instead. Same strings either way:
+         which of the seven states this is, and then what the sidecar is. -->
+    <div class="status-card" class:waiting={updateWaiting}>
+      <div class="status-head">
+        <!-- Decorative: the line beside it is what the card says. -->
+        <svg
+          class="status-glyph"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          aria-hidden="true"
+        >
+          <path d="M12 4.5v9.5m0 0 4-4m-4 4-4-4M5.5 19.5h13" />
+        </svg>
+        <!-- The update state, read from the same store Settings reads, so the footer cannot say
+             something the Updates row disagrees with. Polite: it rewrites itself when the startup
+             check answers, which is seconds after mount and nowhere near the user's attention. -->
+        <div class="status-line" role="status">{updateLine}</div>
+      </div>
       <!-- The line rewrites itself when the sidecar probe answers, seconds after
            mount. Polite so it waits for a gap rather than cutting in. -->
-      <div class="status-line" role="status">{ytdlpLine}</div>
-      <button class="settings-link" onclick={() => onNavigate('settings')}>Open Settings</button>
-      <!-- `?` opens the same sheet. This is here because a shortcut nobody can
-           find is not a feature, and this card is the only part of the chrome
-           that is already about "what is this app doing". The key is in the
-           tooltip rather than the label: `title` is only a fallback for the
-           accessible name, so it adds the hint without renaming the button. -->
-      <button class="settings-link" title="Press ? anywhere" onclick={onShowShortcuts}>
-        Keyboard shortcuts
-      </button>
+      <div class="status-line sub" role="status">{ytdlpLine}</div>
+      <div class="status-links">
+        <button class="settings-link" onclick={() => onNavigate('settings')}>Open Settings</button>
+        <!-- `?` opens the same sheet. This is here because a shortcut nobody can
+             find is not a feature, and this card is the only part of the chrome
+             that is already about "what is this app doing". The key is in the
+             tooltip rather than the label: `title` is only a fallback for the
+             accessible name, so it adds the hint without renaming the button. -->
+        <button class="settings-link" title="Press ? anywhere" onclick={onShowShortcuts}>
+          Keyboard shortcuts
+        </button>
+      </div>
     </div>
     <div class="version">ENCORE v{APP_VERSION}</div>
   </div>
@@ -484,170 +560,368 @@
 
 <style>
   /* No width here any more: the app shell's grid owns column 1, and a component that also
-     declared one would be a second answer to the same question. */
+     declared one would be a second answer to the same question.
+
+     The ground is --ground-2, one step above the window. The column used to be the window's own
+     colour, which is why it read as a region of the background rather than as a thing standing
+     beside the content; the approved design has it lifted, and a lifted plane is what lets the
+     well under the source rows and the recessed footer strip read as recessed at all. */
   .sidebar {
+    background: var(--ground-2);
     border-right: 1px solid var(--hairline);
     display: flex;
     flex-direction: column;
-    padding: 0 12px 10px;
+    min-height: 0;
     overflow-y: auto;
   }
-  /* The sidebar now runs to the window's top edge, so this block is beside the title bar
-     rather than under it, and has to drag the window like the title bar does. It holds no
-     control, so nothing inside needs `no-drag`. Its height matches row 1 of the shell, which
-     is what keeps the wordmark's baseline level with the search field's. */
+  /* The sidebar runs to the window's top edge, so this block is beside the title bar rather
+     than under it, and has to drag the window like the title bar does. It holds no control, so
+     nothing inside needs `no-drag`. Its height matches row 1 of the shell, which is what keeps
+     the wordmark's baseline level with the search field's, and is why the heavier mark below
+     had to fit 50px rather than ask for more: 31px of tile inside 50px of row. */
   .brand {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     height: 50px;
     flex-shrink: 0;
-    font-weight: 700;
-    font-size: var(--fs-emphasis);
-    /* Exception: 0.14em, wider than --ls-caps. Six letters set as a wordmark, not a
-       label. The extra tracking is what makes it read as a mark rather than a heading. */
-    letter-spacing: 0.14em;
-    padding: 0 10px;
+    padding: 0 12px;
     -webkit-app-region: drag;
   }
-  /* ── game switcher ──────────────────────────────────────────────────────── */
-  .games {
+  /* The tile the icon files paint and the sidebar used to stand in for. 31px square, the
+     middle step of the radius scale, and the accent gradient the primary buttons already use,
+     so the mark is the same violet as everything else the app calls its own.
+
+     No shadow under it. The approved design casts a violet halo here, and this file cannot:
+     tokens.test.ts holds every component's box-shadow to one of the four --elev steps, all of
+     which are black, and a violet one is not a shadow anyway. Its weight is 31px of gradient at
+     the top of a column where nothing else is that colour, which is enough. */
+  .mark-tile {
+    width: 31px;
+    height: 31px;
+    flex-shrink: 0;
+    border-radius: var(--radius);
+    background: var(--accent-grad);
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin: 10px 0 12px;
+    place-items: center;
   }
-  .game {
+  /* The viewBox is cropped to the frets and the bar (116x24 units). 21px wide inside a 31px
+     tile leaves 5px of gradient either side, and puts each fret at about 3.6 by 2.7px, which
+     is the size they are in the 32px icon the taskbar draws. */
+  .mark {
+    width: 21px;
+    height: 4.34px;
+    display: block;
+  }
+  .brand-words {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
+  }
+  .wordmark {
+    font-size: var(--fs-emphasis);
+    font-weight: 700;
+    line-height: var(--lh-flat);
+    color: var(--text-1);
+    /* Exception: 0.14em, wider than --ls-caps. Six letters set as a wordmark, not a
+       label. The extra tracking is what makes it read as a mark rather than a heading. */
+    letter-spacing: 0.14em;
+  }
+  .brand .o {
+    color: var(--accent);
+  }
+  .brand-sub {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    line-height: var(--lh-flat);
+    letter-spacing: var(--ls-caps);
+    color: var(--accent-tint);
+  }
+  /* -- game switcher --------------------------------------------------------- */
+  .games {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 0 12px 12px;
+  }
+  /* 52px tiles, which is what makes them tiles rather than two lines of text with a box drawn
+     round them. `position: relative` is for the dot; `overflow: hidden` keeps the gradient
+     inside the radius. */
+  .game {
+    position: relative;
+    overflow: hidden;
+    height: 52px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
     align-items: flex-start;
     border: 1px solid var(--border-1);
-    border-radius: var(--radius-sm);
-    background: var(--ground-2);
-    color: var(--text-2);
+    border-radius: var(--radius);
+    /* One step BELOW the column, not above it. The tile that is not the library Encore reads is
+       the tile that is off, and a recessed plane is what off looks like. */
+    background: var(--ground-1);
+    color: var(--text-3);
     font-family: var(--font-ui);
     text-align: left;
-    padding: 7px 9px;
+    padding: 0 10px;
     cursor: pointer;
   }
   .game.on {
     border-color: var(--accent);
-    background: var(--accent-dim);
+    background: linear-gradient(150deg, var(--accent-dim), var(--ground-3));
     color: var(--text-1);
   }
-  /* The unselected tile is the one that is not available, so it is drawn as unavailable
-     rather than merely unselected: no pointer, and the note under it says "Not yet". */
+  /* The unselected tile is the one that is not available, and is drawn as unavailable rather
+     than merely unselected: recessed where the live one is lifted, quiet where it is violet,
+     no dot, no pointer, and a note underneath that says "Not yet" in words.
+
+     What it does NOT do is fade. `opacity: 0.65` was what carried this before, and it put the
+     note at 3.23:1 on the tile, under the 4.5:1 this file's own comment says the small labels
+     have to clear. A reason the user cannot read is not a reason, so the unavailability is
+     carried by everything except the text's contrast. */
   .game:disabled {
     cursor: default;
-    opacity: 0.65;
+  }
+  .game-dot {
+    position: absolute;
+    top: 7px;
+    right: 8px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent-tint);
+    opacity: 0;
+  }
+  .game.on .game-dot {
+    opacity: 1;
   }
   .game-label {
     font-size: var(--fs-secondary);
     font-weight: 600;
     line-height: var(--lh-tight);
   }
+  /* The UI face and not the mono one. Measured: "Your library" set in mono at --fs-caption with
+     --ls-caps needs 97.9px and the tile's text box is 80.5px, so it wrapped to a second line
+     inside a 52px tile. The label above it is already the UI face; the note matching it costs
+     the tile nothing and buys back 30px. */
   .game-note {
     font-size: var(--fs-caption);
-    letter-spacing: var(--ls-caps);
+    line-height: var(--lh-tight);
     color: var(--text-3);
   }
-  /* ── quick actions ──────────────────────────────────────────────────────── */
+  .game.on .game-note {
+    color: var(--accent-tint);
+  }
+  /* -- quick actions --------------------------------------------------------- */
   .quick {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    margin-bottom: 12px;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 0 12px 10px;
   }
   .quick-btn {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 10px;
     width: 100%;
     border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    background: var(--ground-3);
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    text-align: left;
+    padding: 7px 10px;
+    cursor: pointer;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+  .quick-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--ground-4);
+  }
+  /* Recessed and quiet, the same pair of moves the off game tile makes, so "not ready" looks
+     the same wherever this sidebar says it. No hover response at all: a row that lights under
+     the pointer is a row that is offering something. */
+  .quick-btn:disabled {
+    cursor: default;
+    background: var(--ground-1);
+    color: var(--text-3);
+  }
+  .quick-icon {
+    width: 27px;
+    height: 27px;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    display: grid;
+    place-items: center;
+    background: var(--ground-4);
+    color: var(--text-3);
+  }
+  .quick-icon.live {
+    background: var(--accent-dim);
+    color: var(--accent-text);
+  }
+  .quick-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+  .quick-text {
+    min-width: 0;
+  }
+  .quick-text b {
+    display: block;
+    font-size: var(--fs-secondary);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+  }
+  .quick-note {
+    display: block;
+    font-size: var(--fs-caption);
+    line-height: var(--lh-tight);
+    color: var(--text-3);
+  }
+  /* -- the scroller ---------------------------------------------------------- */
+  /* Two shapes, and which one the column gets is decided by whether it can afford the nicer
+     one. Measured (scripts/measure-sidebar.mjs): the four fixed blocks take 340px and the nav
+     plus the source well below them is 580px, so a column shorter than about 940px cannot hold
+     a pinned footer AND the whole nav. Pinning it anyway is what a first pass at this did, and
+     at the 600px window minimum (src/main/index.ts) it left ZERO nav rows on screen before the
+     user scrolled: the brand, the tiles, the quick actions and the footer had taken 340 of the
+     600, and the source well and its reason took the rest.
+
+     So the default is the column scrolling as one, which is what it did before any of this, and
+     which puts eleven of eleven rows on screen at 800px and five at 600. The query below is the
+     upgrade, not the fallback, and it turns on at the height where it costs the nav nothing. At
+     940px both shapes draw the same pixels, so nothing jumps across the boundary.
+
+     `flex: 0 0 auto` rather than the default `0 1 auto`, and this is not belt and braces. The
+     column is a flex container whose height the shell's grid fixes, so when its content is
+     taller than the window every item that CAN shrink does, and an item whose automatic minimum
+     size is zero shrinks to nothing. The old source strip declared `overflow: hidden` and so had
+     exactly that minimum: measured in a real engine it was 2px tall at a 960x800 window, which
+     is the whole control gone, and 26px at 1920x1080 where the column happened to fit. Nothing
+     in here clips itself now, so nothing in here has a zero minimum, but the four blocks around
+     this one all say `flex-shrink: 0` and this one saying it too is what makes the column scroll
+     rather than squeeze. */
+  .navwrap {
+    flex: 0 0 auto;
+    padding: 0 10px 10px;
+  }
+  @media (min-height: 940px) {
+    .sidebar {
+      overflow: hidden;
+    }
+    /* `min-height: 0` is what makes `flex: 1` mean "what is left" rather than "at least my
+       content": without it a flex child refuses to shrink below its content and the footer is
+       pushed off the bottom of the window instead of the list scrolling. */
+    .navwrap {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+    .foot {
+      margin-top: 0;
+    }
+  }
+  /* -- source switcher ------------------------------------------------------- */
+  /* The well. --ground-0 is the token for exactly this, an inset list on a lifted plane, and
+     two steps below the column is what makes the selected row's --ground-4 fill read as a row
+     standing up out of it. */
+  .source {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    background: var(--ground-0);
+    padding: 4px;
+  }
+  /* A full row each, which is the fix. Each takes the whole track rather than a third of it,
+     so no source name is ellipsised at any window width. */
+  .seg {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: 0;
     border-radius: var(--radius-sm);
     background: transparent;
-    color: var(--text-2);
+    color: var(--text-3);
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
+    line-height: var(--lh-tight);
     text-align: left;
     padding: 6px 9px;
     cursor: pointer;
   }
-  .quick-btn:disabled {
-    cursor: default;
-    color: var(--text-3);
-  }
-  .quick-btn svg {
-    width: 15px;
-    height: 15px;
-    flex-shrink: 0;
-  }
-  /* ── source switcher ────────────────────────────────────────────────────── */
-  .source {
-    display: flex;
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-  /* Sized by their labels, not by equal thirds. Measured: three equal segments across the 214px
-     the sidebar's padding leaves give each 71px, and "Chorus Encore" and "RhythmVerse" are both
-     wider than that, so both source names arrived on screen ellipsised. A source the user cannot
-     read is worse than an uneven control. `flex: 0 1 auto` lets each take what it needs and lets
-     the longest give way first if a font ever makes them too wide together. */
-  .seg {
-    flex: 0 1 auto;
-    min-width: 0;
-    border: 0;
-    border-left: 1px solid var(--border-1);
-    background: transparent;
-    color: var(--text-3);
-    font-family: var(--font-ui);
-    font-size: var(--fs-caption);
-    padding: 5px 7px;
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .seg:first-child {
-    border-left: 0;
-  }
   .seg.on {
     background: var(--ground-4);
     color: var(--text-1);
+    font-weight: 600;
   }
   .seg:disabled {
     cursor: default;
+  }
+  /* The dot says which row is the live one, and it is drawn in the accent on that row alone.
+     No glow behind it: this column is open all day, and a 7px halo on a 5px dot is a light
+     source rather than a state.
+
+     The unlit dots are --text-3 and not --border-2. A border colour measures 1.51:1 on the
+     well, which is a dot you cannot see rather than a dot that is off; --text-3 measures
+     6.39:1, the same as the label beside it, so the row reads as one quiet thing. What carries
+     the selection is not the dot's brightness anyway: the live row also has a fill, a heavier
+     label and --text-1 to the others' --text-3. */
+  .seg-dot {
+    width: 5px;
+    height: 5px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--text-3);
+  }
+  .seg.on .seg-dot {
+    background: var(--accent-hi);
+  }
+  .seg-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .source-note {
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
-    padding: 6px 2px 14px;
+    padding: 7px 6px 0;
   }
-  /* The viewBox is cropped to the frets and the bar (116×24 units), so at 32px wide the mark
-     is 7px tall and a fret is about 5px by 4px: measured at 24×5 the bar under the frets all
-     but vanished, and at 32×7 it is a line again while the whole mark still sits inside the
-     word's cap height. */
-  .mark {
-    width: 32px;
-    height: 7px;
-    flex-shrink: 0;
-  }
-  .brand .o {
-    color: var(--accent);
-  }
-  .section {
-    margin-bottom: 14px;
-  }
+  /* -- nav ------------------------------------------------------------------- */
+  /* One rule for both kinds of label above a group: the source well's and the two section
+     headers'. They are the same typographic job and were two sizes apart. */
+  .group-label,
   .section-header {
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
+    line-height: var(--lh-tight);
     text-transform: uppercase;
     color: var(--text-3);
-    padding: 0 10px 6px;
+    padding: 14px 6px 7px;
+  }
+  .group-label {
+    padding-top: 12px;
+  }
+  .section-header {
+    padding-left: 10px;
+  }
+  /* The two groups are told apart by their headers and by this. 8px rather than the 14 it was:
+     the header above each already carries 14px of its own top padding, so the pair was reading
+     as a 22px gutter between LIBRARY and TOOLS in a column that has rows to fit. */
+  .section {
+    margin-bottom: 8px;
   }
   .item {
     display: flex;
@@ -655,11 +929,14 @@
     gap: 10px;
     width: 100%;
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-2);
     font-family: var(--font-ui);
     font-size: var(--fs-body);
+    /* 500 rather than 400. Nine rows of book weight under a 700 wordmark and two 600 tiles was
+       the flattest run in the column. */
+    font-weight: 500;
     text-align: left;
     padding: 7px 10px;
     cursor: pointer;
@@ -670,15 +947,17 @@
   }
   .item:hover {
     color: var(--text-1);
+    background: var(--ground-3);
   }
   .item.active {
     background: var(--surface-2);
     color: var(--text-1);
+    font-weight: 600;
   }
   .item.active::before {
     content: '';
     position: absolute;
-    left: -12px;
+    left: -10px;
     top: 8px;
     bottom: 8px;
     width: 2px;
@@ -727,11 +1006,11 @@
      refuses to shrink below its content and the count is pushed past the column's right edge
      instead.
 
-     Measured rather than assumed (scripts/measure-sidebar.mjs): the row track is 213px and the
-     padding, glyph and gap take 46 of them, so a label and a figure share 167px. At the largest
-     figures anyone could reach (99,999 charts, 9,999 queued) every one of the nine labels is
-     drawn whole, and the longest, "Asset Studio", still has 87.9px of the 167 spare because it
-     carries no figure at all. The ellipsis this rule declares has nothing to do yet. */
+     Measured rather than assumed (scripts/measure-sidebar.mjs): the row track is 202px and the
+     padding, glyph and gap take 46 of them, so a label and a figure share 156px. At the largest
+     figures anyone could reach (99,999 charts, 9,999 queued) every one of the eleven labels is
+     drawn whole, and the longest, "Metadata editor", still has 5.7px of the 156 spare beside a
+     five-digit figure it can never carry. The ellipsis this rule declares has nothing to do. */
   .item .label {
     min-width: 0;
     overflow: hidden;
@@ -747,6 +1026,7 @@
     letter-spacing: var(--ls-caps);
     /* So a figure changing from 999 to 1,000 does not shuffle the digits left of it. */
     font-variant-numeric: tabular-nums;
+    font-weight: 400;
     color: var(--text-3);
   }
   /* Issues alone. It is the only one of the four that is a report of something wrong, and the
@@ -766,35 +1046,81 @@
   .item.open .count {
     margin-right: 13px;
   }
-  .bottom {
+  /* -- footer ---------------------------------------------------------------- */
+  /* Recessed, and out of the scroller: what the app is doing should not have to be scrolled to.
+     The strip is --ground-0 like the source well, so the two sunken regions in this column are
+     the same plane rather than two nearly-equal darks. */
+  .foot {
+    flex-shrink: 0;
+    /* Bottom of the column when there is slack, and below the nav when there is not. In the
+       taller shape above there is never slack here, because the nav takes it. */
     margin-top: auto;
-    padding-top: 14px;
+    border-top: 1px solid var(--hairline);
+    background: var(--ground-0);
+    padding: 10px 12px;
   }
   .status-card {
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
+    background: var(--ground-3);
+    border: 1px solid var(--border-1);
     border-radius: var(--radius);
-    padding: 10px 12px;
+    padding: 9px 11px;
     display: flex;
     flex-direction: column;
     gap: 5px;
   }
+  /* Lit for the three states that are Encore holding a release: offered, coming down, waiting.
+     Accent border and an accent wash running off it, which is the treatment the design gives
+     this card, spent on the states where there is something to press. */
+  .status-card.waiting {
+    border-color: var(--accent);
+    background: linear-gradient(100deg, var(--accent-dim), var(--ground-3));
+  }
+  .status-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status-glyph {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    color: var(--text-3);
+  }
+  .status-card.waiting .status-glyph {
+    color: var(--accent-text);
+  }
   .status-line {
+    min-width: 0;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
+    font-weight: 500;
     letter-spacing: var(--ls-caps);
     line-height: var(--lh-snug);
-    color: var(--text-2);
+    color: var(--text-1);
+  }
+  /* The second line is the sidecar, not the update. Quieter, and no glyph, so the card has one
+     headline rather than two things shouting at the same weight. */
+  .status-line.sub {
+    font-weight: 400;
+    color: var(--text-3);
+    padding-left: 23px;
+  }
+  /* Stacked, deliberately. Side by side they need 207px and the card's text box is 174, so the
+     pair wrapped anyway and paid a row gap for the privilege. Two links, two lines, aligned. */
+  .status-links {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    margin-top: 3px;
   }
   .settings-link {
-    align-self: flex-start;
     background: none;
     border: 0;
     padding: 0;
-    margin-top: 2px;
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
-    /* --accent-text, not --accent: 13px text on the surface-1 card, where --accent measures
+    /* --accent-text, not --accent: 13px text on the card, where --accent measures
        4.29:1 (see tokens.css). Hover goes to text-1 like the app's other quiet controls. */
     color: var(--accent-text);
     cursor: pointer;
@@ -806,8 +1132,10 @@
   .version {
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
+    line-height: var(--lh-flat);
     letter-spacing: var(--ls-caps);
     color: var(--text-3);
-    padding: 10px 10px 2px;
+    text-align: center;
+    padding-top: 9px;
   }
 </style>
