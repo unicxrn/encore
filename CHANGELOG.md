@@ -45,6 +45,35 @@ release.
   check for a newer version, and where a chart lives on disk; "All details" in the column is the
   way to it. Below the 1120px window width where the column is not drawn, a click opens the
   chart page as it always did, since there is nothing else it could fill.
+- The chart page answers what the new column could not, and stops repeating what it already
+  does. Its four stat cards are gone: the column prints the length and a note count of its own,
+  and the grid below now has a row per instrument, which is the instrument count. In their place
+  the page carries the things one column has no room for.
+- The difficulty grid is the whole of what a chart says about its parts. Every instrument the
+  catalog stores a rating for, not just the four the preview could play, each with its rating as
+  pips and as the number the charter actually wrote, and every difficulty square carrying its
+  note count and the fastest stretch of that track in notes per second. Ratings run far past the
+  six Clone Hero's scale is drawn to, so the pips fill and a mark says the number ran off the
+  end: asking Chorus Encore for guitar charts rated 7 or more answers with 2,419 of them, and one
+  page of those carries 7, 8, 9 and on up to 73.
+- The grid tells apart the three things a chart can say about a part. Charted with a rating,
+  charted with nobody's rating on it, and rated in song.ini with no notes to match, which is a
+  Rock Band conversion artifact about six charts in a hundred carry and which the grid now names
+  in words underneath rather than drawing as an empty row. A chart nobody has scanned keeps its
+  ratings and marks every square uncounted, where it used to show nothing at all.
+- The chart page says where a chart lives and what identifies it: whether it is a folder or a
+  `.sng` archive, its path, when it was scanned, the key Clone Hero writes beside a score, and
+  the hash the version check compares. It also reports what the chart is made of, the nine
+  charting flags scan-chart reads, each as yes, no or unknown, because a row nobody has scanned
+  carries eight falses that were never measured.
+- A chart on Chorus Encore lists what scan-chart found in it, with what each problem means and
+  how many times it occurs. Explore's row already draws a dot for this and the dot cannot say
+  which problem it means. Nothing is requested for it: the checks arrive with every search result.
+- The chart page and its preview lay themselves out against their own column rather than against
+  the window, which are different numbers now that the third column takes 374px above 1120px: the
+  page is 842px wide at a 1120px window and 469px at a 1121px one. Measured at every width the
+  window supports. The preview's options used to take a fixed 260px of that, which left the note
+  highway 191px at the narrowest of them.
 - Explore's filter header asks three different questions rather than two. Instrument is which of
   the ten parts Chorus Encore can filter to, difficulty is which charted difficulties exist, and
   intensity is how hard the chart is, which is the same number the rows draw as pips. The last
@@ -101,6 +130,9 @@ release.
   version note reporting an error is red rather than grey. Both have asked since 0.1.0 for a
   colour the stylesheet never defined, so one drew no border at all and the other fell back to
   the colour of ordinary text.
+- A chart whose notes were read and found to carry none was told to run a library scan, which is
+  the one instruction that could not help it. The scan is offered only to a chart nothing has
+  read yet; a measured zero now says it was measured.
 
 ## [0.3.1] - 2026-09-13
 
