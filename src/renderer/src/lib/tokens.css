@@ -230,7 +230,7 @@
   --fs-emphasis: 16px; /* pulled out of the body: stat values, panel titles, a lead paragraph. */
   --fs-heading: 20px; /* section and page headings (h1 in Settings, Welcome). */
   --fs-display: 26px; /* the one title a screen is about: chart Detail's song name. */
-  --fs-hero: 40px; /* Home's wordmark only. */
+  --fs-hero: 40px; /* Home's hero figure: the size of the library, and nothing else. */
 
   /* ── leading ───────────────────────────────────────────────────────────────
      Before this, every element in the app computed `line-height: normal`. The

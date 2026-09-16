@@ -662,17 +662,28 @@ describe('App downloads panel', () => {
     await waitFor(() => expect(panelOpen()).toBe(false))
   })
 
+  /**
+   * Open the chart page from Home, which is two steps rather than one.
+   *
+   * A Home row fills the rail, as an Explore row does, and the route to the page is the rail's
+   * own All details beside the chart it is showing. Both tests below are about what the panel
+   * does when the PAGE opens, so the rail is on the way rather than the destination.
+   */
+  const railDetails = (): Promise<HTMLElement> =>
+    screen.findByRole('button', { name: 'All details' })
+
   it('closes when a chart opens', async () => {
     stubEncore({
       settingsGet: vi.fn().mockResolvedValue(homeSettings()),
       catalogQuery: vi.fn().mockResolvedValue([record])
     })
     render(App)
-    const card = await screen.findByRole('button', { name: /YYZ/ })
+    await fireEvent.click(await screen.findByRole('button', { name: /YYZ/ }))
+    const details = await railDetails()
     await fireEvent.click(navItem('Downloads'))
     await screen.findByText(PANEL)
 
-    await fireEvent.click(card)
+    await fireEvent.click(details)
 
     expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
     await waitFor(() => expect(panelOpen()).toBe(false))
@@ -702,6 +713,7 @@ describe('App downloads panel', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /YYZ/ }))
+    await fireEvent.click(await railDetails())
     await screen.findByRole('heading', { name: 'YYZ' })
     await fireEvent.click(navItem('Downloads'))
     await screen.findByText(PANEL)
@@ -1157,5 +1169,99 @@ describe('App: Explore fills the rail rather than leaving the list', () => {
     rail().style.display = ''
 
     expect(rail().textContent).toContain('Everlong')
+  })
+})
+
+/**
+ * Home's destination, wired end to end, and it is Explore's.
+ *
+ * Home is the other view where charts are scanned rather than read: six from Chorus and six from
+ * the library, none of them yet the one the user means. So a row hands the rail the chart and
+ * leaves the page alone, and the route to the chart page is the rail's own control beside it.
+ *
+ * jsdom applies no stylesheet, so the media query that hides the rail below 1120px never runs
+ * here. The narrow case is reached the way the Explore block above reaches it, by setting the
+ * column's display directly, because that is exactly what the query does and what the code reads.
+ */
+describe('App: Home fills the rail rather than leaving the page', () => {
+  const record = ChartRecordSchema.parse({
+    path: '/songs/Rush - YYZ',
+    name: 'YYZ',
+    artist: 'Rush',
+    chartType: 'folder',
+    folderHash: 'yyz',
+    modifiedTime: 0
+  })
+
+  /** Home's row button, named for the chart the way every list names one. */
+  const ROW = /^YYZ Rush/
+
+  function rail(): HTMLElement {
+    const found = document.querySelector('.rail')
+    if (found === null) throw new Error('no rail in the document')
+    return found as HTMLElement
+  }
+
+  async function showHome(): Promise<void> {
+    stubEncore({
+      settingsGet: vi.fn().mockResolvedValue({
+        ...defaultSettings(),
+        tourSeen: true,
+        lastSeenVersion: APP_VERSION,
+        libraryFolders: [{ path: '/songs', isDefault: true }]
+      }),
+      catalogQuery: vi.fn().mockResolvedValue([record]),
+      catalogCount: vi.fn().mockResolvedValue(1)
+    })
+    render(App)
+    await screen.findByRole('button', { name: ROW })
+  }
+
+  it('shows the chart in the rail and leaves Home where it was', async () => {
+    await showHome()
+    expect(rail().textContent).toContain('Open a chart and it stays here')
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    await waitFor(() => expect(rail().textContent).toContain('YYZ'))
+    // Home is still the view, with its row still in it. Detail would have replaced both.
+    expect(navItem('Home').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('button', { name: ROW })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+
+  it('opens the chart page from the rail, which is the one route to it', async () => {
+    await showHome()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('YYZ'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ROW })).toBeNull()
+  })
+
+  // Below the shell's breakpoint there is no rail to fill, and a click that filled a hidden
+  // column would be a click with nothing to show for it.
+  it('opens the chart page instead when the rail is not drawn', async () => {
+    await showHome()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
+  })
+
+  // The rail is pointed at the chart either way, so a window widened after the fact finds the
+  // column already holding what was picked while it was hidden.
+  it('still points the rail at the chart it opened the page for', async () => {
+    await showHome()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await screen.findByRole('heading', { name: 'YYZ' })
+    rail().style.display = ''
+
+    expect(rail().textContent).toContain('YYZ')
   })
 })

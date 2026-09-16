@@ -1,20 +1,36 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { readable } from 'svelte/store'
+import type { Writable } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartRecord, JobProgress } from '../../../../shared/schemas'
 import { ChartRecordSchema } from '../../../../shared/schemas'
+import type { ChartData } from '../api/enchor'
 import { scanProgress } from '../stores/scan'
+import { settings } from '../stores/settings'
+import { defaultSettings } from '../../../../shared/settings-defaults'
 import {
   EIGHT_TAG_CHARTER,
   EIGHT_TAG_CHARTER_TEXT
 } from '../../../../../test/helpers/marked-up-names'
 
 // The latest-charts row talks to the Enchor API over the network. Stubbed at the store, not at
-// fetch, because nothing below is about that row; this file only covers Home's scan controls.
-vi.mock('../stores/latest-charts', () => ({
-  latestCharts: readable({ charts: [], loading: false, error: null, total: null }),
-  loadLatestCharts: (): Promise<void> => Promise.resolve()
-}))
+// fetch: the row's own fetching is the store's business and is tested there, and a writable in
+// its place is what lets these tests put charts in the row without a request.
+vi.mock('../stores/latest-charts', async () => {
+  const { writable } = await import('svelte/store')
+  return {
+    latestCharts: writable({ charts: [], loading: false, error: null, total: null }),
+    loadLatestCharts: (): Promise<void> => Promise.resolve()
+  }
+})
+
+const { latestCharts } = await import('../stores/latest-charts')
+interface LatestState {
+  charts: ChartData[]
+  total: number | null
+  loading: boolean
+  error: string | null
+}
+const latest = latestCharts as unknown as Writable<LatestState>
 
 const { default: Home } = await import('./Home.svelte')
 
@@ -27,6 +43,29 @@ const chart = (path: string, name: string): ChartRecord =>
     modifiedTime: 0
   })
 
+/** Enough of a search result for a row to draw. The API sends every one of these on every hit. */
+const remote = (over: Partial<ChartData> = {}): ChartData =>
+  ({
+    chartId: 1,
+    songId: 42,
+    md5: 'a'.repeat(32),
+    albumArtMd5: null,
+    hasVideoBackground: false,
+    name: 'Everlong',
+    artist: 'Foo Fighters',
+    album: 'The Colour and the Shape',
+    genre: 'Rock',
+    year: '1997',
+    charter: 'CharterA',
+    song_length: 250_000,
+    diff_guitar: 4,
+    diff_bass: null,
+    diff_drums: null,
+    diff_keys: null,
+    diff_vocals: null,
+    ...over
+  }) as ChartData
+
 const progress = (status: JobProgress['status'], percent: number): JobProgress => ({
   jobId: 'scan',
   kind: 'scan',
@@ -36,16 +75,33 @@ const progress = (status: JobProgress['status'], percent: number): JobProgress =
   status
 })
 
-function renderHome(
-  api: Record<string, unknown> = { catalogQuery: () => Promise.resolve([]) }
-): void {
-  vi.stubGlobal('encore', api)
-  render(Home, { onNavigate: () => {}, onOpenChart: () => {} })
+type Props = { onNavigate?: (id: string) => void; onSelectChart?: (target: unknown) => void }
+
+function renderHome(api: Record<string, unknown> = {}, props: Props = {}): void {
+  vi.stubGlobal('encore', {
+    catalogQuery: () => Promise.resolve([]),
+    catalogCount: () => Promise.resolve(0),
+    platform: 'linux',
+    ...api
+  })
+  render(Home, { onNavigate: () => {}, onSelectChart: () => {}, ...props })
+}
+
+/** A library with a folder configured and `total` charts in it, from one helper. */
+function stocked(rows: ChartRecord[], total = rows.length, needWork = 0): Record<string, unknown> {
+  settings.set({ ...defaultSettings(), libraryFolders: [{ path: '/songs', isDefault: true }] })
+  return {
+    catalogQuery: () => Promise.resolve(rows),
+    catalogCount: (filter: { missing?: string[] }) =>
+      Promise.resolve(filter.missing ? needWork : total)
+  }
 }
 
 afterEach(() => {
   vi.unstubAllGlobals()
   scanProgress.set(null)
+  settings.set(defaultSettings())
+  latest.set({ charts: [], loading: false, error: null, total: null })
 })
 
 /**
@@ -56,14 +112,16 @@ afterEach(() => {
  */
 describe('Home: cancelling a scan', () => {
   it('offers no cancel until a scan is actually running', async () => {
-    renderHome()
+    // A folder configured, because the scan controls are only offered where a scan can run:
+    // with no folder the hero's button points at Settings instead.
+    renderHome(stocked([], 0))
     await screen.findByText('Scan library')
     expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull()
   })
 
   it('asks main to stop the scan when the cancel is pressed', async () => {
     const cancel = vi.fn().mockResolvedValue(undefined)
-    renderHome({ catalogQuery: () => Promise.resolve([]), catalogScanCancel: cancel })
+    renderHome({ ...stocked([], 0), catalogScanCancel: cancel })
     scanProgress.set(progress('running', 40))
 
     await fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
@@ -73,13 +131,198 @@ describe('Home: cancelling a scan', () => {
   it('refreshes the library row after a cancel, because the rows it wrote were kept', async () => {
     let rows: ChartRecord[] = []
     const query = vi.fn(() => Promise.resolve(rows))
-    renderHome({ catalogQuery: query })
+    renderHome({ ...stocked([], 0), catalogQuery: query })
     await waitFor(() => expect(query).toHaveBeenCalled())
 
     rows = [chart('/library/Rush - YYZ', 'YYZ')]
     scanProgress.set(progress('canceled', 42))
 
     expect(await screen.findByText('YYZ')).toBeTruthy()
+  })
+})
+
+/**
+ * The hero is the state of the library rather than a wordmark, so what it says has to come from
+ * the catalog and not from the handful of rows on screen.
+ */
+describe('Home: the hero', () => {
+  it('counts the whole library, not the rows it happens to be showing', async () => {
+    renderHome(stocked([chart('/l/a', 'A')], 207))
+
+    // The row is one chart; the hero says 207, which is what `catalogCount` answered with no
+    // filter on it. A hero that counted the rows would say 1 on every library.
+    expect(await screen.findByText('207')).toBeTruthy()
+    expect(screen.getByText('charts')).toBeTruthy()
+  })
+
+  it('says the singular for a library of one', async () => {
+    renderHome(stocked([chart('/l/a', 'A')], 1))
+    expect(await screen.findByText('chart')).toBeTruthy()
+  })
+
+  it('offers the charts still missing something as a way into Asset Studio', async () => {
+    const onNavigate = vi.fn()
+    renderHome(stocked([chart('/l/a', 'A')], 207, 12), { onNavigate })
+
+    const link = await screen.findByRole('button', { name: /12 missing art, video or lyrics/i })
+    await fireEvent.click(link)
+    expect(onNavigate).toHaveBeenCalledWith('assets')
+  })
+
+  it('asks for the missing-asset count the way Asset Studio asks for it', async () => {
+    const count = vi.fn().mockResolvedValue(0)
+    renderHome({ ...stocked([], 0), catalogCount: count })
+
+    // 'any', not 'all': a chart missing only its lyrics is a chart with something left to do.
+    await waitFor(() =>
+      expect(count).toHaveBeenCalledWith({
+        missing: ['albumArt', 'background', 'video', 'lyrics'],
+        missingMode: 'any'
+      })
+    )
+  })
+
+  it('says so plainly when there is nothing left to add', async () => {
+    renderHome(stocked([chart('/l/a', 'A')], 207, 0))
+    expect(await screen.findByText(/every chart has its art/i)).toBeTruthy()
+  })
+
+  it('shows the community catalog as the size of what Explore searches', async () => {
+    latest.set({ charts: [], loading: false, error: null, total: 95_214 })
+    const onNavigate = vi.fn()
+    renderHome(stocked([], 0), { onNavigate })
+
+    await fireEvent.click(await screen.findByRole('button', { name: /95,214 on Chorus Encore/ }))
+    expect(onNavigate).toHaveBeenCalledWith('browse')
+  })
+
+  it('omits the community figure rather than guessing one when the API did not say', async () => {
+    renderHome(stocked([], 0))
+    await screen.findByText(/nothing scanned yet/i)
+    expect(screen.queryByText(/on Chorus Encore/)).toBeNull()
+  })
+
+  it('reports a running scan in the hero, where the figures it is changing are', async () => {
+    renderHome(stocked([], 0))
+    scanProgress.set(progress('running', 40))
+    await waitFor(() => expect(screen.getByText(/scanning,/i)).toBeTruthy())
+    expect(screen.getByText('40')).toBeTruthy()
+  })
+})
+
+/**
+ * The empty library, which is what a new user sees first and the one state that must not read as
+ * a failure. Each case names where it is in the setup, and the button beside it is the next step.
+ */
+describe('Home: a library with nothing in it', () => {
+  it('reads as a step not taken yet when no folder is configured', async () => {
+    const onNavigate = vi.fn()
+    renderHome({}, { onNavigate })
+
+    expect(await screen.findByText(/no folder yet/i)).toBeTruthy()
+    // Scanning cannot help before a folder exists, so the button leads to the one thing that can.
+    await fireEvent.click(screen.getByRole('button', { name: 'Add your folder' }))
+    expect(onNavigate).toHaveBeenCalledWith('settings')
+    expect(screen.queryByRole('button', { name: 'Scan library' })).toBeNull()
+  })
+
+  it('offers the scan once a folder is configured and nothing has been read yet', async () => {
+    renderHome(stocked([], 0))
+    expect(await screen.findByText(/nothing scanned yet/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Scan library' })).toBeTruthy()
+  })
+
+  it('says the scan came back empty, rather than repeating "nothing scanned yet"', async () => {
+    renderHome(stocked([], 0))
+    await screen.findByText(/nothing scanned yet/i)
+
+    scanProgress.set(progress('done', 100))
+
+    // The one case where the folder itself can be named as the problem; see libraryGap.
+    expect(await screen.findByText(/no charts found/i)).toBeTruthy()
+  })
+
+  it("keeps the row's own explanation, which is what names the folder and the scan", async () => {
+    renderHome()
+    // The hero is four words and a button; the sentence that says where both live stays in the
+    // row it is about.
+    expect(await screen.findByText(/add your clone hero songs folder in settings/i)).toBeTruthy()
+  })
+
+  it('claims no missing-asset figure for a library with no charts in it', async () => {
+    renderHome(stocked([], 0, 0))
+    await screen.findByText(/nothing scanned yet/i)
+    // "Every chart has its art" is true of a library of nothing and useless; it is a claim about
+    // charts, and there are none.
+    expect(screen.queryByText(/every chart has its art/i)).toBeNull()
+  })
+})
+
+/**
+ * Where a row click goes. Home's rows land where Explore's do: the caller is handed the chart and
+ * decides between the rail and the chart page, which is the decision App takes with `railOnScreen`
+ * and is tested end to end there.
+ */
+describe('Home: a row hands its chart over rather than navigating', () => {
+  it('hands over a chart from the latest row as a remote target', async () => {
+    latest.set({ charts: [remote()], loading: false, error: null, total: 1 })
+    const onSelectChart = vi.fn()
+    const onNavigate = vi.fn()
+    renderHome(stocked([], 0), { onSelectChart, onNavigate })
+
+    await fireEvent.click(await screen.findByRole('button', { name: /^Everlong/ }))
+
+    expect(onSelectChart).toHaveBeenCalledWith({
+      kind: 'remote',
+      chart: expect.objectContaining({ name: 'Everlong' })
+    })
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('hands over a chart from the library row as a local target', async () => {
+    const record = chart('/library/Rush - YYZ', 'YYZ')
+    const onSelectChart = vi.fn()
+    renderHome(stocked([record], 1), { onSelectChart })
+
+    await fireEvent.click(await screen.findByRole('button', { name: /^YYZ/ }))
+
+    expect(onSelectChart).toHaveBeenCalledWith({ kind: 'local', record })
+  })
+
+  it('names the row for the chart, not for the word on the button', async () => {
+    latest.set({ charts: [remote()], loading: false, error: null, total: 1 })
+    renderHome(stocked([], 0))
+
+    // Every alternate version of a song repeats its title, so the charter is what tells them
+    // apart, and the name a screen reader reads has to carry it.
+    expect(
+      await screen.findByRole('button', {
+        name: 'Everlong Foo Fighters · The Colour and the Shape · 1997, charted by CharterA'
+      })
+    ).toBeTruthy()
+  })
+
+  it('shows at most six charts a row, and See all is the way to the rest', async () => {
+    latest.set({
+      charts: Array.from({ length: 10 }, (_, i) => remote({ chartId: i, name: `Chart ${i}` })),
+      loading: false,
+      error: null,
+      total: 10
+    })
+    const onNavigate = vi.fn()
+    renderHome(stocked([], 0), { onNavigate })
+
+    expect(await screen.findByText('Chart 5')).toBeTruthy()
+    expect(screen.queryByText('Chart 6')).toBeNull()
+
+    await fireEvent.click(screen.getAllByRole('button', { name: 'See all' })[0])
+    expect(onNavigate).toHaveBeenCalledWith('browse')
+  })
+
+  it('asks the catalog for only the rows it draws', async () => {
+    const query = vi.fn().mockResolvedValue([])
+    renderHome({ ...stocked([], 0), catalogQuery: query })
+    await waitFor(() => expect(query).toHaveBeenCalledWith({ search: '', offset: 0, limit: 6 }))
   })
 })
 
@@ -94,7 +337,7 @@ describe('Home: no longer the place the play data lives', () => {
     const playStats = vi.fn()
     const onPlayRecorded = vi.fn()
     renderHome({
-      catalogQuery: () => Promise.resolve([chart('/library/YYZ', 'YYZ')]),
+      ...stocked([chart('/library/YYZ', 'YYZ')], 1),
       playStatus,
       playStats,
       onPlayRecorded
@@ -107,23 +350,22 @@ describe('Home: no longer the place the play data lives', () => {
     expect(onPlayRecorded).not.toHaveBeenCalled()
   })
 
-  it('opens with the chart rows, which are now the first thing under the hero', async () => {
-    renderHome({ catalogQuery: () => Promise.resolve([]) })
+  it('opens with the chart rows, which are the first thing under the hero', async () => {
+    renderHome()
 
-    const latest = await screen.findByText('LATEST CHARTS')
+    const latestHead = await screen.findByText('LATEST CHARTS')
     const library = await screen.findByText('IN YOUR LIBRARY')
-    expect(latest.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(
+      latestHead.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
   })
 })
 
 describe('Home: a name written in Clone Hero markup', () => {
-  it('reads the recently added row as text, and falls back when the name is only tags', async () => {
+  it('reads the library row as text, and falls back when the name is only tags', async () => {
     // Home is the one view the strip pass could not reach, because the Stats move held this file.
     // Both rows here are real shapes: a charter styles their name and song.ini carries it whole.
-    renderHome({
-      catalogQuery: () =>
-        Promise.resolve([chart('/l/a', EIGHT_TAG_CHARTER), chart('/l/Only Tags', '<b></b>')])
-    })
+    renderHome(stocked([chart('/l/a', EIGHT_TAG_CHARTER), chart('/l/Only Tags', '<b></b>')], 2))
     expect(await screen.findByText(EIGHT_TAG_CHARTER_TEXT)).toBeTruthy()
     // A name that strips to nothing used to render an empty span. The path is what is left to
     // identify the chart by, and it is what every other view falls back to.
