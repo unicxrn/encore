@@ -141,16 +141,20 @@ export async function clickButton(win, text, opts = {}) {
 /**
  * Leaves `label` and comes back, so its component mounts again.
  *
- * A `writable` store written after the app has mounted does not re-render the component reading
- * it in the production bundle: press Explore's List and `mode` is "list" with a grid still on
- * screen, finish a search and `results` holds 25 charts with an empty grid still on screen. A
- * fresh mount reads the store's current value, so a round trip through another view draws what
- * the last one was told about and never showed. Measured: Explore draws 0 rows six seconds after
- * its own search finishes, and 25 the moment it is mounted again.
+ * This was written to get past what looked like a renderer fault: a `writable` written after the
+ * app had mounted redrew nothing, so pressing Explore's List left a grid on screen and a finished
+ * search left an empty one, while a fresh mount read the right value. The renderer was not at
+ * fault. The preload each harness writes below answered `catalogDuplicates` with undefined, the
+ * store handed that to a derived that reads `report.identical`, and the throw escaped
+ * svelte/store's drain loop, whose queue is module-global: from that moment every `set` in the
+ * renderer updated its value and notified nobody. One channel missing from a stub froze the whole
+ * window before the first click, and only a remount could draw anything again.
  *
- * That is a fault in the renderer and not in these harnesses, so this is a way past it rather
- * than a fix. Every use of it is a leg that would otherwise measure an empty view, which is worse
- * than measuring nothing, because an empty view has numbers.
+ * `stores/duplicates.ts` now refuses an answer that is not a report, so nothing here depends on
+ * this any more. Measured against the built renderer with the same stub: Repeat, Installed's
+ * Favourites filter, Explore's advanced panel and a finished search all redraw in place, without
+ * a round trip. It is kept because every caller below is timed around it, and it costs a
+ * navigation rather than a wrong number.
  */
 export async function remount(win, label, { via, settleMs = 1500 } = {}) {
   const waypoint = via ?? (label === 'Home' ? 'Explore' : 'Home')
@@ -163,13 +167,13 @@ export async function remount(win, label, { via, settleMs = 1500 } = {}) {
 /**
  * Opens Explore with its first search drawn, in `mode` ("List" or "Grid") when one is asked for.
  *
- * Both the results and the layout toggle are stores written after the view mounted, so both need
- * the round trip `remount` explains. Chosen rather than assumed: the store opens in grid.
+ * The mode is chosen rather than assumed: the store opens in grid. The round trip is left in for
+ * the reason `remount` gives, not because the view needs one.
  *
- * The round trip is tried again rather than timed, because the search goes to the live Chorus
- * Encore API and how long it takes is not this harness's to know. A remount that lands mid-flight
- * reads an empty `results` and draws an empty grid, which is the one outcome worth more than any
- * amount of waiting to avoid: an empty grid measures, and its numbers are wrong.
+ * The wait is tried again rather than timed once, because the search goes to the live Chorus
+ * Encore API and how long it takes is not this harness's to know. A check that lands mid-flight
+ * sees an empty grid, which is the one outcome worth more than any amount of waiting to avoid:
+ * an empty grid measures, and its numbers are wrong.
  */
 export async function openExplore(win, { mode = null, searchMs = 6000, tries = 4 } = {}) {
   await clickNav(win, 'Explore')
