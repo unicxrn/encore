@@ -73,6 +73,31 @@ release.
   download. The example follows the field as you type; the setting is still stored when you leave
   it, not on every keystroke.
 
+- Setlists: your own running orders, built from the button beside the heart in the chart column and
+  read in a section of their own, with what each one adds up to and which of its charts your library
+  still has. A setlist is Encore's own and the screen says so, because Clone Hero groups charts by
+  the folders they sit in and has no setlist file to write to, so nothing here moves a chart or
+  reaches the game. Like a favourite, a setlist holds the chart rather than the folder it is in, so
+  it survives the chart moving, being re-downloaded or being removed, and one chart can sit in two
+  setlists at once.
+- Favourites. The chart column draws a heart beside its action, for a chart in your library and for
+  one on Chorus Encore alike, and Installed has a Favourites filter that narrows the whole library
+  rather than the page on screen. A favourite is kept for the chart rather than for the copy of it on
+  your disk, so it survives the chart moving, being re-downloaded as a different version, or your
+  catalog being rebuilt from scratch, and a chart you heart on Chorus is already hearted when you
+  download it.
+- A metadata editor, for the blanks Chart issues finds and will not repair. Correct a chart's title,
+  artist, album, genre, year or charter in place, on a folder chart or a `.sng` archive, keeping the
+  rest of `song.ini` byte for byte. It refuses to report a save unless both of the values Clone Hero
+  identifies the chart by are unchanged, and the seven gameplay values it matches charts between
+  players by are shown and never edited.
+- Surprise me, in the sidebar: five charts you do not have, drawn at random from the whole Chorus
+  Encore catalog and shown in Explore. It leaves out the ones with no download, no notes, or a
+  problem Clone Hero would trip over, and says so when it ran out of candidates before five.
+- The player bar can loop what it is playing, from a repeat toggle beside the volume slider. It
+  stays on across charts until you turn it off. There is no shuffle and no skip beside it, because
+  Encore previews the one chart you pointed it at rather than a queue.
+
 ### Changed
 
 - The window is a three by three frame rather than a stack of bars: a sidebar running the full
@@ -186,6 +211,33 @@ release.
   those folders, downloads into the one you pick, and refuses to write to a chart outside them.
   Removing one now says so.
 
+- Duplicate charts are their own section rather than a card inside Issues, and the sidebar counts
+  what it can honestly count: the size of your library, downloads still to come, spare copies, and
+  broken charts once a scan has looked. A count is drawn only when there is something to count,
+  because a zero would as often mean nothing has looked yet. There are ten views and nine digits
+  now, so `Ctrl+1` to `Ctrl+9` run down the sidebar as far as the metadata editor and Settings has
+  no shortcut, which it can afford: it is the row with its own link in the footer under it. Stats is
+  called Statistics.
+- Explore asks difficulty as four dots, one per difficulty Chorus Encore takes, and pressing the lit
+  one goes back to any. Genre, Year, Length, Charter and Album are chips under the search box, each
+  showing what it is set to, and the Year chip fills a decade in one press. They edit the same fields
+  the advanced panel holds rather than a second copy of them.
+- The sidebar is drawn at the weight the rest of the app is: the mark and the wordmark, the two game
+  tiles, the quick actions with their descriptions, and an update card that lights when there is
+  something to install. What a control cannot do yet is said in words on a recessed plane rather
+  than by fading it out.
+- Installed and Home draw their rows the way Explore does: a 52px cover, and the charter and the
+  song's length as chips in a band under the artist rather than as columns of grey text at the far
+  end of the row. The rows are 16px taller and one or two fewer fit on screen, and the chart's name
+  gets between 90px and 190px more room at every window width.
+- The chart column draws a note highway while nothing is playing, instead of an empty black frame,
+  and the preview plays on that same lane rather than the preview library's: the violet highway,
+  accent rails and outlined frets you see before you press Play keep going once you do. The still
+  lane uses the preview's own camera, so nothing changes size when a preview starts. The note sprites
+  are unchanged, so a chart still reads the way Clone Hero draws it.
+- The player bar names the chart and the track it is previewing rather than showing the word ENCORE,
+  and says what it is waiting for when there is nothing loaded.
+
 ### Fixed
 
 - Narrowing the window under 1120px while the chart column was playing something left the chart
@@ -206,6 +258,16 @@ release.
 - The selected row in the Asset Studio no longer fades out through a hardcoded copy of an accent
   colour that has since moved. It looked the same and would have stopped looking the same the
   first time anyone touched it.
+
+- One of the three chart sources in the sidebar was squeezed to a 2px sliver whenever the column
+  overflowed, which was both window heights most people use, and the other two had their names cut
+  short. All three are full rows in a recessed box now.
+- The YARG tile's reason for being unavailable was drawn at 3.2:1 against its background, under the
+  contrast floor the rest of the app is held to. Unavailability is carried by the surface and the
+  words now rather than by fading the text.
+- A charter credit longer than its column pushed the chart's name out of its cell in Installed,
+  clipped, with no ellipsis to say so. Two style rules tied on specificity and the one that stopped
+  it shrinking won.
 
 ## [0.3.1] - 2026-09-13
 
