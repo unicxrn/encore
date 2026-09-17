@@ -106,3 +106,101 @@ export function chartKeyId(key: ChartKey): string {
 export function sameChart(a: ChartKey, b: ChartKey): boolean {
   return chartKeyId(a) === chartKeyId(b)
 }
+
+/**
+ * What a metadata edit did to the lists the user built, when it moved the chart's key.
+ *
+ * The metadata editor writes exactly the three fields this key is made of, so correcting a chart's
+ * artist renames the thing a favourite and a setlist entry name. Encore moves them with it rather
+ * than letting one feature undo another, and `main/catalog/rekey.ts` is the move. This is its
+ * report, carried back through `chart:write-metadata` so the screen that did it can say what
+ * happened instead of leaving the user to notice a heart missing later.
+ *
+ * Null on the wire when the three fields did not move, and also when they moved but named nothing
+ * the user had put on a list: there is no news in either case.
+ */
+export interface ChartListMove {
+  /** The key the chart had before the save, and the one it has now. */
+  from: ChartKey
+  to: ChartKey
+  /** True when a favourite named the old key. */
+  favourite: boolean
+  /** The names of the setlists that held the old key, in the order the sidebar lists them. */
+  setlists: string[]
+  /**
+   * True when another chart in the library still answers to the old key, so the heart and the
+   * entries were COPIED to the new one rather than moved off it.
+   */
+  oldKeyKept: boolean
+  /**
+   * True when the new key cannot hold a favourite (the title was cleared), so nothing moved and
+   * the rows still name the old title.
+   */
+  stranded: boolean
+  /** True when the new key already carried a favourite or an entry, so the two became one. */
+  merged: boolean
+}
+
+/**
+ * The sentence the metadata editor prints after a save that moved a chart's key.
+ *
+ * Here rather than in the component because it is the one description of what the write did, and
+ * main's own tests can then hold it to the cases `rekey.ts` produces. Null means there is nothing
+ * to say, which the caller draws as no line at all rather than as an empty one.
+ *
+ * Undefined is read as null. This value crosses IPC, so the field is absent rather than null on an
+ * answer from a main process that predates it, and a save reporting nothing about the user's lists
+ * must not be a save that throws on the way to the screen.
+ */
+export function describeChartListMove(move: ChartListMove | null | undefined): string | null {
+  if (move === null || move === undefined) return null
+  const held = listsHeld(move.favourite, move.setlists)
+  if (held === null) return null
+  const merged = move.merged ? ' The new details already carried one, so the two are now one.' : ''
+  if (move.stranded) {
+    return (
+      `This chart has no title now, and a chart with no title is not something Encore can keep on ` +
+      `a list, so ${held.phrase} still ${held.plural ? 'name' : 'names'} "${move.from.name}". ` +
+      `Typing the title back brings the chart under it again.`
+    )
+  }
+  if (move.oldKeyKept) {
+    return (
+      `Encore added the new details to ${held.phrase}. Another chart in your library still says ` +
+      `"${move.from.name}", so the old entry stays as well.${merged}`
+    )
+  }
+  return `Encore moved this chart in ${held.phrase} to match.${merged}`
+}
+
+/**
+ * The lists a chart is on, named the way a sentence about them needs: "your favourites",
+ * `the setlist "Friday night"`, "2 setlists", "your favourites and 2 setlists". Null for none.
+ *
+ * Exported because the metadata editor says this twice about one save, once before it as a warning
+ * and once after it as a report, and the two have to name the same lists the same way.
+ */
+export function chartListsPhrase(favourite: boolean, setlists: string[]): string | null {
+  return listsHeld(favourite, setlists)?.phrase ?? null
+}
+
+/**
+ * The same phrase, with whether it takes a plural verb.
+ *
+ * The flag is carried rather than derived from a count at the call site, because "your favourites"
+ * is one entry and a plural subject while a single setlist is the other way round.
+ */
+function listsHeld(
+  favourite: boolean,
+  setlists: string[]
+): { phrase: string; plural: boolean } | null {
+  const lists =
+    setlists.length === 0
+      ? null
+      : setlists.length === 1
+        ? { phrase: `the setlist "${setlists[0]}"`, plural: false }
+        : { phrase: `${setlists.length} setlists`, plural: true }
+  if (!favourite) return lists
+  if (lists === null) return { phrase: 'your favourites', plural: true }
+  return { phrase: `your favourites and ${lists.phrase}`, plural: true }
+}

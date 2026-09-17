@@ -42,8 +42,11 @@ export function listSetlists(db: CatalogDb): Setlist[] {
  * of two numbers instead of a search for the neighbour that happens to be next. The cost is a
  * handful of UPDATEs over a list a person is meant to read, inside a transaction the caller has
  * already opened.
+ *
+ * Exported for `rekey.ts`, which is the other writer that can leave a gap: moving a chart's entry
+ * onto details another entry already carries drops one row and has to close the hole behind it.
  */
-function renumber(db: CatalogDb, setlistId: string): void {
+export function renumberSetlist(db: CatalogDb, setlistId: string): void {
   const ids = db
     .prepare(
       `SELECT name, artist, charter FROM setlist_entries WHERE setlistId = ? ORDER BY position`
@@ -155,7 +158,7 @@ export function setSetlistEntry(
 					WHERE setlistId = ? AND name = ? AND artist = ? AND charter = ?`
       ).run(setlistId, key.name, key.artist, key.charter)
     }
-    renumber(db, setlistId)
+    renumberSetlist(db, setlistId)
   })()
   return listSetlists(db)
 }
@@ -163,7 +166,7 @@ export function setSetlistEntry(
 /**
  * Move one chart up or down its setlist by one place.
  *
- * A swap of two positions rather than a re-insert, which is what the dense numbering `renumber`
+ * A swap of two positions rather than a re-insert, which is what the dense numbering `renumberSetlist`
  * maintains buys. Asking to move the first entry up, or the last one down, is not an error: it is
  * what a user gets for holding the button down at the end of the list, and refusing it would put a
  * message on screen for something that already looks like nothing happening.

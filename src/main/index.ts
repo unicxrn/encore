@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 import { ENCORE_TMP_DIR, ENCHOR_FILES_URL } from '../shared/constants'
 import { IPC } from '../shared/ipc-contract'
 import { resolveChartFolderName } from '../shared/naming'
+import { chartKey } from '../shared/chart-key'
 import { favouriteKey, isFavouritable } from '../shared/favourites'
 import {
   canJoinASetlist,
@@ -28,6 +29,7 @@ import { findDuplicates } from './catalog/duplicates'
 import { withCopySizes } from './catalog/chart-size'
 import { removeChart } from './catalog/remove-chart'
 import { listFavourites, setFavourite } from './catalog/favourites'
+import { rekeyChartLists } from './catalog/rekey'
 import {
   createSetlist,
   deleteSetlist,
@@ -712,7 +714,15 @@ function wireIpc(): {
         loadSettings(settingsPath).libraryFolders
       )
       const existing = getChartByPath(db, req.path)
-      if (existing === undefined || existing === null) return { ...written, record: null }
+      // No row means the library scan has not reached this chart, so there is no before and after
+      // for `rekeyChartLists` to compare and nothing in the catalog a list could be matched
+      // against either. The edit really did happen; `record: null` says so rather than inventing
+      // a row, and the next scan brings both into step.
+      if (existing === undefined || existing === null) {
+        return { ...written, record: null, listMove: null }
+      }
+      const before = chartKey(existing)
+      let reindexed = true
       try {
         await scanChart(
           db,
@@ -726,9 +736,17 @@ function wireIpc(): {
         // The write succeeded and was verified; only the re-index failed. Reporting an error here
         // would tell the user their edit did not happen, which is the one thing that is not true.
         // The row is stale until the next scan, and the watcher will get to it.
+        reindexed = false
         console.error(`Re-index of ${req.path} after a metadata edit failed:`, err)
       }
-      return { ...written, record: getChartByPath(db, req.path) ?? existing }
+      const record = getChartByPath(db, req.path) ?? existing
+      // Only against a row that was actually rewritten. `rekeyChartLists` asks the catalog whether
+      // anything still answers to the old details, and against a stale row the edited chart would
+      // answer that about itself: every rename would read as a second copy and the heart would be
+      // copied instead of moved. A stale row still says the old names, so the favourite and the
+      // entries still match it, and the next scan is where this gets picked up.
+      const listMove = reindexed ? rekeyChartLists(db, before, chartKey(record)) : null
+      return { ...written, record, listMove }
     },
     pickFolder: async (sender) => {
       const win =

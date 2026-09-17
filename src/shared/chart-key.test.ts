@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { chartKey, chartKeyId, namesAChart, sameChart } from './chart-key'
+import {
+  chartKey,
+  chartKeyId,
+  chartListsPhrase,
+  describeChartListMove,
+  namesAChart,
+  sameChart,
+  type ChartListMove
+} from './chart-key'
 import { favouriteId, favouriteKey, isFavouritable } from './favourites'
 import { canJoinASetlist, setlistEntryId, setlistEntryKey } from './setlists'
 
@@ -96,5 +104,85 @@ describe('the favourite and setlist names for it', () => {
     expect(setlistEntryKey).toBe(chartKey)
     expect(setlistEntryId).toBe(chartKeyId)
     expect(canJoinASetlist).toBe(namesAChart)
+  })
+})
+
+const MOVE: ChartListMove = {
+  from: { name: 'YYZ', artist: 'Rush', charter: 'Harmonix' },
+  to: { name: 'YYZ', artist: 'RUSH (Canada)', charter: 'Harmonix' },
+  favourite: false,
+  setlists: [],
+  oldKeyKept: false,
+  stranded: false,
+  merged: false
+}
+
+describe('describeChartListMove', () => {
+  it('says nothing when nothing moved', () => {
+    expect(describeChartListMove(null)).toBeNull()
+    expect(describeChartListMove(undefined)).toBeNull()
+    // The key moved but the chart was on no list, which is the same non-event to a reader.
+    expect(describeChartListMove(MOVE)).toBeNull()
+  })
+
+  it('names the favourite and the setlists it moved', () => {
+    expect(describeChartListMove({ ...MOVE, favourite: true })).toBe(
+      'Encore moved this chart in your favourites to match.'
+    )
+    expect(describeChartListMove({ ...MOVE, setlists: ['Friday night'] })).toBe(
+      'Encore moved this chart in the setlist "Friday night" to match.'
+    )
+    expect(
+      describeChartListMove({ ...MOVE, favourite: true, setlists: ['Friday night', 'Warm up'] })
+    ).toBe('Encore moved this chart in your favourites and 2 setlists to match.')
+  })
+
+  it('says a second copy kept the old details, so the old rows are still there', () => {
+    const line = describeChartListMove({ ...MOVE, favourite: true, oldKeyKept: true })
+    expect(line).toContain('added the new details to your favourites')
+    expect(line).toContain('still says "YYZ"')
+  })
+
+  it('says the two became one when the new details already carried a favourite', () => {
+    expect(describeChartListMove({ ...MOVE, favourite: true, merged: true })).toContain(
+      'the two are now one'
+    )
+  })
+
+  it('says where the rows stayed when the title was cleared, and how to get them back', () => {
+    const line = describeChartListMove({
+      ...MOVE,
+      to: { name: '', artist: 'Rush', charter: 'Harmonix' },
+      favourite: true,
+      stranded: true
+    })
+    expect(line).toContain('no title now')
+    expect(line).toContain('"YYZ"')
+    expect(line).toContain('Typing the title back')
+  })
+
+  it('agrees its verb with the subject, which is not the same as with the count', () => {
+    // "your favourites" is one row and a plural subject; one setlist is the other way round.
+    expect(describeChartListMove({ ...MOVE, favourite: true, stranded: true })).toContain(
+      'your favourites still name'
+    )
+    expect(
+      describeChartListMove({ ...MOVE, setlists: ['Friday night'], stranded: true })
+    ).toContain('the setlist "Friday night" still names')
+  })
+})
+
+describe('chartListsPhrase', () => {
+  it('is null for a chart on no list', () => {
+    expect(chartListsPhrase(false, [])).toBeNull()
+  })
+
+  it('is what the editor says before a save and what the move says after one', () => {
+    expect(chartListsPhrase(true, ['Friday night', 'Warm up'])).toBe(
+      'your favourites and 2 setlists'
+    )
+    expect(
+      describeChartListMove({ ...MOVE, favourite: true, setlists: ['Friday night', 'Warm up'] })
+    ).toContain('your favourites and 2 setlists')
   })
 })

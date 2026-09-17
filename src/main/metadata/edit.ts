@@ -16,6 +16,7 @@ import {
   type ChartMetadataFields,
   type EditableIniKey
 } from '../../shared/metadata-fields'
+import type { ChartListMove } from '../../shared/chart-key'
 import type { ChartRecord } from '../../shared/schemas'
 
 /**
@@ -130,6 +131,16 @@ export interface ChartMetadataSaved extends ChartMetadataWrite {
    * up would leave the user looking at the old album on the page they just corrected.
    */
   record: ChartRecord | null
+  /**
+   * What the save did to the user's own lists, or null when it did nothing to them.
+   *
+   * Three of the six fields this editor writes are the three a favourite and a setlist entry are
+   * keyed by, so a save can rename the thing those rows name. `main/catalog/rekey.ts` carries them
+   * across and this is its report; `describeChartListMove` turns it into the sentence the form
+   * prints. Null covers both "the three did not move" and "they moved and nothing was on a list",
+   * which are the same non-event to a reader.
+   */
+  listMove: ChartListMove | null
 }
 
 /**

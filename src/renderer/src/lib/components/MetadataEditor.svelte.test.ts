@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartMetadataRead } from '../../../../main/metadata/edit'
+import type { ChartListMove } from '../../../../shared/chart-key'
 import type { ChartRecord } from '../../../../shared/schemas'
+import { favourites } from '../stores/favourites'
+import { setlists } from '../stores/setlists'
 import MetadataEditor from './MetadataEditor.svelte'
 
 /**
@@ -67,7 +70,30 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
+  // Both stores are module-scoped and loaded once per launch, so a test that seeds one would
+  // otherwise seed every test after it in this file.
+  favourites.set([])
+  setlists.set([])
 })
+
+/** The heart on this chart, as the store holds it: the readable form of its three names. */
+const HEARTED = {
+  name: 'YYZ',
+  artist: 'Rush',
+  charter: 'Harmonix',
+  addedAt: '2025-01-01T00:00:00Z'
+}
+
+/** What main reports when a save renamed a chart that was in the user's favourites. */
+const MOVED: ChartListMove = {
+  from: { name: 'YYZ', artist: 'Rush', charter: 'Harmonix' },
+  to: { name: 'YYZ', artist: 'Rush (Canada)', charter: 'Harmonix' },
+  favourite: true,
+  setlists: [],
+  oldKeyKept: false,
+  stranded: false,
+  merged: false
+}
 
 /** The box for one field, by the label the form gives it. */
 const box = (label: string): HTMLInputElement => screen.getByLabelText(label) as HTMLInputElement
@@ -262,6 +288,94 @@ describe('MetadataEditor', () => {
     // Still in the box. A failed save that also cleared the form would cost the user the typing
     // as well as the edit.
     expect(box('Album').value).toBe('Moving Pictures')
+  })
+
+  /**
+   * The three fields this form writes are the three a favourite and a setlist entry are keyed by,
+   * so a save can rename the thing those rows name. Main carries them across; these are the two
+   * places the user is told, which is what stops the two features undoing each other quietly.
+   */
+  describe('a save that renames the chart', () => {
+    it('warns before the press, naming the lists the chart is on', async () => {
+      stubEncore()
+      favourites.set([HEARTED])
+      setlists.set([
+        { id: 'l1', name: 'Friday night', createdAt: '2025-01-01T00:00:00Z', entries: [HEARTED] }
+      ])
+
+      await openOnChart()
+      expect(screen.queryByText(/carries this one over/)).toBeNull()
+      await fireEvent.input(box('Artist'), { target: { value: 'Rush (Canada)' } })
+
+      expect(screen.getByText(/carries this one over/).textContent).toContain(
+        'your favourites and the setlist "Friday night"'
+      )
+    })
+
+    it('says nothing before a save that leaves the three fields alone', async () => {
+      stubEncore()
+      favourites.set([HEARTED])
+
+      await openOnChart()
+      await fireEvent.input(box('Album'), { target: { value: 'Moving Pictures' } })
+
+      expect(screen.queryByText(/carries this one over/)).toBeNull()
+    })
+
+    it('says nothing when the only change is one of case, which no comparison here sees', async () => {
+      stubEncore()
+      favourites.set([HEARTED])
+
+      await openOnChart()
+      await fireEvent.input(box('Artist'), { target: { value: 'RUSH' } })
+
+      expect(screen.queryByText(/carries this one over/)).toBeNull()
+    })
+
+    it('reports what moved, and re-reads the two stores main has just written', async () => {
+      const api = stubEncore({
+        chartWriteMetadata: vi.fn().mockResolvedValue({
+          chartPath: CHART.path,
+          chartType: 'folder',
+          changed: ['artist'],
+          chartHash: 'hash',
+          cloneHeroChecksum: 'checksum',
+          record: { ...CHART, artist: 'Rush (Canada)' },
+          listMove: MOVED
+        }),
+        favouritesList: vi.fn().mockResolvedValue([]),
+        setlistsList: vi.fn().mockResolvedValue([])
+      })
+
+      await openOnChart()
+      await fireEvent.input(box('Artist'), { target: { value: 'Rush (Canada)' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Save to the chart' }))
+
+      await waitFor(() =>
+        expect(screen.getByText(/Encore moved this chart/).textContent).toContain('your favourites')
+      )
+      // Without these the heart on the rail would keep drawing the old title as the favourited
+      // one until the next launch: main moved rows neither store was told about.
+      expect(api.favouritesList).toHaveBeenCalledTimes(1)
+      expect(api.setlistsList).toHaveBeenCalledTimes(1)
+    })
+
+    it('leaves the stores alone when the save moved nothing', async () => {
+      const api = stubEncore({
+        favouritesList: vi.fn().mockResolvedValue([]),
+        setlistsList: vi.fn().mockResolvedValue([])
+      })
+
+      await openOnChart()
+      await fireEvent.input(box('Album'), { target: { value: 'Moving Pictures' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Save to the chart' }))
+
+      await waitFor(() => expect(screen.getByText(/^Saved\./)).toBeTruthy())
+      expect(screen.queryByText(/Encore moved this chart/)).toBeNull()
+      // Two IPC calls per album correction would be noise on the commonest save this view makes.
+      expect(api.favouritesList).not.toHaveBeenCalled()
+      expect(api.setlistsList).not.toHaveBeenCalled()
+    })
   })
 
   it('replaces the form with the reason when a chart cannot be edited at all', async () => {

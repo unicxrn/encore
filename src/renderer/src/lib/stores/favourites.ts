@@ -59,6 +59,19 @@ export async function loadFavourites(): Promise<void> {
 }
 
 /**
+ * Re-read the list, for a screen that has just made main change it behind the store's back.
+ *
+ * The metadata editor is that screen: a save that renames a chart moves the favourite onto the new
+ * details (main/catalog/rekey.ts), and nothing in this store was told. Without this the heart on
+ * the rail would keep drawing the chart's old title as the favourited one until the next launch.
+ * `reloadSetlists` is the same call for the same reason.
+ */
+export async function reloadFavourites(): Promise<void> {
+  favourites.set(await encore().favouritesList())
+  loaded = true
+}
+
+/**
  * Heart a chart, or un-heart it, and keep the store in step with what main stored.
  *
  * Deliberately not optimistic. The write is a single SQLite statement against a file that is
