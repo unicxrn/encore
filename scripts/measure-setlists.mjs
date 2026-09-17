@@ -46,6 +46,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -168,21 +169,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-setlists')
 
 const SHAPE = `(() => {
   const view = document.querySelector('.setlists')
@@ -238,8 +225,6 @@ const SHAPE = `(() => {
   }
 })()`
 
-const SETLISTS_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Setlists')`
-
 app.on('window-all-closed', () => {})
 
 app.whenReady().then(async () => {
@@ -258,9 +243,10 @@ app.whenReady().then(async () => {
     })
     win.webContents.setFrameRate(30)
     await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
-    await waitFor(win, SETLISTS_ROW)
-    await evalIn(win, `${SETLISTS_ROW}.click(), 1`)
-    await waitFor(win, `document.querySelectorAll('.setlists .s-list .s-row').length > 0`)
+    await clickNav(win, 'Setlists')
+    await waitFor(win, `document.querySelectorAll('.setlists .s-list .s-row').length > 0`, {
+      what: 'a setlist row'
+    })
     await sleep(900)
 
     const s = await evalIn(win, SHAPE)

@@ -59,6 +59,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -127,7 +128,11 @@ const charts = checksums.map((sum, i) => ({
   // the three stat cells past the column if they were sized too tightly.
   songLength: i === 0 ? 634000 : 273000,
   chartType: 'folder',
-  folderHash: 'chart-' + i,
+  // The chart page prints short forms of all three and reads them without a guard, so a record
+  // missing one crashes the page to the error screen rather than drawing it.
+  folderHash: ('chart-' + i).padEnd(40, 'f'),
+  chartHash: ('chart-' + i).padEnd(43, 'c'),
+  tempoMapHash: ('chart-' + i).padEnd(32, 't'),
   modifiedTime: 0,
   cloneHeroChecksum: sum,
   instruments: ['guitar', 'bass', 'drums'],
@@ -281,21 +286,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 20000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-play-stats')
 
 /** The Stats page, as layout has it. */
 const PAGE = `(() => {
@@ -782,7 +773,7 @@ app.whenReady().then(async () => {
     `window ${width}x${height}, ${spanDays} days of history, lifetime ${lifetimeOn ? 'on' : 'off'}, log ${logOn ? 'on' : 'off'}`
   )
 
-  await waitFor(win, `document.querySelector('.home')`)
+  await waitFor(win, `document.querySelector('.home')`, { what: 'Home' })
   await sleep(300)
   console.log('frame      ', JSON.stringify(await evalIn(win, FRAME), null, 1))
   console.log('sidebar    ', JSON.stringify(await evalIn(win, SIDEBAR), null, 1))
@@ -790,32 +781,29 @@ app.whenReady().then(async () => {
   // Before anything has been opened, which is the only moment the rail's empty state exists.
   console.log('rail/empty ', JSON.stringify(await evalIn(win, RAIL_EMPTY), null, 1))
 
-  const statsTab = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Stats')`
-  await waitFor(win, statsTab)
-  await evalIn(win, `${statsTab}.click(), 1`)
-  await waitFor(win, `document.querySelector('.tile')`)
+  // The row is called Statistics. It was called Stats, and this waited forty seconds for that.
+  await clickNav(win, 'Statistics')
+  await waitFor(win, `document.querySelector('.tile')`, { what: "the Stats page's first tile" })
   await sleep(500)
   console.log('stats page ', JSON.stringify(await evalIn(win, PAGE), null, 1))
 
-  const installed = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Installed')`
-  await waitFor(win, installed)
-  await evalIn(win, `${installed}.click(), 1`)
-  await waitFor(win, `document.querySelector('.badge.plays')`)
+  await clickNav(win, 'Installed')
+  await waitFor(win, `document.querySelector('.badge.plays')`, { what: "Installed's play badge" })
   await sleep(500)
   console.log('installed  ', JSON.stringify(await evalIn(win, LIST), null, 1))
 
   // Installed's per-row Preview button, which fills the rail without leaving the list. Measured
   // here rather than after the click below, because the click is what takes the list away.
   await evalIn(win, `document.querySelector('.to-rail').click(), 1`)
-  await waitFor(win, `document.querySelector('.rail .art')`)
+  await waitFor(win, `document.querySelector('.rail .art')`, { what: "the rail's art box" })
   await sleep(400)
   console.log('rail/listed', JSON.stringify(await evalIn(win, RAIL), null, 1))
 
   // Opening a chart is what fills the rail, and a rail with something in it is the case where
   // it can push the frame around: the art box is square and sized off the column, the title
   // wraps, and the health list grows. Measured after the empty case for that reason.
-  await evalIn(win, `document.querySelector('.row').click(), 1`)
-  await waitFor(win, `document.querySelector('.detail')`)
+  await evalIn(win, `document.querySelector('.table .row').click(), 1`)
+  await waitFor(win, `document.querySelector('.detail')`, { what: 'the chart page' })
   await sleep(400)
   console.log('rail       ', JSON.stringify(await evalIn(win, RAIL), null, 1))
   console.log('frame/chart', JSON.stringify(await evalIn(win, FRAME), null, 1))
@@ -838,7 +826,9 @@ app.whenReady().then(async () => {
   // for: a refused reveal wraps its reason over as many lines as the reason needs. \`spare\` in
   // the reads above is what this has to fit inside before the column starts scrolling.
   await evalIn(win, `[...document.querySelectorAll('.rail .actions button')][0].click(), 1`)
-  await waitFor(win, `document.querySelector('.rail .act-error')`)
+  await waitFor(win, `document.querySelector('.rail .act-error')`, {
+    what: "the rail's error line"
+  })
   await sleep(200)
   console.log('rail/error ', JSON.stringify(await evalIn(win, RAIL), null, 1))
 

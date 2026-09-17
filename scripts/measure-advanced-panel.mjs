@@ -58,6 +58,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, remount, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -110,21 +111,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-advanced-panel')
 
 /**
  * What the panel is, as layout has it.
@@ -264,12 +251,10 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-
-  await waitFor(win, named('Explore'))
-  await evalIn(win, `${named('Explore')}.click(), 1`)
-  await waitFor(win, `document.querySelector('.filters select')`)
+  await clickNav(win, 'Explore')
+  await waitFor(win, `document.querySelector('.filters select')`, {
+    what: "Explore's filter row"
+  })
 
   const band = process.env.BAND === 'on'
   if (band) {
@@ -287,9 +272,15 @@ app.whenReady().then(async () => {
     )
   }
 
-  // The panel is shut until it is asked for, which is the point of the button.
+  // The panel is shut until it is asked for, which is the point of the button. Both the asking
+  // and the instrument above land in stores, so the round trip is what puts either on screen;
+  // `remount` in harness-lib.mjs says why.
+  await waitFor(win, `document.querySelector('.adv')`, { what: "Explore's advanced button" })
   await evalIn(win, `document.querySelector('.adv').click(), 1`)
-  await waitFor(win, `document.querySelector('#advanced-panel')`)
+  await remount(win, 'Explore')
+  await waitFor(win, `document.querySelector('#advanced-panel')`, {
+    what: "Explore's advanced panel"
+  })
   await sleep(2500)
 
   const shape = await evalIn(win, SHAPE)

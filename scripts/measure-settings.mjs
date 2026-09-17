@@ -49,6 +49,15 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  buttonNamed,
+  clickButton,
+  clickNav,
+  evalIn,
+  exitOnFailure,
+  sleep,
+  waitFor
+} from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -151,21 +160,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-settings')
 
 const SHAPE = `(() => {
   const view = document.querySelector('.view')
@@ -279,29 +274,22 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-
-  await waitFor(win, named('Settings'))
-  await evalIn(win, `${named('Settings')}.click(), 1`)
-  await waitFor(win, `document.querySelectorAll('.settings .group').length === 4`)
-  if (paths !== 'none') await waitFor(win, `document.querySelector('.settings .path')`)
+  await clickNav(win, 'Settings')
+  await waitFor(win, `document.querySelectorAll('.settings .group').length === 4`, {
+    what: "Settings' four groups",
+    context: `document.querySelectorAll('.settings .group').length + ' drawn'`
+  })
+  if (paths !== 'none') {
+    await waitFor(win, `document.querySelector('.settings .path')`, { what: 'a library path row' })
+  }
   if (process.env.ARMED === 'on') {
     // The second label is nearly four times the width of the first, and it appears in a row that
     // is already carrying a name and a status. Resting on the short one would measure the state
     // this row is almost never in when it matters.
-    await waitFor(
-      win,
-      `[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Clear')`
-    )
-    await evalIn(
-      win,
-      `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Clear').click(), 1`
-    )
-    await waitFor(
-      win,
-      `[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Delete them permanently')`
-    )
+    await clickButton(win, 'Clear')
+    await waitFor(win, buttonNamed('Delete them permanently'), {
+      what: 'the armed undo row'
+    })
   }
   await sleep(2000)
 

@@ -37,6 +37,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -178,21 +179,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-sidebar')
 
 /**
  * Every nav row as layout has it, plus the room its label has left.
@@ -453,15 +440,11 @@ const ROOM = `(() => {
   }
 })()`
 
-const DOWNLOADS_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Downloads')`
-
 // Eleven rows: the ten views, of which the first nine carry Mod+1 to Mod+9, plus Downloads,
 // which opens a panel rather than a view and so carries no digit. A count rather than a
 // wait-for-any, because the sweep measures every label and a screenshot taken mid-render would
 // report boxes nobody will see.
 const NAV_READY = `document.querySelectorAll('nav.sidebar .section .item').length === 11`
-const ISSUES_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Issues')`
-const HOME_ROW = `[...document.querySelectorAll('nav.sidebar .section .item')].find(b => b.querySelector('.label').textContent.trim() === 'Home')`
 
 function report(label, shape) {
   console.log(`  ${label}`)
@@ -556,7 +539,10 @@ app.whenReady().then(async () => {
     })
     win.webContents.setFrameRate(30)
     await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
-    await waitFor(win, NAV_READY)
+    await waitFor(win, NAV_READY, {
+      what: 'eleven nav rows',
+      context: `document.querySelectorAll('nav.sidebar .section .item').length + ' drawn'`
+    })
     await sleep(900)
 
     console.log(`window ${width}x${height}`)
@@ -566,16 +552,20 @@ app.whenReady().then(async () => {
 
     // The pill is published by the Issues view, not by the bridge, so it takes a visit. Back to
     // Home afterwards, because what is being measured is the sidebar on an ordinary screen.
-    await evalIn(win, `${ISSUES_ROW}.click(), 1`)
-    await waitFor(win, `document.querySelector('nav.sidebar .count.pill')`)
-    await evalIn(win, `${HOME_ROW}.click(), 1`)
+    await clickNav(win, 'Issues')
+    await waitFor(win, `document.querySelector('nav.sidebar .count.pill')`, {
+      what: "the Issues row's pill"
+    })
+    await clickNav(win, 'Home')
     await sleep(600)
     const withPill = await evalIn(win, SHAPE)
     report('after a scan has been seen', withPill)
 
     // The downloads panel open, which is the only state where a figure and a chevron share a row.
-    await evalIn(win, `${DOWNLOADS_ROW}.click(), 1`)
-    await waitFor(win, `document.querySelector('nav.sidebar .item.open')`)
+    await clickNav(win, 'Downloads')
+    await waitFor(win, `document.querySelector('nav.sidebar .item.open')`, {
+      what: 'the downloads row marked open'
+    })
     await sleep(300)
     const chevron = await evalIn(win, CHEVRON)
     console.log(

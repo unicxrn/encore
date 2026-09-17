@@ -40,7 +40,9 @@
  *
  *     MODE=full     a library with charts in it (the default)
  *     MODE=empty    a library folder configured and a catalog with nothing in it
- *     MODE=nofolder no library folder at all, which is the first thing a new user sees
+ *     MODE=nofolder no library folder at all, which is the first thing a new user sees. This one
+ *                   cannot be reached at present and says so and stops; the leg itself explains
+ *                   why, and nothing in this file can put it right.
  *     MODE=scan     a scan running, which is what Home shows for the whole of a first scan
  *     MODE=welcome  the first-run folder picker, with a candidate found
  *     MODE=nothing  the same picker with nothing detected, so it asks for a folder by hand
@@ -59,6 +61,15 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  clickButton,
+  evalIn,
+  exitOnFailure,
+  reached,
+  remount,
+  sleep,
+  waitFor
+} from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -217,21 +228,7 @@ window.fetch = () =>
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-home')
 
 /**
  * Home, as layout has it.
@@ -427,7 +424,8 @@ app.whenReady().then(async () => {
   if (mode === 'welcome' || mode === 'nothing' || mode === 'tour') {
     await waitFor(
       win,
-      `document.querySelector('.welcome .card') || document.querySelector('.tour')`
+      `document.querySelector('.welcome .card') || document.querySelector('.tour')`,
+      { what: 'the welcome card or the tour' }
     )
     await sleep(1200)
     if (mode === 'tour') {
@@ -477,15 +475,27 @@ app.whenReady().then(async () => {
   // Home's own no-folder state is the way a user reaches it: answer the picker with "Explore
   // charts instead", which sets nothing, then come back through the sidebar.
   if (mode === 'nofolder') {
-    const named = (label) =>
-      `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-    await waitFor(win, named('Explore charts instead'))
-    await evalIn(win, `${named('Explore charts instead')}.click(), 1`)
-    await waitFor(win, named('Home'))
-    await evalIn(win, `${named('Home')}.click(), 1`)
+    await clickButton(win, 'Explore charts instead')
+    await remount(win, 'Home')
+    // This mode is currently unreachable, and it is worth saying so rather than timing out on
+    // Home and reading as "Home never drew". "Explore charts instead" sets `welcomeDismissed`,
+    // and the choice between the picker and Home is made in the app shell, which is mounted once
+    // and never again: a store written after that does not move it, and the round trip above
+    // cannot remount the thing making the decision. `remount` in harness-lib.mjs has the whole of
+    // it. Every other mode here is reached without touching a store, which is why they still work.
+    if (await reached(win, `document.querySelector('.welcome .card')`, 2000)) {
+      throw new Error(
+        'MODE=nofolder cannot be reached: the picker is still up after being answered, because ' +
+          'the app shell decides between it and Home from a store it read once. Nothing this ' +
+          'harness can press changes that. See `remount` in harness-lib.mjs.'
+      )
+    }
   }
 
-  await waitFor(win, `document.querySelector('.home')`)
+  await waitFor(win, `document.querySelector('.home')`, {
+    what: 'Home',
+    context: `document.querySelector('.view')?.textContent.trim().replace(/\\s+/g, ' ').slice(0, 160) ?? document.body.innerText.replace(/\\s+/g, ' ').slice(300, 500)`
+  })
   // A running scan is a progress event, not a call: `catalog:scan` resolves once the scan has
   // STARTED, and everything Home draws about it comes from the event stream after that.
   if (mode === 'scan') await evalIn(win, `window.measureScan(42), 1`)

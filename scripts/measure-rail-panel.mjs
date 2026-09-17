@@ -73,6 +73,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, openExplore, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -243,21 +244,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-rail-panel')
 
 /**
  * The panel, as layout has it.
@@ -469,55 +456,25 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  // The sidebar draws a count inside the row it belongs to, so "Installed" is "Installed 4" as
-  // far as textContent is concerned. Matching the word and whatever follows it is what keeps this
-  // harness working when a row gains or loses a badge; an exact match timed out for 40 seconds
-  // and reported it as the rail never appearing.
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}' || b.textContent.trim().startsWith('${label} '))`
-
   if (state === 'remote') {
-    // Home's Surprise me, and not Explore's own search box, which is what this leg used to do.
+    // Explore's own search, reached the way `openExplore` reaches it: click Explore, let the
+    // search finish, and mount Explore again so the grid reads the rows the store was handed
+    // while nothing was watching it. `remount` in harness-lib.mjs says why that is needed.
     //
-    // Explore's auto-search answers here and still draws nothing: with the stub above in place
-    // the store finishes the run (`searched` true, `found` 1, `error` null, one row in
-    // `results`), and the grid stays empty because the `groups` derived those rows are read
-    // through is still the empty array it computed before they arrived. That is a fault in
-    // Explore, not in this harness, and it is not this file's to fix.
-    //
-    // Surprise me reaches the same rows by the other door: it hands its charts to the store
-    // through `present()`, which sets `results` outright, and the grid draws them. One card,
-    // the Chorus chart stubbed below, and clicking it puts that chart in the rail, which is
-    // the only thing this leg ever wanted.
-    //
-    // Explore is opened first and left, which looks pointless and is not. `groups` only
-    // recomputes while something is subscribed to it, and nothing is until Explore has been
-    // mounted once; hand rows to a store whose derived has never had a subscriber and the grid
-    // mounts onto the empty array that derived still holds. Opening Explore, going to Home and
-    // coming back through Surprise me is the shortest path that has Explore subscribed before
-    // the rows arrive. Measured: without the first visit this leg draws no card either, and
-    // neither does it without the two settles below, which let the first search finish and Home
-    // finish mounting before the button is pressed.
-    await waitFor(win, named('Explore'))
-    await evalIn(win, `${named('Explore')}.click(), 1`)
-    await waitFor(win, `document.querySelector('.table')`)
-    await sleep(6000)
-    await waitFor(win, named('Home'))
-    await evalIn(win, `${named('Home')}.click(), 1`)
-    await sleep(1500)
-    const surprise = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Surprise me')`
-    await waitFor(win, surprise)
-    await evalIn(win, `${surprise}.click(), 1`)
-    await waitFor(win, `document.querySelectorAll('.table .row, .table .card').length > 0`)
+    // This leg used to go round by Home's Surprise me, on the reasoning that `present()` set
+    // `results` outright where a finished search did not. That was the wrong half of it: the
+    // search sets `results` too, and what made Surprise me work was that it navigates, so the
+    // grid mounted after the rows arrived. Once the mount is what is being arranged, the search
+    // is the shorter route and it is the one this file is about.
+    await openExplore(win)
     await evalIn(win, `document.querySelector('.table .row, .table .card').click(), 1`)
   } else {
-    await waitFor(win, named('Installed'))
-    await evalIn(win, `${named('Installed')}.click(), 1`)
+    await clickNav(win, 'Installed')
     const preview = `[...document.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') || '').startsWith('Preview ') && (b.getAttribute('aria-label') || '').includes('${state === 'long' ? 'Untouched' : state}'))`
-    await waitFor(win, preview)
+    await waitFor(win, preview, { what: `the Preview button on the ${state} chart's row` })
     await evalIn(win, `${preview}.click(), 1`)
   }
-  await waitFor(win, `document.querySelector('.rail .head')`)
+  await waitFor(win, `document.querySelector('.rail .head')`, { what: "the rail's head" })
   await sleep(1500)
 
   /**
@@ -642,7 +599,3 @@ app.whenReady().then(async () => {
 // Without this a `waitFor` that gives up rejects into nothing: the process keeps its offscreen
 // window alive and the run hangs instead of reporting, which is how a broken leg reads as a
 // harness that never finishes.
-process.on('unhandledRejection', (err) => {
-  console.error(err)
-  app.exit(1)
-})
