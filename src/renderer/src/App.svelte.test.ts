@@ -15,6 +15,17 @@ import { appUpdate } from './lib/stores/app-update'
 import { targetCapability, type AppUpdateStatus } from '../../shared/app-update'
 
 /**
+ * A version the running build is not already on. Derived rather than written down, because the
+ * literal that used to sit here was `0.4.0`, and the release that made the app 0.4.0 turned two
+ * update-prompt tests red: an update to the version you are running is not an update, so the
+ * prompt correctly refused to draw and the assertions read the what's-new panel instead.
+ */
+const NEXT_VERSION = ((): string => {
+  const [major, minor] = APP_VERSION.split('.')
+  return `${major}.${Number(minor) + 1}.0`
+})()
+
+/**
  * The Tools view, replaced by something that throws while Svelte renders it.
  *
  * A Svelte 5 component is a function the compiler calls to build its DOM, so a function that
@@ -791,7 +802,7 @@ describe('App update prompt', () => {
       target: 'appimage',
       canApply,
       note,
-      state: { kind: 'available', version: '0.4.0' },
+      state: { kind: 'available', version: NEXT_VERSION },
       ...over
     }
   }
@@ -806,8 +817,10 @@ describe('App update prompt', () => {
     render(App)
 
     const prompt = await screen.findByRole('dialog', { name: PROMPT })
-    expect(prompt.textContent).toContain('Encore 0.4.0 is available')
-    expect(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' })).toBeTruthy()
+    expect(prompt.textContent).toContain(`Encore ${NEXT_VERSION} is available`)
+    expect(
+      screen.getByRole('button', { name: `Download and install Encore ${NEXT_VERSION}` })
+    ).toBeTruthy()
   })
 
   it('offers no install on a copy Encore cannot replace, and says what does', async () => {
@@ -913,7 +926,9 @@ describe('App update prompt', () => {
     render(App)
     await screen.findByRole('dialog', { name: PROMPT })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' }))
+    await fireEvent.click(
+      screen.getByRole('button', { name: `Download and install Encore ${NEXT_VERSION}` })
+    )
 
     await waitFor(() => expect(api.appUpdateDownload).toHaveBeenCalledTimes(1))
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
@@ -927,10 +942,12 @@ describe('App update prompt', () => {
     render(App)
     await screen.findByRole('dialog', { name: PROMPT })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'What is new in Encore 0.4.0' }))
+    await fireEvent.click(
+      screen.getByRole('button', { name: `What is new in Encore ${NEXT_VERSION}` })
+    )
 
     const notes = await screen.findByRole('dialog', { name: NOTES })
-    expect(notes.textContent).toContain('Encore 0.4.0 is available')
+    expect(notes.textContent).toContain(`Encore ${NEXT_VERSION} is available`)
     expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
     // A regression guard on the layer itself rather than on either of the two things that keep
     // it clear: one card, whatever route put something on it.
@@ -959,7 +976,7 @@ describe('App launch collisions', () => {
       currentVersion: '0.3.0',
       target: 'appimage',
       ...targetCapability('appimage'),
-      state: { kind: 'available', version: '0.4.0' }
+      state: { kind: 'available', version: NEXT_VERSION }
     }
   }
 
