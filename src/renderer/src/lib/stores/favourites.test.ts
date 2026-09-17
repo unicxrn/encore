@@ -1,4 +1,4 @@
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { favouriteIds, favourites, isFavourited, toggleFavourite } from './favourites'
 
@@ -59,4 +59,42 @@ describe('the favourites store', () => {
     await expect(toggleFavourite(EVERLONG, false)).rejects.toThrow('The catalog is closed')
     expect(get(favourites)).toEqual([EVERLONG])
   })
+})
+
+/**
+ * An answer that is not a list of favourites.
+ *
+ * `favouriteIds` reads three fields off every entry, inside a store notification the rail holds
+ * while it is mounted. svelte/store's notification queue is module-global, so an exception
+ * escaping one leaves it non-empty and every `set` in the renderer afterwards notifies nobody:
+ * the app keeps running and stops redrawing. The canary at the end is the whole point.
+ */
+describe('a favourites call answered with something that is not a list', () => {
+  const badAnswers: [string, unknown][] = [
+    ['nothing at all', undefined],
+    ['null', null],
+    ['an object', { 0: 'x' }],
+    ['a row that is not a favourite', [null]]
+  ]
+  for (const [what, answer] of badAnswers) {
+    it(`refuses ${what} and leaves the list alone`, async () => {
+      favourites.set([EVERLONG])
+      // The rail holds this while it is mounted, which is what makes the ids run inside the
+      // notification rather than on the next read.
+      const stop = favouriteIds.subscribe(() => {})
+      vi.stubGlobal('window', { encore: { favouritesSet: () => Promise.resolve(answer) } })
+
+      await expect(toggleFavourite({ name: 'Aerials' }, true)).rejects.toThrow('invalid answer')
+      expect(get(favourites)).toEqual([EVERLONG])
+      stop()
+
+      // One throw inside a notification stops every store in the renderer, this one included.
+      const canary = writable(0)
+      let heard = 0
+      const stopCanary = canary.subscribe((v) => (heard = v))
+      canary.set(7)
+      stopCanary()
+      expect(heard).toBe(7)
+    })
+  }
 })
