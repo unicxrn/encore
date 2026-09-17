@@ -1,4 +1,4 @@
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DuplicateCopy, DuplicateReport } from '../../../../shared/duplicates'
 import type { JobProgress } from '../../../../shared/schemas'
@@ -61,7 +61,7 @@ const job = (status: JobProgress['status'], percent: number): JobProgress => ({
  * do it: this project runs under node, where there is no window for a bare `encore` global to
  * hang off and `bridge.ts` reads `window.encore`.
  */
-function stub(answer: () => Promise<DuplicateReport>): ReturnType<typeof vi.fn> {
+function stub(answer: () => Promise<unknown>): ReturnType<typeof vi.fn> {
   const catalogDuplicates = vi.fn(answer)
   ;(globalThis as Record<string, unknown>).window = { encore: { catalogDuplicates } }
   return catalogDuplicates
@@ -146,6 +146,48 @@ describe('the duplicate report store', () => {
 
     expect(get(duplicatesError)).toBeNull()
   })
+})
+
+/**
+ * An answer that is not a report.
+ *
+ * `spareCopies` reads three fields off whatever this store holds, and it reads them inside a
+ * store notification. svelte/store's notification queue is module-global, so an exception
+ * escaping one leaves it non-empty and every `set` in the renderer afterwards notifies nobody:
+ * the app keeps running and stops redrawing. This read happens at launch, so the window would be
+ * frozen before the user pressed anything. The canary at the end of each case is the whole point.
+ */
+describe('a duplicate read answered with something that is not a report', () => {
+  const badAnswers: [string, unknown][] = [
+    ['nothing at all', undefined],
+    ['no identical list', { versions: [], alternates: [], totalCharts: 0 }],
+    ['identical not a list', { identical: null, versions: [], alternates: [] }],
+    ['a set with no copies', { identical: [{ checksum: 'a' }], versions: [], alternates: [] }]
+  ]
+  for (const [what, answer] of badAnswers) {
+    it(`reports ${what} as a failed read and leaves the last report alone`, async () => {
+      stub(() => Promise.resolve(twoSets()))
+      await loadDuplicates()
+      // The sidebar holds this subscription for the life of the launch, which is what makes the
+      // count run inside the notification rather than on the next read.
+      const stop = spareCopies.subscribe(() => {})
+
+      stub(() => Promise.resolve(answer))
+      await loadDuplicates()
+
+      expect(get(duplicatesError)).toContain('invalid answer')
+      expect(get(spareCopies)).toBe(3)
+      stop()
+
+      // One throw inside a notification stops every store in the renderer, this one included.
+      const canary = writable(0)
+      let heard = 0
+      const stopCanary = canary.subscribe((v) => (heard = v))
+      canary.set(7)
+      stopCanary()
+      expect(heard).toBe(7)
+    })
+  }
 })
 
 describe('dropping a copy that was removed', () => {
