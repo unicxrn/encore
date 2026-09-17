@@ -1,8 +1,8 @@
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { describe, expect, it, vi } from 'vitest'
 import type { ChartData, SearchResult } from '../api/enchor'
 import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
-import { AUTO_APPEND_CAP, createSearch, groupBySong } from './search'
+import { AUTO_APPEND_CAP, createSearch, groupBySong, type SongGroup } from './search'
 import { globalQuery } from './global-search'
 
 const makeChart = (
@@ -644,6 +644,84 @@ describe('SearchStore groups', () => {
     expect(gs[0].others.map((g) => g.chartId)).toEqual([2])
     expect(gs[1].primary.chartId).toBe(3)
     expect(gs[1].others).toHaveLength(0)
+  })
+  it('answers a subscriber that arrives after the rows did', async () => {
+    // Explore is destroyed by every navigation and by opening a chart Detail, so rows can land
+    // while nothing is listening to this at all: Surprise me writes them from the sidebar, and a
+    // search started before the user walked away answers behind them. A `derived` computes when
+    // its first subscriber arrives, not when it was created, which is what makes that safe.
+    // Pinned because it looks like the opposite is true, and a store kept in step by hand instead
+    // would be a second place for the rows and the groups to disagree.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong', 'Monkey Wrench'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('foo fighters')
+    await new Promise((r) => setTimeout(r, 20))
+    let seen: SongGroup[] = []
+    const stop = search.groups.subscribe((groups) => (seen = groups))
+    expect(seen.map((g) => g.primary.name)).toEqual(['Everlong', 'Monkey Wrench'])
+    stop()
+  })
+})
+
+/**
+ * A 200 whose body is not a page of charts.
+ *
+ * Measured, in a real engine and not in jsdom: a store subscriber that throws leaves
+ * svelte/store's module-global `subscriber_queue` non-empty, and every `set` after that one
+ * updates its value and notifies nobody. Nothing recovers it, nothing reports it, and `get` keeps
+ * answering correctly, so the renderer looks fine and has stopped redrawing. Explore is where it
+ * shows first: its rows land a moment after the view mounts, so the grid stays on the empty array
+ * it read on the way in while the store holds a full page.
+ *
+ * `groups` is the subscriber that would throw, and what it is handed comes straight out of
+ * `response.json()`, which nothing validates. So the rule is here rather than in the grouping: a
+ * body without rows is a failed search, which Explore already has a card and a Retry button for.
+ */
+describe('a search answered with something that is not a page of charts', () => {
+  const badBodies: [string, unknown][] = [
+    ['no data at all', { found: 1, out_of: 1, page: 1 }],
+    ['data null', { found: 1, out_of: 1, page: 1, data: null }],
+    ['data an object', { found: 1, out_of: 1, page: 1, data: { 0: 'x' } }],
+    ['a row that is not a chart', { found: 1, out_of: 1, page: 1, data: [null] }]
+  ]
+  for (const [what, body] of badBodies) {
+    it(`reports ${what} as a failed search and leaves the rows alone`, async () => {
+      const fetchFn = vi.fn().mockImplementation(() => ok(body))
+      const search = createSearch({ fetchFn, debounceMs: 5 })
+      // Explore holds this subscription for as long as it is mounted, which is what makes the
+      // grouping run inside the notification rather than on the next read.
+      const stop = search.groups.subscribe(() => {})
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 30))
+      expect(get(search.error)).toContain('invalid response')
+      expect(get(search.results)).toEqual([])
+      expect(get(search.groups)).toEqual([])
+      expect(get(search.searched)).toBe(true)
+      expect(get(search.loading)).toBe(false)
+      stop()
+      // The canary, and the whole point of the rule above: one throw inside a notification stops
+      // every store in the renderer, this one included.
+      const canary = writable(0)
+      let heard = 0
+      const stopCanary = canary.subscribe((v) => (heard = v))
+      canary.set(7)
+      stopCanary()
+      expect(heard).toBe(7)
+    })
+  }
+  it('keeps the page already on screen when a bad body answers an append', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(() => ok(result(['Everlong'], 50)))
+      .mockImplementationOnce(() => ok({ found: 50, out_of: 50, page: 2 }))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    const stop = search.groups.subscribe(() => {})
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    await search.loadMore()
+    expect(get(search.error)).toContain('invalid response')
+    expect(get(search.results).map((c) => c.name)).toEqual(['Everlong'])
+    stop()
   })
 })
 
