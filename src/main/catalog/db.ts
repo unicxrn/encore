@@ -77,8 +77,13 @@ export const SCAN_VERSION = 7
  *    there is not only no chart on disk a rescan could read one out of, there is no file in the
  *    format that could ever hold one. A bump would re-read every user's whole library to learn
  *    nothing at all.
+ *
+ * 10: `charts_meta`, the index over the identity expression. No SCAN_VERSION bump, and this one is
+ *     the clearest of the four: an index is not a column, it holds nothing a chart's files say, and
+ *     every value in it is derived by SQLite from columns the rows already carry. `CREATE INDEX`
+ *     fills it completely the moment it runs, so there is nothing left for a rescan to do.
  */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 /**
  * The text columns stored twice: once as the chart says it, once as a reader sees it.
@@ -113,6 +118,48 @@ export type StrippedSource = keyof typeof STRIPPED_COLUMN
 export function readableColumn(column: StrippedSource, prefix = ''): string {
   return `COALESCE(${prefix}${STRIPPED_COLUMN[column]}, ${prefix}${column})`
 }
+
+/**
+ * The expression a chart's identity is compared through: its readable text, with null as ''.
+ *
+ * One definition, because three features compare these three columns and they were three spellings
+ * in one release. `catalog:exists-by-meta` compared `LOWER(name)` against the RAW column while a
+ * favourite and a setlist entry compared the readable one, so a chart whose Chorus copy carries
+ * colour markup in its title and whose local copy has had it edited out was one chart to a heart
+ * and two to Hide owned. shared/chart-key.ts is the rule; this is how SQL says it.
+ *
+ * The '' is the other half of what the writer does. A favourite stores '' for a chart that credits
+ * nobody, and a NULL column in SQL compares equal to nothing at all, itself included, so without it
+ * every chart missing one of the three would be unmatchable in practice.
+ *
+ * Callers state `COLLATE NOCASE` on the comparison rather than inheriting it, because neither side
+ * is a column declared with it. That collation folds A-Z and nothing else, which is exactly what
+ * `chartKeyId` folds, and it is what `charts_meta` below is built with.
+ */
+export function identityColumn(column: StrippedSource, prefix = ''): string {
+  return `COALESCE(${readableColumn(column, prefix)}, '')`
+}
+
+/**
+ * The index every "is this chart in my library" lookup reads, over the identity expression itself.
+ *
+ * An expression index rather than one over the four raw columns, because the comparison is over
+ * `COALESCE(COALESCE(nameStripped, name), '') COLLATE NOCASE` and a plain column index cannot
+ * answer that. Built from `identityColumn` so it cannot drift from the queries that use it: change
+ * the expression there and this follows, and a mismatch would not be an error, it would be a silent
+ * return to scanning.
+ *
+ * Worth its cost, measured over a generated 20,000 row catalog. A batch of 100 keys, which is what
+ * one Explore page and the Surprise picker each send, took 76 ms scanning through the old
+ * `LOWER(col) = LOWER(?)`, 40 ms scanning through this expression, and 1.1 ms through this index.
+ * Against that: 868 KB on disk, 6 ms added to a 20,000 row scan's inserts (56 ms to 62 ms), and
+ * 13 ms once in the migration that creates it.
+ */
+const IDENTITY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS charts_meta ON charts(
+			${identityColumn('name')} COLLATE NOCASE,
+			${identityColumn('artist')} COLLATE NOCASE,
+			${identityColumn('charter')} COLLATE NOCASE
+		)`
 
 /**
  * The view the FTS index is built from, and the only definition of what gets indexed.
@@ -296,6 +343,9 @@ function migrate(db: CatalogDb): void {
     // column does not exist yet when that block runs, and CREATE INDEX would throw rather than
     // being skipped by its IF NOT EXISTS. This is the lookup every play join makes.
     db.exec('CREATE INDEX IF NOT EXISTS charts_checksum ON charts(cloneHeroChecksum)')
+    // Here for the same reason, and more sharply: this one is over the four stripped columns, which
+    // a database written before schema 6 does not have at all until the ALTERs above have run.
+    db.exec(IDENTITY_INDEX_SQL)
     // A database opened by a build that predates the view has none: openCatalog's IF NOT EXISTS
     // created it a moment ago only if this is a fresh file.
     db.exec(SEARCH_VIEW_SQL)
@@ -448,9 +498,10 @@ export function openCatalog(filePath: string): CatalogDb {
 		-- COLLATE NOCASE on all three key columns is what makes the PRIMARY KEY the rule "one
 		-- favourite per chart": the same chart met once on Chorus and once in the library differs
 		-- in case often enough that without it a user could heart one chart twice and un-heart it
-		-- once. It is the same case rule catalog:exists-by-meta and catalog:facets already compare
-		-- these fields by. The stored text is the readable form (shared/favourites.ts strips the
-		-- markup), so it compares against the stripped columns rather than against the raw ones.
+		-- once. It is the same case rule catalog:exists-by-meta and catalog:facets compare these
+		-- fields by. The stored text is the readable form (shared/chart-key.ts strips the markup),
+		-- so it compares against the stripped columns rather than against the raw ones, which is
+		-- what exists-by-meta was fixed to do rather than the other way round.
 		CREATE TABLE IF NOT EXISTS favourites (
 			name TEXT NOT NULL COLLATE NOCASE,
 			artist TEXT NOT NULL COLLATE NOCASE,

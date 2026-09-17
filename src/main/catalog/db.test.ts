@@ -38,6 +38,13 @@ const makeV2Db = (file: string, rowCount: number): void => {
 const columnNames = (db: Database.Database): string[] =>
   (db.pragma('table_info(charts)') as { name: string }[]).map((c) => c.name)
 
+const indexNames = (db: Database.Database): string[] =>
+  (
+    db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'charts'`)
+      .all() as { name: string }[]
+  ).map((row) => row.name)
+
 describe('openCatalog', () => {
   it('creates the charts table and FTS index', () => {
     const db = openCatalog(tmpDb())
@@ -276,6 +283,36 @@ describe('full chart data migration', () => {
     expect(columnNames(migrated).sort()).toEqual(columnNames(fresh).sort())
     migrated.close()
     fresh.close()
+  })
+
+  /**
+   * The identity index, on both of the shapes a user can arrive with.
+   *
+   * It is an expression index over the four stripped columns, which a database written before
+   * schema 6 does not have at all until the ALTERs have run, so it cannot be created in
+   * openCatalog's CREATE block the way an ordinary index could. That is the same trap
+   * charts_checksum is in, and the reason both are created in migrate().
+   */
+  it('creates the identity index on a fresh database and on a v1 one', () => {
+    const fresh = openCatalog(tmpDb())
+    expect(indexNames(fresh)).toContain('charts_meta')
+    fresh.close()
+
+    const file = tmpDb()
+    makeV1Db(file)
+    const migrated = openCatalog(file)
+    expect(indexNames(migrated)).toContain('charts_meta')
+    // The row a v1 database arrives with is in the index, not merely alongside it: CREATE INDEX
+    // fills it completely, which is the whole reason this needs no SCAN_VERSION bump.
+    expect(
+      migrated
+        .prepare(
+          `SELECT path FROM charts
+					 WHERE COALESCE(COALESCE(nameStripped, name), '') = '' COLLATE NOCASE`
+        )
+        .all()
+    ).toEqual([{ path: '/lib/legacy.sng' }])
+    migrated.close()
   })
 
   it('leaves a database written by a newer build at its own version', () => {
