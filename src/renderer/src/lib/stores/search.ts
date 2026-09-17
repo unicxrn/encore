@@ -363,10 +363,26 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
           retryDelayMs
         }
       )
-      results.update((prev) => (append ? [...prev, ...response.data] : response.data))
+      // Nothing between `response.json()` and here checks that a 200 carried a page of charts,
+      // and what `results` holds is handed straight to `groups`, which reads a field off every
+      // row. A throw there is not one failed search. It happens inside a store notification, and
+      // svelte/store's notification queue is module-global, so an exception escaping one leaves
+      // that queue non-empty: every `set` in the renderer afterwards updates its value and tells
+      // nobody, so the app keeps running, stops redrawing, and reports nothing. Measured in a
+      // real engine against a different subscriber that threw, Explore was where it showed
+      // first, because its rows land a moment after the view mounts: the grid stayed on the
+      // empty array it read on the way in while the store held a full page.
+      //
+      // So a body that is not rows is a failed search, which is a state Explore already draws a
+      // card and a Retry button for. Checked here rather than in `groupBySong`, which is also
+      // called on rows this store has already accepted.
+      const rows = response.data
+      if (!Array.isArray(rows) || rows.some((chart) => typeof chart !== 'object' || chart === null))
+        throw new Error('Search failed: invalid response')
+      results.update((prev) => (append ? [...prev, ...rows] : rows))
       // An empty page is the end of the data whatever `found` says, and it is the one thing that
       // stops an appending list asking for the next page forever.
-      if (append && response.data.length === 0) exhausted.set(true)
+      if (append && rows.length === 0) exhausted.set(true)
       // Expansion keys are songIds from the rows currently on screen, so it goes
       // stale exactly when those rows are replaced, and not when a run merely
       // starts. A failed run leaves the old rows visible, and collapsing groups
