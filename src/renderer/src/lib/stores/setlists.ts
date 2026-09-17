@@ -39,6 +39,25 @@ export function setlistsWith(list: Setlist[], chart: ChartNames): Set<string> {
   return setlistsHolding(list, setlistEntryKey(chart))
 }
 
+/**
+ * The list main answered with, or a throw.
+ *
+ * `setlistCount` reads `.length` off whatever this store holds, and the sidebar holds that
+ * subscription for the life of the launch, so the read runs inside a store notification.
+ * svelte/store's notification queue is module-global and an exception escaping one leaves it
+ * non-empty: every `set` in the renderer afterwards updates its value and tells nobody, so the
+ * app keeps running, stops redrawing, and reports nothing while `get` goes on answering
+ * correctly. Measured in a real engine with this channel answering undefined: the window is
+ * frozen before the first click, and nothing on screen says so.
+ *
+ * All seven calls below go through this. Each already rejects with main's own sentence when main
+ * refuses, and an answer that is not a list is the same kind of failure.
+ */
+function accept(list: unknown): Setlist[] {
+  if (!Array.isArray(list)) throw new Error('Setlists: invalid answer')
+  return list as Setlist[]
+}
+
 let loaded = false
 
 /**
@@ -53,7 +72,7 @@ export async function loadSetlists(): Promise<void> {
   if (loaded) return
   loaded = true
   try {
-    setlists.set(await encore().setlistsList())
+    setlists.set(accept(await encore().setlistsList()))
   } catch (err) {
     loaded = false
     throw err
@@ -62,7 +81,7 @@ export async function loadSetlists(): Promise<void> {
 
 /** Re-read the list, for a screen that wants to know it is looking at what main has. */
 export async function reloadSetlists(): Promise<void> {
-  setlists.set(await encore().setlistsList())
+  setlists.set(accept(await encore().setlistsList()))
   loaded = true
 }
 
@@ -75,15 +94,15 @@ export async function reloadSetlists(): Promise<void> {
  * main's own sentence when main refuses, and the caller puts that sentence where the press was.
  */
 export async function createSetlist(name: string): Promise<void> {
-  setlists.set(await encore().setlistsCreate({ name }))
+  setlists.set(accept(await encore().setlistsCreate({ name })))
 }
 
 export async function renameSetlist(id: string, name: string): Promise<void> {
-  setlists.set(await encore().setlistsRename({ id, name }))
+  setlists.set(accept(await encore().setlistsRename({ id, name })))
 }
 
 export async function deleteSetlist(id: string): Promise<void> {
-  setlists.set(await encore().setlistsDelete({ id }))
+  setlists.set(accept(await encore().setlistsDelete({ id })))
 }
 
 export async function setSetlistEntry(
@@ -92,13 +111,15 @@ export async function setSetlistEntry(
   member: boolean
 ): Promise<void> {
   setlists.set(
-    await encore().setlistsSetEntry({
-      id,
-      name: chart.name ?? null,
-      artist: chart.artist ?? null,
-      charter: chart.charter ?? null,
-      member
-    })
+    accept(
+      await encore().setlistsSetEntry({
+        id,
+        name: chart.name ?? null,
+        artist: chart.artist ?? null,
+        charter: chart.charter ?? null,
+        member
+      })
+    )
   )
 }
 
@@ -108,12 +129,14 @@ export async function moveSetlistEntry(
   delta: -1 | 1
 ): Promise<void> {
   setlists.set(
-    await encore().setlistsMoveEntry({
-      id,
-      name: chart.name,
-      artist: chart.artist,
-      charter: chart.charter,
-      delta
-    })
+    accept(
+      await encore().setlistsMoveEntry({
+        id,
+        name: chart.name,
+        artist: chart.artist,
+        charter: chart.charter,
+        delta
+      })
+    )
   )
 }
