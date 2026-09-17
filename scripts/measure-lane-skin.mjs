@@ -59,6 +59,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { exitOnFailure } from './harness-lib.mjs'
 import { build } from 'esbuild'
 import { compile } from 'svelte/compiler'
 
@@ -443,6 +444,9 @@ const RING_FLOOR = 0.1
 const RING_GAP = 3
 
 app.commandLine.appendSwitch('enable-unsafe-swiftshader')
+
+exitOnFailure('measure-lane-skin')
+
 app.whenReady().then(async () => {
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'encore-lane-skin-')))
   const win = new BrowserWindow({

@@ -53,6 +53,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { evalIn, exitOnFailure, openExplore, remount, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -131,21 +132,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-explore-header')
 
 /**
  * What the header is, as layout has it.
@@ -287,17 +274,17 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-
-  await waitFor(win, named('Explore'))
-  await evalIn(win, `${named('Explore')}.click(), 1`)
-  await waitFor(win, `document.querySelector('.filters select')`)
+  // The list, not the grid the store opens in: a result row is what the header is paid for out
+  // of, and `rowsThatFit` below is only a number anyone can use if the things being counted are
+  // rows. The grid's cards are a different height and `measure-explore-row.mjs` is where they
+  // are measured.
+  await openExplore(win, { mode: 'List' })
 
   const band = process.env.BAND === 'on'
   if (band) {
     // The intensity band is off until an instrument is chosen, so its live width is only
-    // reachable through the control that turns it on.
+    // reachable through the control that turns it on. The choice lands in a store, so it takes
+    // the round trip `remount` in harness-lib.mjs explains before the band is drawn.
     await evalIn(
       win,
       `(() => {
@@ -307,14 +294,12 @@ app.whenReady().then(async () => {
         return 1
       })()`
     )
-    await waitFor(win, `document.querySelector('.band select:not([disabled])')`)
+    await remount(win, 'Explore')
+    await waitFor(win, `document.querySelector('.band select:not([disabled])')`, {
+      what: "the intensity band's select"
+    })
   }
-  // The list, not the grid the store opens in: a result row is what the header is paid for out
-  // of, and `rowsThatFit` below is only a number anyone can use if the things being counted are
-  // rows. The grid's cards are a different height and `measure-explore-row.mjs` is where they
-  // are measured.
-  await evalIn(win, `${named('List')}.click(), 1`)
-  await waitFor(win, `document.querySelector('.table .row')`)
+  await waitFor(win, `document.querySelector('.table .row')`, { what: 'a row in Explore' })
 
   const chipToOpen = process.env.CHIP
   if (chipToOpen) {
@@ -330,7 +315,9 @@ app.whenReady().then(async () => {
         return 1
       })()`
     )
-    await waitFor(win, `document.querySelector('#chip-${chipToOpen}')`)
+    await waitFor(win, `document.querySelector('#chip-${chipToOpen}')`, {
+      what: `the ${chipToOpen} chip's editor`
+    })
     // A chip carries a value it did not choose the length of: a charter's name is whatever the
     // charter called themselves. SET is how the long case gets on screen, so `clipped` can say
     // whether the 240px cap ellipsises it or the row is pushed sideways instead.
@@ -350,7 +337,9 @@ app.whenReady().then(async () => {
       await sleep(1500)
     }
   }
-  await waitFor(win, `document.querySelectorAll('.row, .card').length > 0`)
+  await waitFor(win, `document.querySelectorAll('.row, .card').length > 0`, {
+    what: "a row or a card in Explore's results"
+  })
   await sleep(3000)
 
   const shape = await evalIn(win, SHAPE)

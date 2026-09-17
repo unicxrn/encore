@@ -48,6 +48,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -115,21 +116,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-top-bar')
 
 /**
  * What the title bar is, as layout has it.
@@ -259,7 +246,7 @@ app.whenReady().then(async () => {
     })
     win.webContents.setFrameRate(30)
     await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
-    await waitFor(win, LAUNCH)
+    await waitFor(win, LAUNCH, { what: 'the Launch Clone Hero button' })
     await sleep(600)
 
     console.log(`window ${width}x${height}`)
@@ -269,7 +256,7 @@ app.whenReady().then(async () => {
     // The failure note, at the length a real refusal is. Its own box is out of flow, so what is
     // being checked is that the row above it did not move.
     await evalIn(win, `${LAUNCH}.click(), 1`)
-    await waitFor(win, `document.querySelector('.topbar-note')`)
+    await waitFor(win, `document.querySelector('.topbar-note')`, { what: "the top bar's note" })
     await sleep(200)
     const refused = await evalIn(win, SHAPE)
     report('launch refused', refused)

@@ -46,6 +46,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -247,21 +248,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-issue-cards')
 
 /**
  * What the view is, as layout has it.
@@ -387,22 +374,31 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-
-  await waitFor(win, named('Issues'))
-  await evalIn(win, `${named('Issues')}.click(), 1`)
-  await waitFor(win, `document.querySelector('.tools .chart-group')`)
+  await clickNav(win, 'Issues')
+  await waitFor(win, `document.querySelector('.tools .chart-group')`, {
+    what: "the Issues page's first chart group"
+  })
   // The cards need the report, `issues:fixable` and the backup list, which arrive separately.
-  await waitFor(win, `document.querySelectorAll('.tools .card').length >= 3`)
+  await waitFor(win, `document.querySelectorAll('.tools .card').length >= 3`, {
+    what: 'three cards on the Issues page',
+    context: `document.querySelectorAll('.tools .card').length + ' drawn'`
+  })
   if (process.env.DUPES === 'open') {
-    await waitFor(win, named('Show'))
-    await evalIn(win, `${named('Show')}.click(), 1`)
+    // The state card that is not already showing its rows, which is the second card open and the
+    // tallest the strip gets. Its text read "Show" when this leg was written and reads "Show
+    // them" now, because four cards all saying "Show" said nothing; the `aria-label` still opens
+    // "Show: " and names the card, and that is the half that has not moved.
+    const showRows = `[...document.querySelectorAll('.tools button')].find(b => (b.getAttribute('aria-label') || '').startsWith('Show: '))`
+    await waitFor(win, showRows, {
+      what: 'a state card that is not showing its rows',
+      context: `[...document.querySelectorAll('.tools button')].map(b => b.getAttribute('aria-label') || b.textContent.trim()).join(' | ')`
+    })
+    await evalIn(win, `${showRows}.click(), 1`)
   }
   await sleep(800)
 
   const shape = await evalIn(win, SHAPE)
-  const dupes = process.env.DUPES === 'open' ? ' duplicates open' : ''
+  const dupes = process.env.DUPES === 'open' ? ' second state card showing' : ''
   console.log(`window ${width}x${height}  view ${shape.viewWidth}px  platform ${platform}${dupes}`)
   console.log(
     `  cards         ${shape.cardsHeight}px of ${shape.bodyHeight}px body, strip in ${shape.stripCols} column${shape.stripCols === 1 ? '' : 's'}`

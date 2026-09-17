@@ -44,6 +44,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { evalIn, exitOnFailure, quickAction, remount, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -149,29 +150,16 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-surprise')
 
 const SHAPE = `(() => {
   const main = document.querySelector('.main')
   const table = document.querySelector('.table')
   const bar = document.querySelector('.rbar')
   const band = document.querySelector('.dropped')
+  // The tile's name is its own element, under a note that is not part of the name.
   const tile = [...document.querySelectorAll('.quick-btn')].find(
-    (b) => b.textContent.trim() === 'Surprise me'
+    (b) => (b.querySelector('.quick-text b') || {}).textContent?.trim() === 'Surprise me'
   )
 
   const box = (el) => {
@@ -237,16 +225,21 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
-
-  await waitFor(win, named('Surprise me'))
-  const before = await evalIn(win, `${named('Surprise me')}.getBoundingClientRect().width`)
-  await evalIn(win, `${named('Surprise me')}.click(), 1`)
-  await waitFor(win, `document.querySelector('.dropped')`)
-  // The band goes up before the rows arrive (it says what is being looked for), so wait for the
-  // answer rather than for the line.
-  await waitFor(win, `!document.querySelector('.dropped').textContent.includes('Looking for')`)
+  const surprise = quickAction('Surprise me')
+  await waitFor(win, surprise, { what: "the sidebar's Surprise me tile" })
+  const before = await evalIn(win, `${surprise}.getBoundingClientRect().width`)
+  await evalIn(win, `${surprise}.click(), 1`)
+  await waitFor(win, `document.querySelector('.dropped')`, { what: "Surprise me's band" })
+  // The band goes up saying what is being looked for and is then told the answer, and being told
+  // is a store write into a mounted component, which draws nothing. So: give the request time to
+  // land, then mount Explore again, which reads what the band was told. `remount` in
+  // harness-lib.mjs has the whole of it.
+  await sleep(8000)
+  await remount(win, 'Explore')
+  await waitFor(win, `!document.querySelector('.dropped').textContent.includes('Looking for')`, {
+    what: 'the band to stop saying it is looking',
+    context: `document.querySelector('.dropped').textContent.trim()`
+  })
   await sleep(2000)
 
   const shape = await evalIn(win, SHAPE)

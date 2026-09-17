@@ -61,6 +61,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { evalIn, exitOnFailure, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.join(here, '..')
@@ -226,21 +227,7 @@ if (build.status !== 0) {
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-metadata-editor')
 
 const SHAPE = `(() => {
   const view = document.querySelector('.view')
@@ -366,21 +353,26 @@ app
     )
     await win.loadFile(path.join(scratch, 'dist', 'index.html'))
 
-    await waitFor(win, `document.querySelector('.editor')`)
+    await waitFor(win, `document.querySelector('.editor')`, { what: 'the metadata editor' })
     if (state === 'find') {
       await evalIn(
         win,
         `(() => { const el = document.querySelector('#metaedit-search'); el.value = 'a'; el.dispatchEvent(new Event('input', { bubbles: true })); return 1 })()`
       )
-      await waitFor(win, `document.querySelectorAll('.result').length === 25`)
+      await waitFor(win, `document.querySelectorAll('.result').length === 25`, {
+        what: '25 search results',
+        context: `document.querySelectorAll('.result').length + ' drawn'`
+      })
     } else {
-      await waitFor(win, `document.querySelector('#metaedit-album')`)
+      await waitFor(win, `document.querySelector('#metaedit-album')`, { what: 'the album field' })
       // One field dirtied, so the "Was …" line and the enabled primary button are both measured.
       await evalIn(
         win,
         `(() => { const el = document.querySelector('#metaedit-album'); el.value = 'Moving Pictures (Deluxe)'; el.dispatchEvent(new Event('input', { bubbles: true })); return 1 })()`
       )
-      await waitFor(win, `document.querySelector('.was')`)
+      await waitFor(win, `document.querySelector('.was')`, {
+        what: 'the was line under a dirtied field'
+      })
     }
     await sleep(1500)
 

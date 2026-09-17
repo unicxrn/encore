@@ -46,6 +46,16 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  buttonNamed,
+  clickButton,
+  clickNav,
+  evalIn,
+  exitOnFailure,
+  openExplore,
+  sleep,
+  waitFor
+} from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -261,21 +271,7 @@ window.fetch = (input, init) => {
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-detail')
 
 /**
  * The page, as layout has it.
@@ -393,34 +389,28 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
   const source = process.env.SOURCE || 'local'
-  const named = (label) =>
-    `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')`
 
   if (source === 'remote') {
     // Explore's row fills the rail where there is one, so the way through is the rail's own
     // "All details"; below the breakpoint the same click opens the page directly.
-    await waitFor(win, named('Explore'))
-    await evalIn(win, `${named('Explore')}.click(), 1`)
     // The store's default layout is grid, so the list is chosen rather than assumed.
-    await waitFor(win, named('List'))
-    await evalIn(win, `${named('List')}.click(), 1`)
-    await waitFor(win, `document.querySelectorAll('.table .row, .table .card').length > 0`)
+    await openExplore(win, { mode: 'List' })
     await evalIn(win, `document.querySelector('.table .row, .table .card').click(), 1`)
     await sleep(1200)
     // Above the shell's breakpoint the row filled the rail, and the way on is the rail's own.
-    await evalIn(win, `(${named('All details')} || { click() {} }).click(), 1`)
+    await evalIn(win, `(${buttonNamed('All details')} || { click() {} }).click(), 1`)
   } else {
-    await waitFor(win, named('Installed'))
-    await evalIn(win, `${named('Installed')}.click(), 1`)
-    await waitFor(win, `document.querySelectorAll('.table .row, .table .card').length > 0`)
+    await clickNav(win, 'Installed')
+    await waitFor(win, `document.querySelectorAll('.table .row, .table .card').length > 0`, {
+      what: 'a row in Installed'
+    })
     await evalIn(win, `document.querySelector('.table .row, .table .card').click(), 1`)
   }
-  await waitFor(win, `document.querySelector('.detail')`)
+  await waitFor(win, `document.querySelector('.detail')`, { what: 'the chart page' })
 
   const tab = process.env.TAB || 'overview'
   if (tab === 'preview') {
-    await waitFor(win, `${named('PREVIEW')}`)
-    await evalIn(win, `${named('PREVIEW')}.click(), 1`)
+    await clickButton(win, 'PREVIEW')
   }
   // Long enough for the cover to decode and for the container query to settle.
   await sleep(2500)
@@ -464,10 +454,4 @@ app.whenReady().then(async () => {
   }
 
   app.exit(0)
-})
-// Without this a timed-out wait rejects into nothing and the offscreen window sits there
-// producing frames until something kills it.
-process.on('unhandledRejection', (err) => {
-  console.error(`measure-detail failed: ${err instanceof Error ? err.message : String(err)}`)
-  app.exit(1)
 })

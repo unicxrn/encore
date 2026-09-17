@@ -2,8 +2,9 @@
  * Measure the player bar in a real browser engine, without a window.
  *
  *     npm run build
- *     node_modules/electron/dist/electron scripts/measure-player-bar.mjs
- *     SIZES=1121x800 node_modules/electron/dist/electron scripts/measure-player-bar.mjs
+ *     node_modules/electron/dist/electron scripts/measure-player-bar.mjs \
+ *       --ozone-platform=x11 --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+ *     SIZES=1121x800 node_modules/electron/dist/electron scripts/measure-player-bar.mjs ...
  *
  * A sibling of `measure-top-bar.mjs`, built the same way and for the same reason: the jsdom tests
  * apply no CSS and compute no layout, so every control in this bar is zero pixels wide and
@@ -46,16 +47,31 @@
  *             is nothing to use it on. Measured from both surfaces that can start a preview,
  *             because the rail and the chart page register separately.
  *
- * A warning about the playing legs, because the numbers below them are not currently being
- * produced. Neither route reaches a preview in this offscreen window any more: pressed, the rail's
- * Play appends the player element into its viewport, so `openPreview` ran and set `nowPlaying`,
- * and yet nothing that renders from that store moves. Nor does anything else driven by a store
- * write that lands outside a DOM event handler: `measure-rail-panel.mjs`'s Explore leg is the same
- * shape of failure, where a finished search leaves `searched` true and one row in `results` while
- * the grid keeps drawing the empty array its derived computed before them. Both were reproduced
- * against the build at 4666e90, which is before any of the work on this branch. So the legs are
- * kept and made non-fatal rather than deleted: what they measure is still worth measuring on the
- * day store updates reach a component here again.
+ * The playing legs print no numbers, and what stops them is not in this file. Two things that
+ * were in this file have been taken out of their way, because both had to go before the third
+ * could even be seen:
+ *
+ *   - the stub answered no `chartLyricLines`, so the chart page read `'lines' in undefined` and
+ *     crashed to the error screen the moment the Preview tab mounted. The tab was reached, the
+ *     page was gone, and the leg reported the preview as unreachable.
+ *   - this file turned the GPU off through a command line switch of its own, which wins over
+ *     whatever the invocation asked for. A preview is WebGL, and with the GPU off there is no
+ *     WebGL to have, so the ANGLE flags in the invocation above did nothing while that line
+ *     stood. It asks for `enable-unsafe-swiftshader` now, the same switch
+ *     `measure-lane-skin.mjs` sets.
+ *
+ * What is left is the renderer: a `writable` store written after the app has mounted does not
+ * re-render the component reading it in the production bundle. Measured directly, with no preview
+ * involved: press the bar's own Repeat and `aria-pressed` stays `false`, press Installed's
+ * Favourites filter and its `aria-pressed` stays `false`, open Explore's advanced panel and
+ * `#advanced-panel` never appears. `nowPlaying` is the same store and the same silence: pressed,
+ * Play appends the player element into the viewport, which is code that runs after `nowPlaying`
+ * was set, and the bar goes on drawing its resting state. Anything a harness reaches by remounting
+ * the component instead still works, because a fresh mount reads the store's current value, which
+ * is why Home's Surprise me draws cards and Explore's own search does not.
+ *
+ * So the legs are kept and made non-fatal rather than deleted: the route through them is correct
+ * and what they measure is worth measuring on the day a store write moves a component again.
  *
  * Two states, because the empty one is not the one that breaks:
  *
@@ -84,6 +100,15 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  buttonLabelled,
+  clickNav,
+  evalIn,
+  exitOnFailure,
+  reached,
+  sleep,
+  waitFor
+} from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -157,7 +182,10 @@ const answers = {
   appUpdateStatus: () => ({ state: 'idle' }),
   // Enough for buildSource to resolve. The bytes are empty, so the parse behind it fails, which
   // is after the point the name reaches the bar.
-  chartReadFiles: () => [{ fileName: 'notes.chart', data: new Uint8Array() }]
+  chartReadFiles: () => [{ fileName: 'notes.chart', data: new Uint8Array() }],
+  // Unanswered this resolves undefined, and PreviewPane's "'lines' in lyrics" guard only
+  // excludes null, so the Preview tab took the whole chart page down with it.
+  chartLyricLines: () => ({ none: 'No vocals track in this chart' })
 }
 window.encore = new Proxy(
   {},
@@ -173,41 +201,11 @@ window.encore = new Proxy(
 `
 )
 app.setPath('userData', path.join(scratch, 'userdata'))
-app.commandLine.appendSwitch('disable-gpu')
+// Software WebGL, never the machine's driver. A preview has no lane without it, and the harness
+// asking for `disable-gpu` here would override the invocation's own ANGLE flags.
+app.commandLine.appendSwitch('enable-unsafe-swiftshader')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-/**
- * Waits for `expression` and answers whether it arrived, instead of throwing when it does not.
- *
- * For a leg that is allowed to be unreachable. One of them is: the chart page's Preview tab was
- * this harness's one route to a preview at every width, and it stopped delivering one. Measured
- * against the build at 4666e90, which is before any of the work on this branch, so it is not a
- * consequence of it. Without this the first window to try aborts the whole run and the four
- * remaining widths print nothing, which turns one broken leg into no measurement at all.
- */
-async function reached(win, expression, timeoutMs = 8000) {
-  try {
-    await waitFor(win, expression, timeoutMs)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-player-bar')
 
 /**
  * The bar, as layout has it, measured twice: as it is, and with the two new buttons taken out of
@@ -346,14 +344,6 @@ const SHAPE = `(() => {
   }
 })()`
 
-// The sidebar draws a row's count inside the row, so "Installed" is "Installed 1" as far as
-// textContent is concerned and an exact match here waits out its forty seconds and reports the
-// bar as never appearing. Matching the word and whatever follows it is what keeps this harness
-// working when a row gains or loses a badge; `measure-rail-panel.mjs` says the same thing beside
-// its own copy.
-const named = (text) =>
-  `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${text}' || b.textContent.trim().startsWith('${text} '))`
-
 function report(label, shape) {
   const verdict = (ok, bad) => (ok ? 'ok' : bad)
   const { after, before } = shape
@@ -423,96 +413,91 @@ function report(label, shape) {
 // one is made. Without this the quit begins between the two and the next load is cancelled.
 app.on('window-all-closed', () => {})
 
-app
-  .whenReady()
-  .then(async () => {
-    for (const [width, height] of SIZES) {
-      const win = new BrowserWindow({
-        width,
-        height,
-        show: false,
-        webPreferences: {
-          preload: preloadPath,
-          contextIsolation: false,
-          sandbox: false,
-          backgroundThrottling: false,
-          offscreen: true
-        }
-      })
-      win.webContents.setFrameRate(30)
-      await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
-      await waitFor(win, `document.querySelector('.playerbar')`)
-      await sleep(600)
-
-      console.log(`window ${width}x${height}`)
-      report('idle', await evalIn(win, SHAPE))
-
-      // Installed, then the chart, then its Preview tab, then Play. The rail is not in this path on
-      // purpose: below the shell's breakpoint there is no rail to press Play in.
-      //
-      // The signal that a chart has landed is the track on the second line and not the title
-      // above it: the bar draws a title whether or not anything is previewing now, so waiting on
-      // that would pass at once and report the resting bar as the playing one.
-      await waitFor(win, named('Installed'))
-      await evalIn(win, `${named('Installed')}.click(), 1`)
-      await waitFor(win, `document.querySelector('button.row')`)
-      await evalIn(win, `document.querySelector('button.row').click(), 1`)
-      // This leg no longer delivers a preview, and did not before this branch either: run against
-      // the build at 4666e90 it times out at the same step. It is kept, and kept non-fatal,
-      // because it is the only route to a preview at 960 and 1120, and the day it works again is
-      // the day those two widths get their playing numbers back. The rail leg below reports them
-      // in the meantime, at the widths that have a rail.
-      if (await reached(win, `document.querySelector('#tab-preview')`)) {
-        await evalIn(win, `document.querySelector('#tab-preview').click(), 1`)
-        const play = `[...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Play preview')`
-        await waitFor(win, play)
-        await evalIn(win, `${play}.click(), 1`)
+app.whenReady().then(async () => {
+  for (const [width, height] of SIZES) {
+    const win = new BrowserWindow({
+      width,
+      height,
+      show: false,
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: false,
+        sandbox: false,
+        backgroundThrottling: false,
+        offscreen: true
       }
-      if (await reached(win, `document.querySelector('.playerbar .now .track-name')`)) {
-        await sleep(400)
-        report('playing', await evalIn(win, SHAPE))
+    })
+    win.webContents.setFrameRate(30)
+    await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
+    await waitFor(win, `document.querySelector('.playerbar')`, { what: 'the player bar' })
+    await sleep(600)
 
+    console.log(`window ${width}x${height}`)
+    report('idle', await evalIn(win, SHAPE))
+
+    // Installed, then the chart, then its Preview tab, then Play. The rail is not in this path on
+    // purpose: below the shell's breakpoint there is no rail to press Play in.
+    //
+    // The signal that a chart has landed is the track on the second line and not the title
+    // above it: the bar draws a title whether or not anything is previewing now, so waiting on
+    // that would pass at once and report the resting bar as the playing one.
+    await clickNav(win, 'Installed')
+    await waitFor(win, `document.querySelector('button.row')`, { what: 'a row in Installed' })
+    await evalIn(win, `document.querySelector('button.row').click(), 1`)
+    // Kept and kept non-fatal: it is the only route to a preview at 960 and 1120, where the
+    // rail is `display: none` and has no Play to press. See the note at the top for what
+    // stands between the press and a drawn preview.
+    if (await reached(win, `document.querySelector('#tab-preview')`)) {
+      await evalIn(win, `document.querySelector('#tab-preview').click(), 1`)
+      const play = buttonLabelled('Play preview')
+      await waitFor(win, play, { what: "the Preview tab's Play" })
+      await evalIn(win, `${play}.click(), 1`)
+    }
+    if (await reached(win, `document.querySelector('.playerbar .now .track-name')`)) {
+      await sleep(400)
+      report('playing', await evalIn(win, SHAPE))
+
+      // Repeat armed, because it is the one control whose box changes with its state: the
+      // pressed rule adds a dot under the glyph, and a dot that grew the row would grow the bar.
+      await evalIn(win, `document.querySelector('.playerbar .repeat').click(), 1`)
+      await sleep(200)
+      report('playing, repeat on', await evalIn(win, SHAPE))
+    } else {
+      console.log(
+        '  playing       NOT REACHED: nothing named a track in the bar, so `nowPlaying` did not reach it. See the top of this file.'
+      )
+    }
+
+    // And again through the rail, which is the other surface that can start a preview and the
+    // one most previews come from. It registers a viewport of its own, so the answer to `ceded`
+    // has to be the same one; this is what checks that rather than assuming it. Above the
+    // shell's breakpoint only: below it the column is `display: none` and has no Play button.
+    if (await evalIn(win, `getComputedStyle(document.querySelector('.rail')).display !== 'none'`)) {
+      await clickNav(win, 'Installed')
+      await waitFor(win, `document.querySelector('button.row')`, { what: 'a row in Installed' })
+      const fill = `[...document.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') || '').startsWith('Preview '))`
+      await waitFor(win, fill, { what: "a row's Preview button" })
+      await evalIn(win, `${fill}.click(), 1`)
+      await waitFor(win, `document.querySelector('.rail .preview button.play')`, {
+        what: "the rail's Play"
+      })
+      await evalIn(win, `document.querySelector('.rail .preview button.play').click(), 1`)
+      if (await reached(win, `document.querySelector('.playerbar .now .track-name')`, 20000)) {
+        await sleep(400)
+        report('playing from the rail', await evalIn(win, SHAPE))
         // Repeat armed, because it is the one control whose box changes with its state: the
-        // pressed rule adds a dot under the glyph, and a dot that grew the row would grow the bar.
+        // pressed rule adds a dot under the glyph, and a dot that grew the row would grow the
+        // bar.
         await evalIn(win, `document.querySelector('.playerbar .repeat').click(), 1`)
         await sleep(200)
-        report('playing, repeat on', await evalIn(win, SHAPE))
+        report('playing from the rail, repeat on', await evalIn(win, SHAPE))
       } else {
-        console.log('  playing       NOT REACHED through the chart page; see the note at this leg')
+        console.log(
+          '  rail leg      NOT REACHED: the rail started a preview and the bar did not follow. See the top of this file.'
+        )
       }
-
-      // And again through the rail, which is the other surface that can start a preview and the
-      // one most previews come from. It registers a viewport of its own, so the answer to `ceded`
-      // has to be the same one; this is what checks that rather than assuming it. Above the
-      // shell's breakpoint only: below it the column is `display: none` and has no Play button.
-      if (
-        await evalIn(win, `getComputedStyle(document.querySelector('.rail')).display !== 'none'`)
-      ) {
-        await evalIn(win, `${named('Installed')}.click(), 1`)
-        await waitFor(win, `document.querySelector('button.row')`)
-        const fill = `[...document.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') || '').startsWith('Preview '))`
-        await waitFor(win, fill)
-        await evalIn(win, `${fill}.click(), 1`)
-        await waitFor(win, `document.querySelector('.rail .preview button.play')`)
-        await evalIn(win, `document.querySelector('.rail .preview button.play').click(), 1`)
-        if (await reached(win, `document.querySelector('.playerbar .now .track-name')`, 20000)) {
-          await sleep(400)
-          report('playing from the rail', await evalIn(win, SHAPE))
-          // Repeat armed, because it is the one control whose box changes with its state: the
-          // pressed rule adds a dot under the glyph, and a dot that grew the row would grow the
-          // bar.
-          await evalIn(win, `document.querySelector('.playerbar .repeat').click(), 1`)
-          await sleep(200)
-          report('playing from the rail, repeat on', await evalIn(win, SHAPE))
-        } else {
-          console.log('  rail leg      NOT REACHED')
-        }
-      }
-      win.destroy()
     }
-    app.exit(0)
-  })
-  .catch((err) => {
-    console.error(err)
-    app.exit(1)
-  })
+    win.destroy()
+  }
+  app.exit(0)
+})

@@ -64,6 +64,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { clickNav, evalIn, exitOnFailure, openExplore, sleep, waitFor } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -154,21 +155,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-explore-row')
 
 /**
  * What the rows are, as layout has it.
@@ -436,24 +423,15 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
   const view = process.env.VIEW || 'list'
-  // Exact text first, then the same word with something after it. The sidebar's nav items carry
-  // a count inside the button now, so 'Installed' is 'Installed 30' to `textContent` and an
-  // exact match waited forty seconds for a button that was on screen the whole time. The layout
-  // toggles below are still exact, and they match first.
-  const named = (label) =>
-    `([...document.querySelectorAll('button')].find(b => b.textContent.trim() === '${label}')` +
-    ` || [...document.querySelectorAll('button')].find(b => /^${label}\\b/.test(b.textContent.trim())))`
-
-  const nav = view === 'installed' ? 'Installed' : 'Explore'
-  await waitFor(win, named(nav))
-  await evalIn(win, `${named(nav)}.click(), 1`)
-  if (view !== 'installed') {
+  if (view === 'installed') {
+    await clickNav(win, 'Installed')
+  } else {
     // The store's default layout is grid, so both of these are chosen rather than assumed.
-    const layout = view === 'grid' ? 'Grid' : 'List'
-    await waitFor(win, named(layout))
-    await evalIn(win, `${named(layout)}.click(), 1`)
+    await openExplore(win, { mode: view === 'grid' ? 'Grid' : 'List' })
   }
-  await waitFor(win, `document.querySelectorAll('.row, .card').length > 0`)
+  await waitFor(win, `document.querySelectorAll('.row, .card').length > 0`, {
+    what: view === 'installed' ? 'a row in Installed' : 'a row or a card in Explore'
+  })
   // Long enough for the covers to decode and for the pages that fill the first screen to land.
   await sleep(4000)
 
