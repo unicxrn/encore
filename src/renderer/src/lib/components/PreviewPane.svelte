@@ -22,6 +22,7 @@
     togglePlay
   } from '../stores/preview-controller'
   import { settings } from '../stores/settings'
+  import Highway from './Highway.svelte'
   import type { ChartTarget } from './Home.svelte'
 
   let { target, instruments }: { target: ChartTarget; instruments: MatrixRow[] } = $props()
@@ -29,16 +30,18 @@
   interface DiffOption {
     value: string
     label: string
+    /** The word on its own, for the player bar, where the matrix letter would be noise. */
+    word: string
     key: DiffKey
   }
 
   // Difficulty labels carry the matrix letter so the select and the E/M/H/X
   // matrix on the Overview tab read as the same vocabulary.
   const DIFFICULTY_OPTIONS: readonly DiffOption[] = [
-    { value: 'expert', label: 'Expert (X)', key: 'X' },
-    { value: 'hard', label: 'Hard (H)', key: 'H' },
-    { value: 'medium', label: 'Medium (M)', key: 'M' },
-    { value: 'easy', label: 'Easy (E)', key: 'E' }
+    { value: 'expert', label: 'Expert (X)', word: 'Expert', key: 'X' },
+    { value: 'hard', label: 'Hard (H)', word: 'Hard', key: 'H' },
+    { value: 'medium', label: 'Medium (M)', word: 'Medium', key: 'M' },
+    { value: 'easy', label: 'Easy (E)', word: 'Easy', key: 'E' }
   ]
 
   // Playable instruments. Remote charts get the API's per-difficulty matrix; local charts
@@ -137,6 +140,14 @@
     return target.chart.albumArtMd5 ? albumArtUrl(target.chart.albumArtMd5) : null
   })
 
+  // What the player bar's second line names the track as. Read off the same two lists these
+  // selects are built from, so the bar cannot name a track this pane does not offer, and built
+  // the same way the rail builds its own.
+  const trackName = $derived(
+    `${DIFFICULTY_OPTIONS.find((o) => o.value === difficulty)?.word ?? difficulty} ` +
+      `${instrumentList.find((o) => o.value === instrument)?.label ?? instrument}`
+  )
+
   async function buildSource(): Promise<PreviewSource> {
     if (target.kind === 'remote') {
       const chart = target.chart
@@ -165,6 +176,7 @@
         title,
         artist,
         artUrl: coverUrl,
+        track: trackName,
         source,
         instrument,
         difficulty,
@@ -403,203 +415,246 @@
   })
 </script>
 
-<div class="pane">
-  <section class="card options">
-    <h2 class="card-head mono">PREVIEW OPTIONS</h2>
+<!-- The box exists to be measured. `container-type` cannot be read by the element's own rules,
+     only by its descendants, so the pane that changes shape has to sit inside the thing that
+     knows how wide it is. Unnamed on purpose: the query below resolves to the nearest container
+     ancestor, which keeps this pane laying itself out correctly wherever it is mounted. -->
+<div class="pane-box">
+  <div class="pane">
+    <section class="card options">
+      <h2 class="card-head mono">PREVIEW OPTIONS</h2>
 
-    <label class="field">
-      <span class="label mono">INSTRUMENT</span>
-      <!-- Disabled while a load is in flight: changing the selection mid-open
+      <label class="field">
+        <span class="label mono">INSTRUMENT</span>
+        <!-- Disabled while a load is in flight: changing the selection mid-open
            would re-enter open() against a preview that hasn't landed yet. -->
-      <select
-        value={instrument}
-        disabled={opening}
-        onchange={(e) => {
-          instrument = e.currentTarget.value
-          reopenIfOpen()
-        }}
-      >
-        {#each instrumentList as opt (opt.value)}
-          <option value={opt.value}>{opt.label}</option>
-        {/each}
-      </select>
-    </label>
+        <select
+          value={instrument}
+          disabled={opening}
+          onchange={(e) => {
+            instrument = e.currentTarget.value
+            reopenIfOpen()
+          }}
+        >
+          {#each instrumentList as opt (opt.value)}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
+        </select>
+      </label>
 
-    <label class="field">
-      <span class="label mono">DIFFICULTY</span>
-      <select
-        value={difficulty}
-        disabled={opening}
-        onchange={(e) => {
-          difficulty = e.currentTarget.value
-          reopenIfOpen()
-        }}
-      >
-        {#each difficultyList as opt (opt.value)}
-          <option value={opt.value}>{opt.label}</option>
-        {/each}
-      </select>
-    </label>
+      <label class="field">
+        <span class="label mono">DIFFICULTY</span>
+        <select
+          value={difficulty}
+          disabled={opening}
+          onchange={(e) => {
+            difficulty = e.currentTarget.value
+            reopenIfOpen()
+          }}
+        >
+          {#each difficultyList as opt (opt.value)}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
+        </select>
+      </label>
 
-    <label class="toggle">
-      <span class="label mono">ANIMATIONS</span>
-      <input
-        type="checkbox"
-        checked={animations}
-        disabled={opening}
-        onchange={(e) => {
-          animations = e.currentTarget.checked
-          reopenIfOpen()
-        }}
-      />
-      <span class="switch" aria-hidden="true"></span>
-    </label>
+      <label class="toggle">
+        <span class="label mono">ANIMATIONS</span>
+        <input
+          type="checkbox"
+          checked={animations}
+          disabled={opening}
+          onchange={(e) => {
+            animations = e.currentTarget.checked
+            reopenIfOpen()
+          }}
+        />
+        <span class="switch" aria-hidden="true"></span>
+      </label>
 
-    <div class="field">
-      <span class="label mono">VOLUME <span class="volnum">{volume}</span></span>
-      <input
-        class="vol"
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        value={volume}
-        aria-label="Preview volume"
-        oninput={(e) => onVolumeInput(Number(e.currentTarget.value))}
-        onchange={() => setPlayerVolume(volume)}
-      />
-    </div>
-  </section>
+      <div class="field">
+        <span class="label mono">VOLUME <span class="volnum">{volume}</span></span>
+        <input
+          class="vol"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={volume}
+          aria-label="Preview volume"
+          oninput={(e) => onVolumeInput(Number(e.currentTarget.value))}
+          onchange={() => setPlayerVolume(volume)}
+        />
+      </div>
+    </section>
 
-  <div class="stage">
-    <div class="screen">
-      <div class="viewport" bind:this={viewportEl}></div>
-      {#if currentLyric !== null}
-        <!-- Keyed on the line so a new line remounts and replays the fade-in;
+    <div class="stage">
+      <div class="screen">
+        <div class="viewport" bind:this={viewportEl}></div>
+        <!-- The still lane, over the viewport rather than inside it: `.viewport` is what the
+             controller appends the player element into and Svelte never renders into it, and
+             the player that lands there is opaque anyway. The same lane the rail draws, at the
+             size this pane gives it. -->
+        <div class="rest" class:gone={$nowPlaying !== null}>
+          <Highway state={opening ? 'opening' : 'rest'} />
+        </div>
+        {#if currentLyric !== null}
+          <!-- Keyed on the line so a new line remounts and replays the fade-in;
              the global reduced-motion rule in tokens.css turns that off. -->
-        {#key currentLyric}
-          <p class="lyric">{currentLyric.text}</p>
-        {/key}
-      {/if}
-    </div>
-
-    <div class="transport">
-      <button
-        class="play"
-        class:accent={$nowPlaying !== null}
-        disabled={opening}
-        onclick={onPlayClick}
-        aria-label={isPlaying ? 'Pause preview' : 'Play preview'}
-      >
-        {#if isPlaying}
-          <svg viewBox="0 0 24 24" aria-hidden="true"
-            ><rect x="8" y="7" width="3" height="10" /><rect
-              x="13"
-              y="7"
-              width="3"
-              height="10"
-            /></svg
-          >
-        {:else}
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5 17.5 12 9 17.5Z" /></svg>
+          {#key currentLyric}
+            <p class="lyric">{currentLyric.text}</p>
+          {/key}
         {/if}
-      </button>
-      <span class="time mono">{totalMs > 0 ? msToTime(currentMs) : '0:00'}</span>
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="seek"
-        class:disabled={$nowPlaying === null}
-        onclick={onSeekClick}
-        onmousemove={onSeekMove}
-        onmouseleave={() => (hoverFraction = null)}
-      >
-        {#if densityPath}
-          <!-- preserveAspectRatio="none": the viewBox is bucket-index by
+      </div>
+
+      <div class="transport">
+        <button
+          class="play"
+          class:accent={$nowPlaying !== null}
+          disabled={opening}
+          onclick={onPlayClick}
+          aria-label={isPlaying ? 'Pause preview' : 'Play preview'}
+        >
+          {#if isPlaying}
+            <svg viewBox="0 0 24 24" aria-hidden="true"
+              ><rect x="8" y="7" width="3" height="10" /><rect
+                x="13"
+                y="7"
+                width="3"
+                height="10"
+              /></svg
+            >
+          {:else}
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5 17.5 12 9 17.5Z" /></svg>
+          {/if}
+        </button>
+        <span class="time mono">{totalMs > 0 ? msToTime(currentMs) : '0:00'}</span>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="seek"
+          class:disabled={$nowPlaying === null}
+          onclick={onSeekClick}
+          onmousemove={onSeekMove}
+          onmouseleave={() => (hoverFraction = null)}
+        >
+          {#if densityPath}
+            <!-- preserveAspectRatio="none": the viewBox is bucket-index by
                normalised-count, so it is meant to be stretched on both axes.
                The histogram is drawn twice, the second copy clipped to the
                played portion, so the bar reads as one object rather than a grey
                decoration sitting above a purple one. -->
-          <svg
-            class="density"
-            style:width="{densityWidth}%"
-            viewBox="0 0 {$chartMap?.density.length ?? 0} 1"
-            preserveAspectRatio="none"
-            aria-hidden="true"
-          >
-            <path class="rest" d={densityPath} />
-            <path
-              class="past"
-              d={densityPath}
-              style:clip-path="inset(0 {100 - densityPlayed}% 0 0)"
-            />
-          </svg>
-        {/if}
-        {#each sectionMarks as mark (mark.key)}
-          <span class="mark" style:left="{mark.percent}%"></span>
-        {/each}
-        <div class="track">
-          <div class="fill" style:width="{percent}%"></div>
+            <svg
+              class="density"
+              style:width="{densityWidth}%"
+              viewBox="0 0 {$chartMap?.density.length ?? 0} 1"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path class="rest" d={densityPath} />
+              <path
+                class="past"
+                d={densityPath}
+                style:clip-path="inset(0 {100 - densityPlayed}% 0 0)"
+              />
+            </svg>
+          {/if}
+          {#each sectionMarks as mark (mark.key)}
+            <span class="mark" style:left="{mark.percent}%"></span>
+          {/each}
+          <div class="track">
+            <div class="fill" style:width="{percent}%"></div>
+          </div>
+          {#if hoveredSection !== null && hoverFraction !== null}
+            <span class="tip mono" style:left="{hoverFraction * 100}%">{hoveredSection}</span>
+          {/if}
         </div>
-        {#if hoveredSection !== null && hoverFraction !== null}
-          <span class="tip mono" style:left="{hoverFraction * 100}%">{hoveredSection}</span>
+        <span class="time mono">{totalMs > 0 ? msToTime(totalMs) : '0:00'}</span>
+        <button
+          class="chip"
+          disabled={$nowPlaying === null}
+          onclick={toggleFullscreen}
+          title="Fullscreen (F)"
+          aria-label="Toggle fullscreen preview"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true"
+            ><path
+              d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1h-4zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zM.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5z"
+            /></svg
+          >
+        </button>
+        <button
+          class="chip lyrics"
+          class:on={showLyrics}
+          disabled={lyricsReason !== null}
+          aria-pressed={showLyrics}
+          title={lyricsReason ?? (showLyrics ? 'Hide lyrics' : 'Show lyrics')}
+          onclick={() => (showLyrics = !showLyrics)}
+        >
+          Lyrics
+        </button>
+      </div>
+
+      <div class="status">
+        <p class="state mono">{stateLine}</p>
+        {#if chartSummary}
+          <p class="legend mono">{chartSummary}</p>
         {/if}
       </div>
-      <span class="time mono">{totalMs > 0 ? msToTime(totalMs) : '0:00'}</span>
-      <button
-        class="chip"
-        disabled={$nowPlaying === null}
-        onclick={toggleFullscreen}
-        title="Fullscreen (F)"
-        aria-label="Toggle fullscreen preview"
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true"
-          ><path
-            d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1h-4zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zM.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5z"
-          /></svg
-        >
-      </button>
-      <button
-        class="chip lyrics"
-        class:on={showLyrics}
-        disabled={lyricsReason !== null}
-        aria-pressed={showLyrics}
-        title={lyricsReason ?? (showLyrics ? 'Hide lyrics' : 'Show lyrics')}
-        onclick={() => (showLyrics = !showLyrics)}
-      >
-        Lyrics
-      </button>
-    </div>
-
-    <div class="status">
-      <p class="state mono">{stateLine}</p>
-      {#if chartSummary}
-        <p class="legend mono">{chartSummary}</p>
-      {/if}
     </div>
   </div>
 </div>
 
 <style>
+  .pane-box {
+    container-type: inline-size;
+  }
+  /**
+   * One column until there is room for two.
+   *
+   * The pane is inside the chart page, whose own column is 469px wide at a 1121px window and
+   * 628px at a 1280px one, because the preview rail takes 374px back above the shell's
+   * breakpoint. At 469px the old fixed `260px` options column left the highway 191px, which is
+   * a 16:9 video 107px tall. Below 700px the options go above the stage and lay themselves out
+   * as a row, and the highway takes the whole width.
+   */
   .pane {
     display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
     align-items: start;
+  }
+  @container (min-width: 700px) {
+    .pane {
+      grid-template-columns: 260px minmax(0, 1fr);
+    }
+    .options {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+    }
   }
   .mono {
     font-family: var(--font-mono);
   }
   .card {
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
+    background: var(--ground-3);
+    border: 1px solid var(--border-1);
     border-radius: var(--radius);
+    box-shadow: var(--elev-2);
   }
   .options {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    /* Bottom-aligned while the four controls sit in a row: the animations switch carries its
+       label beside it and the other three carry theirs above, so tops do not line up and
+       bottoms do. In the two-column layout above there is one control per row and this is
+       overridden back to stretch. */
+    align-items: end;
     gap: 14px;
     padding: 14px;
+  }
+  .options .card-head {
+    grid-column: 1 / -1;
   }
   .card-head {
     font-size: var(--fs-caption);
@@ -624,9 +679,9 @@
   select {
     appearance: none;
     width: 100%;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline);
-    border-radius: 7px;
+    background: var(--ground-4);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
     color: var(--text-1);
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);
@@ -635,7 +690,7 @@
     transition: border-color var(--t-fast) var(--ease);
   }
   select:focus {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
   }
   select:disabled {
     opacity: 0.5;
@@ -663,8 +718,8 @@
     height: 18px;
     flex-shrink: 0;
     border-radius: 999px;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline);
+    background: var(--ground-4);
+    border: 1px solid var(--border-1);
     transition: background var(--t-fast) var(--ease);
   }
   .switch::after {
@@ -713,8 +768,8 @@
   }
   .viewport {
     aspect-ratio: 16 / 9;
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
+    background: var(--ground-0);
+    border: 1px solid var(--border-1);
     border-radius: var(--radius);
     overflow: hidden;
   }
@@ -734,7 +789,7 @@
     width: fit-content;
     margin-inline: auto;
     padding: 6px 14px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: rgba(0, 0, 0, 0.6);
     color: #fff;
     font-family: var(--font-ui);
@@ -756,6 +811,30 @@
     width: 100%;
     height: 100%;
   }
+  /* Faded out rather than torn out, and clipped to the viewport's own corners because it sits
+     over it rather than in it. Inert to the pointer throughout, so the player's own clicks and
+     shortcuts land on the player. */
+  /* Inset by the viewport's border and not by nothing. `.screen` is the size of the viewport's
+     border box and the player element fills its content box, so a lane at inset 0 is drawn two
+     pixels wider and a pixel higher than the lane that replaces it. The rail's own frame carries
+     its border on the element outside both and needs no such offset. */
+  .rest {
+    position: absolute;
+    inset: 1px;
+    border-radius: var(--radius);
+    overflow: hidden;
+    pointer-events: none;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear;
+  }
+  .rest.gone {
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--t-med) var(--ease),
+      visibility 0s linear var(--t-med);
+  }
 
   .transport {
     display: flex;
@@ -766,9 +845,9 @@
     width: 34px;
     height: 34px;
     flex-shrink: 0;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-1);
     border-radius: 50%;
-    background: var(--surface-1);
+    background: var(--ground-4);
     color: var(--text-2);
     display: flex;
     align-items: center;
@@ -812,9 +891,9 @@
     width: 26px;
     height: 26px;
     flex-shrink: 0;
-    border: 1px solid var(--hairline);
-    border-radius: 7px;
-    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    background: var(--ground-4);
     color: var(--text-3);
     display: flex;
     align-items: center;
@@ -826,7 +905,7 @@
   }
   .chip:hover:not(:disabled) {
     color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
   }
   .chip:disabled {
     opacity: 0.4;
@@ -886,7 +965,7 @@
   .track {
     height: 4px;
     border-radius: 2px;
-    background: var(--surface-2);
+    background: var(--ground-0);
     overflow: hidden;
   }
   .fill {
@@ -902,7 +981,7 @@
     bottom: 8px;
     width: 1px;
     height: 18px;
-    background: var(--hairline);
+    background: var(--border-2);
     pointer-events: none;
   }
   .tip {
@@ -918,9 +997,9 @@
        Longer section names ellipsise. */
     max-width: 160px;
     padding: 3px 7px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--surface-2);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-sm);
+    background: var(--ground-4);
     color: var(--text-1);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);

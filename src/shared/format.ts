@@ -37,23 +37,40 @@ export function diffDisplay(diff: number | null | undefined): string {
 }
 
 /**
- * Render one instrument's difficulty cell for the library list.
+ * What a chart says about one instrument: nothing, a part with no rating, or a rating.
  *
- * Three distinct states the old single-number column could not tell apart: rated, charted but
- * unrated, and not charted. An empty string means "this chart has no such track". Showing a
- * dash there would claim the instrument exists with no rating.
- *
- * An empty `instruments` means "we have not looked", not "there is nothing": rows scanned
- * before the note data was stored carry an empty list until the next rescan, so they fall back
- * to the song.ini rating rather than rendering an entirely blank column.
+ * Three states rather than a number, because the two that are not a number are different
+ * claims and a single field cannot hold both. `absent` says the chart has no such track.
+ * `unrated` says the track is there and nobody wrote down how hard it is. Collapsing the
+ * second into the first is the misreading this type exists to prevent: it would tell a
+ * drummer that a chart with drums has none.
  */
-export function instrumentDiff(
+export type PartState = { kind: 'absent' } | { kind: 'unrated' } | { kind: 'rated'; tier: number }
+
+/**
+ * Decide which of the three a chart is in for one instrument.
+ *
+ * `instruments` is scan-chart's reading of the chart file and `diff` is what song.ini claims,
+ * and the two disagree in the wild: measured against api.enchor.us on 2026-09-15, six charts
+ * in a hundred carry a positive rating for a part their notes do not contain. That is
+ * scan-chart's `extraValue` issue, a Rock Band conversion artifact, so the notes win. A rating
+ * is a line of text a converter copied; the instruments list was read from the chart itself.
+ *
+ * An empty `instruments` means "we have not looked", not "there is nothing". Catalog rows
+ * scanned before note counts were stored carry an empty list until the next rescan, so they
+ * fall back to the rating rather than reporting a library of charts with no instruments.
+ *
+ * `-1` and null are the same answer from two sources: song.ini's "unset" sentinel reaches the
+ * renderer raw from the Encore API and normalized to null by `rating()` in the scanner.
+ */
+export function partState(
   instruments: readonly string[],
   instrument: string,
   diff: number | null | undefined
-): string {
-  if (instruments.length > 0 && !instruments.includes(instrument)) return ''
-  return diffDisplay(diff)
+): PartState {
+  if (instruments.length > 0 && !instruments.includes(instrument)) return { kind: 'absent' }
+  if (diff == null || diff < 0) return { kind: 'unrated' }
+  return { kind: 'rated', tier: diff }
 }
 
 /**

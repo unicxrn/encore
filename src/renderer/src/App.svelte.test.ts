@@ -15,6 +15,17 @@ import { appUpdate } from './lib/stores/app-update'
 import { targetCapability, type AppUpdateStatus } from '../../shared/app-update'
 
 /**
+ * A version the running build is not already on. Derived rather than written down, because the
+ * literal that used to sit here was `0.4.0`, and the release that made the app 0.4.0 turned two
+ * update-prompt tests red: an update to the version you are running is not an update, so the
+ * prompt correctly refused to draw and the assertions read the what's-new panel instead.
+ */
+const NEXT_VERSION = ((): string => {
+  const [major, minor] = APP_VERSION.split('.')
+  return `${major}.${Number(minor) + 1}.0`
+})()
+
+/**
  * The Tools view, replaced by something that throws while Svelte renders it.
  *
  * A Svelte 5 component is a function the compiler calls to build its DOM, so a function that
@@ -94,6 +105,16 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
     }),
     catalogQuery: vi.fn().mockResolvedValue([]),
     catalogCount: vi.fn().mockResolvedValue(0),
+    // Read once for the launch, for the sidebar's count and for the view: an empty report is the
+    // right answer here, since a library with duplicates in it would put paths and buttons on
+    // screen for every test below to step around.
+    catalogDuplicates: vi.fn().mockResolvedValue({
+      identical: [],
+      versions: [],
+      alternates: [],
+      totalCharts: 0,
+      unidentifiedCharts: 0
+    }),
     sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null }),
     windowControl: vi.fn().mockResolvedValue(undefined),
     backupsList: vi.fn().mockResolvedValue({ backups: [], totalBytes: 0 }),
@@ -107,6 +128,20 @@ function stubEncore(over: Record<string, unknown> = {}): Record<string, ReturnTy
       quarantined: [],
       usable: false
     }),
+    // Settings asks what Encore makes of the stored Clone Hero path as soon as it mounts, the
+    // same way it asks about the score folder. Nothing is chosen here, which is the state every
+    // user starts in.
+    gameExecutable: vi.fn().mockResolvedValue({
+      path: '',
+      platform: 'linux',
+      supported: true,
+      kind: 'missing',
+      executable: false,
+      usable: false
+    }),
+    pickExecutable: vi.fn().mockResolvedValue(null),
+    gameLaunch: vi.fn().mockResolvedValue(undefined),
+    chartReveal: vi.fn().mockResolvedValue(undefined),
     // The Stats tab asks the gate first and draws its "nothing recorded" sentence on this,
     // which is the answer for a machine with no Clone Hero on it.
     playStatus: vi.fn().mockResolvedValue({
@@ -289,14 +324,29 @@ describe('App keyboard shortcuts', () => {
     ['Digit1', 'Home'],
     ['Digit2', 'Explore'],
     ['Digit3', 'Installed'],
-    ['Digit4', 'Asset Studio'],
-    ['Digit5', 'Stats'],
-    ['Digit6', 'Issues'],
-    ['Digit7', 'Settings']
+    ['Digit4', 'Setlists'],
+    ['Digit5', 'Asset Studio'],
+    ['Digit6', 'Statistics'],
+    ['Digit7', 'Issues'],
+    ['Digit8', 'Duplicates'],
+    ['Digit9', 'Metadata editor']
   ])('Ctrl+%s goes to %s', async (code, label) => {
     render(App)
     press(document.body, { key: 'x', code, ctrlKey: true })
     await waitFor(() => expect(navItem(label).getAttribute('aria-current')).toBe('page'))
+  })
+
+  // Settings came off the digits when Setlists went in fourth, and is still one click away in two
+  // places. Pinned end to end rather than only in the matcher, because "reachable" is a claim
+  // about the app rather than about the decision table.
+  it('reaches Settings by its row, which is what losing the digit cost', async () => {
+    render(App)
+    press(document.body, { key: 'x', code: 'Digit9', ctrlKey: true })
+    await waitFor(() =>
+      expect(navItem('Metadata editor').getAttribute('aria-current')).toBe('page')
+    )
+    await fireEvent.click(navItem('Settings'))
+    await waitFor(() => expect(navItem('Settings').getAttribute('aria-current')).toBe('page'))
   })
 
   it('focuses the search field on Ctrl+K', async () => {
@@ -662,17 +712,28 @@ describe('App downloads panel', () => {
     await waitFor(() => expect(panelOpen()).toBe(false))
   })
 
+  /**
+   * Open the chart page from Home, which is two steps rather than one.
+   *
+   * A Home row fills the rail, as an Explore row does, and the route to the page is the rail's
+   * own All details beside the chart it is showing. Both tests below are about what the panel
+   * does when the PAGE opens, so the rail is on the way rather than the destination.
+   */
+  const railDetails = (): Promise<HTMLElement> =>
+    screen.findByRole('button', { name: 'All details' })
+
   it('closes when a chart opens', async () => {
     stubEncore({
       settingsGet: vi.fn().mockResolvedValue(homeSettings()),
       catalogQuery: vi.fn().mockResolvedValue([record])
     })
     render(App)
-    const card = await screen.findByRole('button', { name: /YYZ/ })
+    await fireEvent.click(await screen.findByRole('button', { name: /YYZ/ }))
+    const details = await railDetails()
     await fireEvent.click(navItem('Downloads'))
     await screen.findByText(PANEL)
 
-    await fireEvent.click(card)
+    await fireEvent.click(details)
 
     expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
     await waitFor(() => expect(panelOpen()).toBe(false))
@@ -702,6 +763,7 @@ describe('App downloads panel', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /YYZ/ }))
+    await fireEvent.click(await railDetails())
     await screen.findByRole('heading', { name: 'YYZ' })
     await fireEvent.click(navItem('Downloads'))
     await screen.findByText(PANEL)
@@ -740,7 +802,7 @@ describe('App update prompt', () => {
       target: 'appimage',
       canApply,
       note,
-      state: { kind: 'available', version: '0.4.0' },
+      state: { kind: 'available', version: NEXT_VERSION },
       ...over
     }
   }
@@ -755,8 +817,10 @@ describe('App update prompt', () => {
     render(App)
 
     const prompt = await screen.findByRole('dialog', { name: PROMPT })
-    expect(prompt.textContent).toContain('Encore 0.4.0 is available')
-    expect(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' })).toBeTruthy()
+    expect(prompt.textContent).toContain(`Encore ${NEXT_VERSION} is available`)
+    expect(
+      screen.getByRole('button', { name: `Download and install Encore ${NEXT_VERSION}` })
+    ).toBeTruthy()
   })
 
   it('offers no install on a copy Encore cannot replace, and says what does', async () => {
@@ -862,7 +926,9 @@ describe('App update prompt', () => {
     render(App)
     await screen.findByRole('dialog', { name: PROMPT })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Download and install Encore 0.4.0' }))
+    await fireEvent.click(
+      screen.getByRole('button', { name: `Download and install Encore ${NEXT_VERSION}` })
+    )
 
     await waitFor(() => expect(api.appUpdateDownload).toHaveBeenCalledTimes(1))
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
@@ -876,10 +942,12 @@ describe('App update prompt', () => {
     render(App)
     await screen.findByRole('dialog', { name: PROMPT })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'What is new in Encore 0.4.0' }))
+    await fireEvent.click(
+      screen.getByRole('button', { name: `What is new in Encore ${NEXT_VERSION}` })
+    )
 
     const notes = await screen.findByRole('dialog', { name: NOTES })
-    expect(notes.textContent).toContain('Encore 0.4.0 is available')
+    expect(notes.textContent).toContain(`Encore ${NEXT_VERSION} is available`)
     expect(screen.queryByRole('dialog', { name: PROMPT })).toBeNull()
     // A regression guard on the layer itself rather than on either of the two things that keep
     // it clear: one card, whatever route put something on it.
@@ -908,7 +976,7 @@ describe('App launch collisions', () => {
       currentVersion: '0.3.0',
       target: 'appimage',
       ...targetCapability('appimage'),
-      state: { kind: 'available', version: '0.4.0' }
+      state: { kind: 'available', version: NEXT_VERSION }
     }
   }
 
@@ -1024,5 +1092,404 @@ describe('App update prompt, when the push was missed', () => {
     // The download is in progress, so there is no offer to accept and no prompt.
     await new Promise((r) => setTimeout(r, 10))
     expect(screen.queryByRole('dialog', { name: 'Update available' })).toBeNull()
+  })
+})
+
+/**
+ * Explore's destination, wired end to end: the row, the rail and the one route out of it.
+ *
+ * The parts are pinned in their own files (Browse hands its chart to a callback, the rail offers
+ * All details, `railOnScreen` reads a display). What only App can answer is what a user sees: the
+ * list still on screen behind a filled rail, and the chart page reached from the rail rather than
+ * from the row.
+ *
+ * jsdom applies no stylesheet, so the media query that hides the rail below 1120px never runs
+ * here. The narrow case is reached the way `Rail.svelte.test.ts` reaches it, by setting the
+ * column's display directly, because that is exactly what the query does and what the code reads.
+ */
+describe('App: Explore fills the rail rather than leaving the list', () => {
+  const EVERLONG = {
+    chartId: 1,
+    songId: 42,
+    md5: 'a'.repeat(32),
+    albumArtMd5: null,
+    hasVideoBackground: false,
+    name: 'Everlong',
+    artist: 'Foo Fighters',
+    album: '',
+    genre: '',
+    year: '1997',
+    charter: 'CharterA',
+    song_length: 250_000,
+    diff_guitar: 4,
+    diff_bass: null,
+    diff_drums: null,
+    diff_keys: null,
+    diff_vocals: null
+  }
+
+  /** The row's own control, named after the chart and nothing else. */
+  const ROW = /^Everlong by Foo Fighters, charted by CharterA$/
+
+  afterEach(async () => {
+    globalQuery.set('')
+    browseSearch.setQuery('')
+    // The store debounces 300ms; waited out here rather than landing mid-test in the next one.
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  /**
+   * Explore, showing one row.
+   *
+   * The term is this block's own and appears in no other test, because `browseSearch` is module
+   * state shared across the whole run and answers a question it has already been asked from what
+   * it holds. Set on `globalQuery` rather than on the store, since Explore re-applies the global
+   * query from an effect on every mount and would otherwise overwrite it.
+   */
+  async function showExplore(): Promise<void> {
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: [EVERLONG] })
+    stubEncore({ existsByMeta: vi.fn().mockResolvedValue([false]) })
+    settingsLoaded.set(true)
+    globalQuery.set('everlong in the rail')
+    render(App)
+    await fireEvent.click(navItem('Explore'))
+    await screen.findByRole('button', { name: ROW }, { timeout: 3000 })
+  }
+
+  /** The rail's column, whatever it is currently showing. */
+  function rail(): HTMLElement {
+    const found = document.querySelector('.rail')
+    if (found === null) throw new Error('no rail in the document')
+    return found as HTMLElement
+  }
+
+  it('shows the chart in the rail and leaves Explore where it was', async () => {
+    await showExplore()
+    // The rail's empty state, which is what a session that has picked nothing shows.
+    expect(rail().textContent).toContain('Open a chart and it stays here')
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+    // The list is still the view, with its row still in it. Detail would have replaced both.
+    expect(navItem('Explore').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('button', { name: ROW })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+
+  it('opens the chart page from the rail, which is the one route to it', async () => {
+    await showExplore()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    // The chart page, which carries the four things the rail does not: the full difficulty
+    // matrix, the version check, the ABOUT table and the chips that search on a charter.
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ROW })).toBeNull()
+  })
+
+  it('comes back to the list, still holding its rows, when the page is left', async () => {
+    await showExplore()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('Everlong'))
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+    await screen.findByRole('button', { name: 'Back' })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(await screen.findByRole('button', { name: ROW })).toBeTruthy()
+  })
+
+  // Below the shell's breakpoint the rail is not drawn, and a row click that only filled a
+  // hidden column would be a click with nothing to show for it. There the chart page is the
+  // only place the answer can go.
+  it('opens the chart page instead when the rail is not drawn', async () => {
+    await showExplore()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeTruthy()
+  })
+
+  // The rail is pointed at the chart either way, so a window widened after the fact finds the
+  // column already holding what was picked while it was hidden.
+  it('still points the rail at the chart it opened the page for', async () => {
+    await showExplore()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await screen.findByRole('button', { name: 'Back' })
+    rail().style.display = ''
+
+    expect(rail().textContent).toContain('Everlong')
+  })
+})
+
+/**
+ * Home's destination, wired end to end, and it is Explore's.
+ *
+ * Home is the other view where charts are scanned rather than read: six from Chorus and six from
+ * the library, none of them yet the one the user means. So a row hands the rail the chart and
+ * leaves the page alone, and the route to the chart page is the rail's own control beside it.
+ *
+ * jsdom applies no stylesheet, so the media query that hides the rail below 1120px never runs
+ * here. The narrow case is reached the way the Explore block above reaches it, by setting the
+ * column's display directly, because that is exactly what the query does and what the code reads.
+ */
+describe('App: Home fills the rail rather than leaving the page', () => {
+  const record = ChartRecordSchema.parse({
+    path: '/songs/Rush - YYZ',
+    name: 'YYZ',
+    artist: 'Rush',
+    chartType: 'folder',
+    folderHash: 'yyz',
+    modifiedTime: 0
+  })
+
+  /** Home's row button, named for the chart the way every list names one. */
+  const ROW = /^YYZ Rush/
+
+  function rail(): HTMLElement {
+    const found = document.querySelector('.rail')
+    if (found === null) throw new Error('no rail in the document')
+    return found as HTMLElement
+  }
+
+  async function showHome(): Promise<void> {
+    stubEncore({
+      settingsGet: vi.fn().mockResolvedValue({
+        ...defaultSettings(),
+        tourSeen: true,
+        lastSeenVersion: APP_VERSION,
+        libraryFolders: [{ path: '/songs', isDefault: true }]
+      }),
+      catalogQuery: vi.fn().mockResolvedValue([record]),
+      catalogCount: vi.fn().mockResolvedValue(1)
+    })
+    render(App)
+    await screen.findByRole('button', { name: ROW })
+  }
+
+  it('shows the chart in the rail and leaves Home where it was', async () => {
+    await showHome()
+    expect(rail().textContent).toContain('Open a chart and it stays here')
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    await waitFor(() => expect(rail().textContent).toContain('YYZ'))
+    // Home is still the view, with its row still in it. Detail would have replaced both.
+    expect(navItem('Home').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('button', { name: ROW })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+
+  it('opens the chart page from the rail, which is the one route to it', async () => {
+    await showHome()
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await waitFor(() => expect(rail().textContent).toContain('YYZ'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All details' }))
+
+    expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ROW })).toBeNull()
+  })
+
+  // Below the shell's breakpoint there is no rail to fill, and a click that filled a hidden
+  // column would be a click with nothing to show for it.
+  it('opens the chart page instead when the rail is not drawn', async () => {
+    await showHome()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+
+    expect(await screen.findByRole('heading', { name: 'YYZ' })).toBeTruthy()
+  })
+
+  // The rail is pointed at the chart either way, so a window widened after the fact finds the
+  // column already holding what was picked while it was hidden.
+  it('still points the rail at the chart it opened the page for', async () => {
+    await showHome()
+    rail().style.display = 'none'
+
+    await fireEvent.click(screen.getByRole('button', { name: ROW }))
+    await screen.findByRole('heading', { name: 'YYZ' })
+    rail().style.display = ''
+
+    expect(rail().textContent).toContain('YYZ')
+  })
+})
+
+/**
+ * The two buttons the approved design puts in the title bar.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says the bar is still 50px tall or
+ * that the buttons fit beside the search field; `scripts/measure-top-bar.mjs` is what answers
+ * that, in a real engine, at five widths. What IS pinnable is every branch of what the two do:
+ * where they lead when Encore has not been told enough to do the thing, what they ask main for
+ * when it has, and that a refusal from main lands on screen rather than in a console the user of
+ * a packaged build cannot open.
+ */
+describe('the title bar buttons', () => {
+  const GAME = '/opt/clonehero/Clone Hero'
+
+  const withSettings = (
+    over: Partial<Settings>,
+    api: Record<string, unknown> = {}
+  ): Record<string, ReturnType<typeof vi.fn>> =>
+    stubEncore({
+      settingsGet: vi.fn().mockResolvedValue({ ...seenSettings(), ...over }),
+      ...api
+    })
+
+  it('holds both of them, in the order the design puts them', async () => {
+    render(App)
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent?.trim())
+    expect(buttons).toContain('Launch Clone Hero')
+    expect(buttons).toContain('My library')
+    expect(buttons.indexOf('Launch Clone Hero')).toBeLessThan(buttons.indexOf('My library'))
+  })
+
+  it('leads to the setting rather than failing when no Clone Hero is chosen', async () => {
+    const api = withSettings({ gamePath: '' })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(''))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy()
+    // Nothing was asked of main: there is no path to run, and a rejected invoke would be a
+    // failure report for a question the user has not been given the chance to answer.
+    expect(api.gameLaunch).not.toHaveBeenCalled()
+  })
+
+  it('starts the stored game, and asks main for nothing else', async () => {
+    const api = withSettings({ gamePath: GAME })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    await waitFor(() => expect(api.gameLaunch).toHaveBeenCalledTimes(1))
+    // No payload. The path main runs is the one main stored, not one the renderer named.
+    expect(api.gameLaunch).toHaveBeenCalledWith()
+  })
+
+  it('puts a refused launch on screen, where the user pressing the button is looking', async () => {
+    withSettings(
+      { gamePath: GAME },
+      { gameLaunch: vi.fn().mockRejectedValue(new Error('There is nothing at /opt/gone.')) }
+    )
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+
+    const note = await screen.findByRole('alert')
+    expect(note.textContent).toContain('There is nothing at /opt/gone.')
+  })
+
+  it('lets the note be dismissed, since the app is still working', async () => {
+    withSettings({ gamePath: GAME }, { gameLaunch: vi.fn().mockRejectedValue(new Error('nope')) })
+    render(App)
+    await waitFor(() => expect(get(settings).gamePath).toBe(GAME))
+    await fireEvent.click(screen.getByRole('button', { name: 'Launch Clone Hero' }))
+    await screen.findByRole('alert')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  /**
+   * The reveal is `chartReveal`, which is the point rather than an implementation detail: main
+   * already has one guarded route from a path to the desktop shell, and it refuses anything
+   * outside the configured folders. A second channel would be a second place for that guard to
+   * be forgotten.
+   */
+  it('opens the folder downloads land in, through the reveal the rail already uses', async () => {
+    const api = withSettings({
+      libraryFolders: [
+        { path: '/mnt/other', isDefault: false },
+        { path: '/mnt/songs', isDefault: true }
+      ]
+    })
+    render(App)
+    await waitFor(() => expect(get(settings).libraryFolders).toHaveLength(2))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    await waitFor(() => expect(api.chartReveal).toHaveBeenCalledWith('/mnt/songs'))
+  })
+
+  it('leads to the setting when there is no library folder to open', async () => {
+    const api = withSettings({ libraryFolders: [] })
+    render(App)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeTruthy()
+    expect(api.chartReveal).not.toHaveBeenCalled()
+  })
+
+  it('reports a refused reveal on the same note', async () => {
+    withSettings(
+      { libraryFolders: [{ path: '/mnt/songs', isDefault: true }] },
+      { chartReveal: vi.fn().mockRejectedValue(new Error('Refusing to open a path outside')) }
+    )
+    render(App)
+    await waitFor(() => expect(get(settings).libraryFolders).toHaveLength(1))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'My library' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Refusing to open a path')
+  })
+
+  /**
+   * macOS gets no Launch button at all.
+   *
+   * Encore does not launch the game there (main/game/executable.ts says why), and a control that
+   * can never work is worth less than the room it takes in a 50px row. My library is unaffected:
+   * revealing a folder is the desktop shell's job on every platform.
+   */
+  it('draws no Launch button on a platform Encore does not launch the game on', async () => {
+    stubEncore({ platform: 'darwin' })
+    render(App)
+
+    expect(screen.queryByRole('button', { name: 'Launch Clone Hero' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'My library' })).toBeTruthy()
+  })
+})
+
+/**
+ * The sidebar's Surprise me, which is the only quick action wired to anything.
+ *
+ * Last in the file on purpose. `browseSearch` is module state shared by the whole run, and a
+ * handed-over result set is the one thing in it that a later test would inherit: it records the
+ * wildcard as already answered, which is exactly what stops a remount re-querying and would
+ * therefore stop somebody else's `setQuery('')` from running.
+ */
+describe('Surprise me', () => {
+  it('goes to Explore and draws a random page out of Chorus Encore', async () => {
+    stubEncore({ existsByMeta: vi.fn().mockResolvedValue([]) })
+    searchCharts.mockResolvedValue({ found: 95_299, out_of: 95_299, page: 1, data: [] })
+    settingsLoaded.set(true)
+    render(App)
+    // From Home, which is where a launch starts: the press has to take the user to the list the
+    // five charts will be in, not merely fetch them.
+    expect(navItem('Home').getAttribute('aria-current')).toBe('page')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Surprise me' }))
+
+    expect(navItem('Explore').getAttribute('aria-current')).toBe('page')
+    await waitFor(() =>
+      expect(
+        searchCharts.mock.calls.some((call) => (call[0] as { perPage?: number }).perPage === 100)
+      ).toBe(true)
+    )
+    // The list says what it is showing, rather than leaving five rows under an empty search box.
+    await waitFor(() => expect(get(browseSearch.presented)).not.toBeNull())
   })
 })

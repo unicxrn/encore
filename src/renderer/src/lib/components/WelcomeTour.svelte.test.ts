@@ -7,7 +7,7 @@ import { settings, settingsLoaded } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
 
 /**
- * The first-run tour: five screens, one per thing Encore does, in a modal.
+ * The first-run tour: six screens, one per thing Encore does, in a modal.
  *
  * jsdom applies no CSS, so nothing here says how the card looks or where the buttons sit; that is
  * desktop QA. What it pins is the walk: every screen reachable forward and back, Skip on all of
@@ -16,14 +16,15 @@ import { defaultSettings } from '../../../../shared/settings-defaults'
  */
 
 /** The heading of each screen, in order. The count is derived from this, not hardcoded twice. */
-const TITLES = ['What Encore does', 'Installed', 'Explore', 'Issues', 'Asset Studio']
+const TITLES = ['What Encore does', 'Installed', 'Explore', 'Issues', 'Asset Studio', 'Statistics']
 
 /** The view each screen from the second on describes, by the id App switches on. */
 const DOORS: readonly [title: string, view: string][] = [
   ['Installed', 'library'],
   ['Explore', 'browse'],
   ['Issues', 'tools'],
-  ['Asset Studio', 'assets']
+  ['Asset Studio', 'assets'],
+  ['Statistics', 'stats']
 ]
 
 type Props = { onclose?: () => void; onopen?: (view: string) => void }
@@ -136,6 +137,40 @@ describe('WelcomeTour contents', () => {
   it('contains no em or en dash, anywhere in the file', () => {
     expect(tourSource).not.toMatch(/[–—]/)
   })
+
+  /**
+   * The body of the screen with this heading, as the card renders it.
+   *
+   * Unmounts on the way out, so a test may ask about two screens: the tour is a fixed modal and
+   * two of them in one document leave every `getByRole` with a pair to choose between.
+   */
+  async function bodyOf(title: string): Promise<string> {
+    const { unmount } = mount()
+    for (let i = 0; TITLES[i] !== title; i += 1) await next()
+    const found = screen.getByRole('dialog').querySelector('.body')
+    const text = (found?.textContent ?? '').replace(/\s+/g, ' ')
+    unmount()
+    return text
+  }
+
+  it('covers Stats, which is where the play data went', async () => {
+    // Home drew the plays in 0.3.1 and no longer does. A tour that stopped at the four older
+    // views would leave the one screen that answers "where did my play counts go" unnamed.
+    const body = await bodyOf('Statistics')
+    expect(body).toMatch(/score files/i)
+    // The claim src/main/play/read-only.test.ts is the guard for. Nothing in that directory may
+    // write, and this is the screen that tells the user so.
+    expect(body).toMatch(/only reads/i)
+  })
+
+  it('describes Installed and Explore as they are now, not as 0.3.1 had them', async () => {
+    // Installed's one filter box became a header of them, and an Explore row stopped opening a
+    // chart page: it fills the preview beside the list instead. Both screens said otherwise.
+    expect(await bodyOf('Installed')).toMatch(/filters/i)
+    const explore = await bodyOf('Explore')
+    expect(explore).toMatch(/hear it before you download/i)
+    expect(explore).not.toMatch(/\bopen\b/i)
+  })
 })
 
 describe('WelcomeTour doors', () => {
@@ -180,7 +215,7 @@ describe('WelcomeTour doors', () => {
     mount()
     await next(TITLES.length - 1)
     expect(screen.getByRole('button', { name: 'Skip tour' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Open Asset Studio' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Statistics' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
     expect(dialog().textContent).toMatch(/any time for shortcuts/i)
   })

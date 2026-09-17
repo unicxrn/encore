@@ -26,7 +26,10 @@ export const SettingsSchema = z.object({
   tourSeen: z.boolean().default(SETTINGS_DEFAULTS.tourSeen),
   lastSeenVersion: z.string().default(SETTINGS_DEFAULTS.lastSeenVersion),
   // Read only, and only ever by the score-file watcher. Empty means the probe decides.
-  scoreFolder: z.string().default(SETTINGS_DEFAULTS.scoreFolder)
+  scoreFolder: z.string().default(SETTINGS_DEFAULTS.scoreFolder),
+  // The program the Launch button starts. Empty means nothing has been chosen; there is no probe
+  // behind it, so empty is not "look for it" the way scoreFolder's empty is.
+  gamePath: z.string().default(SETTINGS_DEFAULTS.gamePath)
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export { defaultSettings } from './settings-defaults'
@@ -187,6 +190,21 @@ export const CatalogFilterSchema = z.object({
    * in the "show me what I have not got round to" pile, which is what the filter is for.
    */
   neverPlayed: z.boolean().optional(),
+  /**
+   * When true, keep only charts the user hearted.
+   *
+   * Applied in SQL like every other constraint here, and for the sharpest version of the reason
+   * the sort carries: the Installed view is paged, and picking the favourites out of the hundred
+   * rows that came back is not picking them out of the library.
+   *
+   * This is a filter over what the library HOLDS, so it can only ever show favourites that match
+   * a chart on disk. A favourite of a chart that was hearted on Chorus and not downloaded, or one
+   * whose chart has since gone to the Trash, is still stored and still draws a filled heart in
+   * the rail when the user meets that chart again; it simply is not a row in a list of installed
+   * charts. Any UI offering this filter should say so, because a list that silently omits part of
+   * the thing it is named after is the misleading half of the feature.
+   */
+  favouritesOnly: z.boolean().optional(),
   /**
    * Exact artist, case-insensitively. Exact rather than a substring because the value comes from
    * a picker over the artists the catalog actually holds (see `catalog:facets`), so "Rush" must

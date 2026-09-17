@@ -9,12 +9,19 @@ import type {
   Settings
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
+import type { Favourite } from '../shared/favourites'
+import type { Setlist } from '../shared/setlists'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from '../main/assets/art'
 import type { LibraryCandidate } from '../main/catalog/detect-library'
 import type { ChartIssueRow } from '../main/catalog/issues'
 import type { FixBackup } from '../main/issues/backup-store'
 import type { FixableCode } from '../main/issues/fix'
+import type {
+  ChartMetadataRead,
+  ChartMetadataSaved,
+  ChartMetadataWriteRequest
+} from '../main/metadata/edit'
 import type { LyricsSearchResult } from '../main/assets/lyrics'
 import type { LyricLinesResult } from '../main/catalog/lyric-lines'
 import type { SidecarName, SidecarStatus } from '../main/sidecars/manager'
@@ -29,6 +36,7 @@ import type {
   PlayStats
 } from '../shared/play'
 import type { ScoreFolderReport } from '../shared/score-folder'
+import type { GameExecutableReport } from '../shared/game-launch'
 
 type Unsubscribe = () => void
 
@@ -84,6 +92,54 @@ const api = {
   // current filter: narrowing the lists as filters are applied would take options away the moment
   // they were used.
   catalogFacets: (): Promise<CatalogFacets> => ipcRenderer.invoke(IPC.catalogFacets),
+  // Every chart the user hearted. Read once on mount and kept as a set, because the rail asks
+  // about whatever chart is in front of it on every navigation and a call per chart would be a
+  // round trip to answer a question the renderer already has the data for.
+  favouritesList: (): Promise<Favourite[]> => ipcRenderer.invoke(IPC.favouritesList),
+  // Heart a chart or un-heart it, answering with the list as it now stands. The three fields are
+  // the chart's own, raw: main strips the markup and decides what is stored, so two screens
+  // hearting the same chart cannot write two rows. See shared/favourites.ts.
+  favouritesSet: (req: {
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    favourite: boolean
+  }): Promise<Favourite[]> => ipcRenderer.invoke(IPC.favouritesSet, req),
+  // The setlists the user built, entries included. Read once on mount and kept, because the rail
+  // asks which setlists hold whatever chart is in front of it on every navigation and the sidebar
+  // draws how many there are on every render.
+  setlistsList: (): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsList),
+  // The five writes. Each answers with the whole list, so the renderer never reconstructs what
+  // main stored. Names arrive as the user typed them: main collapses the whitespace and decides
+  // whether the name is one it will keep.
+  setlistsCreate: (req: { name: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsCreate, req),
+  setlistsRename: (req: { id: string; name: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsRename, req),
+  setlistsDelete: (req: { id: string }): Promise<Setlist[]> =>
+    ipcRenderer.invoke(IPC.setlistsDelete, req),
+  // The chart's own three fields, raw, exactly as favouritesSet takes them and for the same
+  // reason: main strips the markup and decides what is stored, so two screens adding the same
+  // chart cannot write two rows. See shared/setlists.ts.
+  setlistsSetEntry: (req: {
+    id: string
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    member: boolean
+  }): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsSetEntry, req),
+  setlistsMoveEntry: (req: {
+    id: string
+    name?: string | null
+    artist?: string | null
+    charter?: string | null
+    delta: -1 | 1
+  }): Promise<Setlist[]> => ipcRenderer.invoke(IPC.setlistsMoveEntry, req),
+  // The library's row per entry, in the setlist's order, null where it holds none. Asked when a
+  // setlist is opened rather than per launch, because it is the only part of a setlist that
+  // depends on what is currently on disk.
+  setlistsCharts: (req: { id: string }): Promise<(ChartRecord | null)[]> =>
+    ipcRenderer.invoke(IPC.setlistsCharts, req),
   // What the library holds more than one copy of, in three separate relationships: the same
   // chart file installed twice, several versions of one charter's chart, and the same song by
   // different charters. The third is not a fault and is labelled so. Read straight out of the
@@ -98,6 +154,22 @@ const api = {
   windowControl: (action: 'minimize' | 'maximize' | 'close'): Promise<void> =>
     ipcRenderer.invoke(IPC.windowControl, action),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.dialogPickFolder),
+  // A file dialog, for the program Clone Hero is started by. Separate from pickFolder because it
+  // opens on a file and because the filter it offers depends on the platform. Returns the chosen
+  // path, or null if the dialog was cancelled. Choosing a path does not store it: pass it to
+  // gameExecutable first, which is what refuses one that could not run.
+  pickExecutable: (): Promise<string | null> => ipcRenderer.invoke(IPC.dialogPickExecutable),
+  // What Encore makes of one path: whether anything is there, whether it is a file, and whether
+  // it is one this platform could start. Call it with a path the user has just picked to find out
+  // whether it is any use before storing it, or with '' to be told about the stored one.
+  // `describeGameExecutable` in shared/game-launch.ts turns the answer into the sentence to show.
+  gameExecutable: (path: string): Promise<GameExecutableReport> =>
+    ipcRenderer.invoke(IPC.gameExecutable, { path }),
+  // Starts Clone Hero from the stored path and lets go of it: the game outlives Encore, and
+  // quitting Encore does not take it with it. Resolves once the operating system has accepted the
+  // process, and rejects with a sentence to show when the path cannot be run or the spawn failed.
+  // Takes no path, deliberately: the setting is what it runs.
+  gameLaunch: (): Promise<void> => ipcRenderer.invoke(IPC.gameLaunch),
   // Structured clone copies the file buffers across the IPC boundary, which is fine at
   // chart scale (tens of MB worst case).
   chartReadFiles: (req: {
@@ -116,6 +188,19 @@ const api = {
     path: string
     chartType: 'folder' | 'sng'
   }): Promise<LyricLinesResult> => ipcRenderer.invoke(IPC.chartLyricLines, req),
+  // The six editable song.ini fields as the chart really holds them, the seven gameplay keys the
+  // editor shows and will not edit, and a sentence when this chart cannot be edited at all.
+  // Reads, never writes.
+  chartReadMetadata: (req: {
+    path: string
+    chartType: 'folder' | 'sng'
+  }): Promise<ChartMetadataRead> => ipcRenderer.invoke(IPC.chartReadMetadata, req),
+  // Writes what the user typed into the chart, through the one write path, and resolves only
+  // after main has re-scanned it and proved both multiplayer identities are unchanged and every
+  // field reads back as asked. `fields` carries only what changed; a key not in it is a line the
+  // ini editor never looks at. Rejects with a sentence to show.
+  chartWriteMetadata: (req: ChartMetadataWriteRequest): Promise<ChartMetadataSaved> =>
+    ipcRenderer.invoke(IPC.chartWriteMetadata, req),
   sidecarStatus: (name: SidecarName): Promise<SidecarStatus> =>
     ipcRenderer.invoke(IPC.sidecarStatus, name),
   sidecarInstall: (name: SidecarName): Promise<void> =>

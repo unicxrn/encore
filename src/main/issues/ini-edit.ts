@@ -136,14 +136,7 @@ export interface IniKeyRemoval {
  */
 export function removeSongIniKey(source: Uint8Array, key: string): IniKeyRemoval {
   assertKeyIsNotHashed(key)
-  if (
-    source.length >= 2 &&
-    ((source[0] === 0xff && source[1] === 0xfe) || (source[0] === 0xfe && source[1] === 0xff))
-  ) {
-    throw new Error(
-      'Encore cannot edit this song.ini: it is UTF-16, and Encore only edits UTF-8 and Latin-1 ini files.'
-    )
-  }
+  assertNotUtf16(source)
 
   const kept: Line[] = []
   let section = ''
@@ -177,4 +170,224 @@ export function removeSongIniKey(source: Uint8Array, key: string): IniKeyRemoval
     at += line.to - line.from
   }
   return { bytes, removed }
+}
+
+/**
+ * Which `[song]` lines set `key`, in the order `parseIni` would have read them.
+ *
+ * Shared by the reader and the writer below so the two cannot disagree about which line holds a
+ * value: reading one line and rewriting another is how a form reports a change it did not make.
+ * `parseIni` assigns into a plain object as it goes, so the LAST entry is the one scan-chart sees.
+ */
+function songKeyLines(source: Uint8Array, key: string): Line[] {
+  const hits: Line[] = []
+  let section = ''
+  for (const line of lines(source)) {
+    const text = ascii(source, line.start, line.end)
+    if (text.length === 0 || text.startsWith(';')) continue
+    if (text.startsWith('[')) {
+      const match = /\[(.+)]$/.exec(text)
+      if (match) section = match[1].trim()
+      continue
+    }
+    const at = text.indexOf('=')
+    if (at !== -1 && SONG_SECTIONS.has(section) && text.slice(0, at).trim() === key) hits.push(line)
+  }
+  return hits
+}
+
+/**
+ * Refuse a file `parseIni` would decode as UTF-16.
+ *
+ * Shared by every entry point here for the reason `removeSongIniKey` gave: a UTF-16 line
+ * terminator is two bytes and every ASCII character carries a zero byte, so splitting on LF cuts
+ * lines in the wrong places and matches no key at all. Failing says why; carrying on would report
+ * an empty field for a file that plainly holds one, and then write a second copy of the key that
+ * Clone Hero would never read.
+ */
+function assertNotUtf16(source: Uint8Array): void {
+  if (
+    source.length >= 2 &&
+    ((source[0] === 0xff && source[1] === 0xfe) || (source[0] === 0xfe && source[1] === 0xff))
+  ) {
+    throw new Error(
+      'Encore cannot edit this song.ini: it is UTF-16, and Encore only edits UTF-8 and Latin-1 ini files.'
+    )
+  }
+}
+
+/**
+ * The value `scanIni` would read for `key`, or the empty string when the chart does not set it.
+ *
+ * Deliberately raw: no style tags stripped, no `-1`/`0` sentinel folded to a default, no trim
+ * beyond the one `parseIni` itself performs. A form that showed scan-chart's reading would show
+ * `Unknown Album` for a chart whose ini says nothing, and writing that back would put the words
+ * "Unknown Album" in the user's file. What the editor has to show is what is in the file.
+ *
+ * Decoded as UTF-8, which is what `parseIni` does for anything without a UTF-16 BOM. A Latin-1
+ * file's accented characters therefore read back with replacement characters here, exactly as
+ * they already do everywhere else in the app, because they are what scan-chart put in the catalog
+ * too. The bytes are only at risk if the user edits that particular field, which is an edit they
+ * asked for; every line they leave alone is copied through untouched.
+ */
+export function readSongIniKey(source: Uint8Array, key: string): string {
+  assertNotUtf16(source)
+  const hits = songKeyLines(source, key)
+  if (hits.length === 0) return ''
+  const line = hits[hits.length - 1]
+  const text = new TextDecoder().decode(source.subarray(line.start, line.end))
+  const at = text.indexOf('=')
+  return at === -1 ? '' : text.slice(at + 1).trim()
+}
+
+/** What `setSongIniKey` did, so a caller can refuse to report a change that did not happen. */
+export interface IniKeyWrite {
+  bytes: Uint8Array
+  /** False when the file already said this, so the caller can skip the write entirely. */
+  changed: boolean
+}
+
+/**
+ * Set `key` to `value` in the chart's `[song]` section, touching nothing else.
+ *
+ * An empty `value` REMOVES the key rather than writing `key = `. The two are the same thing to
+ * scan-chart, which folds an empty string to the field's default and raises `missingValue` either
+ * way, and they are the same thing to a `.sng` header, whose generator omits an empty key. One of
+ * them leaves a line in the file that means nothing; this writes the other.
+ *
+ * When the key is already there, only the VALUE's bytes are replaced. The line keeps its
+ * indentation, its key spelling, the spacing around its `=`, any trailing whitespace and its own
+ * line terminator, so a CRLF file stays CRLF and an aligned block stays aligned. Earlier
+ * duplicate settings of the same key are dropped, because `parseIni` keeps the last and a file
+ * that still set it twice would disagree with itself the next time anything read it.
+ *
+ * When the key is absent it is appended to the END of the `[song]` section, after the last line
+ * that belongs to it and before whatever follows. Appending to the file instead would put the key
+ * under a later section, where `parseIni` would never look at it, and inserting after the section
+ * header would push it above keys the charter chose to lead with.
+ *
+ * Refuses a `value` carrying a line terminator: an ini value ends at the newline, so those bytes
+ * would not be part of the value at all. The remainder would become a line of its own, which is
+ * either a `badIniLine` or, if it happened to contain an `=`, a key nobody set.
+ *
+ * Refuses a hashed key before it looks at the file at all, on the same terms as
+ * `removeSongIniKey`: changing one of those is a chart the user can no longer play with anyone
+ * who has the original.
+ */
+export function setSongIniKey(source: Uint8Array, key: string, value: string): IniKeyWrite {
+  assertKeyIsNotHashed(key)
+  if (/[\r\n]/.test(value)) {
+    throw new Error(
+      `Encore will not write a line break into song.ini's "${key}": an ini value ends at the ` +
+        `end of its line, so everything after the break would become a line of its own.`
+    )
+  }
+  assertNotUtf16(source)
+  if (value === '') {
+    const removal = removeSongIniKey(source, key)
+    return { bytes: removal.bytes, changed: removal.removed > 0 }
+  }
+
+  const hits = songKeyLines(source, key)
+  const encoder = new TextEncoder()
+  if (hits.length > 0) {
+    const target = hits[hits.length - 1]
+    // Past the `=`, then past the spaces that follow it, clamped to the line's own trimmed end so
+    // a `key =` with nothing after it cannot walk into the terminator.
+    const equals = target.start + ascii(source, target.start, target.end).indexOf('=')
+    let valueStart = equals + 1
+    while (valueStart < target.end && SPACE.has(source[valueStart])) valueStart++
+    if (readSongIniKey(source, key) === value && hits.length === 1) {
+      return { bytes: source, changed: false }
+    }
+    const replaced = new Map<number, Uint8Array>([
+      [
+        target.from,
+        concat([
+          source.subarray(target.from, valueStart),
+          encoder.encode(value),
+          // Everything the trimmed line did not cover: trailing spaces and the terminator.
+          source.subarray(target.end, target.to)
+        ])
+      ]
+    ])
+    const dropped = new Set(hits.slice(0, -1).map((line) => line.from))
+    return { bytes: rebuild(source, dropped, replaced), changed: true }
+  }
+
+  const insertion = songSectionEnd(source)
+  if (insertion === null) {
+    throw new Error(
+      `Encore cannot edit this song.ini: it has no [song] section, so there is nowhere a "${key}" ` +
+        `line would be read from.`
+    )
+  }
+  const added = encoder.encode(`${insertion.before}${key} = ${value}${insertion.after}`)
+  return {
+    bytes: concat([source.subarray(0, insertion.at), added, source.subarray(insertion.at)]),
+    changed: true
+  }
+}
+
+/**
+ * Where a new `[song]` key goes, and what to wrap it in.
+ *
+ * "The end of the section" is the byte after the last line that carries something, not the byte
+ * before the next `[`: a section followed by a blank line and then a comment introducing the NEXT
+ * section would otherwise take the new key after both, where it reads as part of that comment's
+ * subject. Null when the file has no `[song]` section at all.
+ *
+ * `before` and `after` are what the new line is wrapped in. The terminator is copied from the
+ * line the key lands after, so a CRLF file gains a CRLF line rather than a mixed one. A section
+ * whose last line has no terminator (the file ends there) gets its newline in `before` instead,
+ * so the new key cannot be appended onto the end of an existing one.
+ */
+function songSectionEnd(source: Uint8Array): { at: number; before: string; after: string } | null {
+  let section = ''
+  let end: { at: number; before: string; after: string } | null = null
+  for (const line of lines(source)) {
+    const text = ascii(source, line.start, line.end)
+    if (text.startsWith('[')) {
+      const match = /\[(.+)]$/.exec(text)
+      if (match) section = match[1].trim()
+    }
+    if (!SONG_SECTIONS.has(section) || text.length === 0) continue
+    const tail = ascii(source, line.end, line.to)
+    end = tail.includes('\n')
+      ? { at: line.to, before: '', after: tail.includes('\r\n') ? '\r\n' : '\n' }
+      : { at: line.to, before: '\n', after: '' }
+  }
+  return end
+}
+
+/** Join byte ranges into one array, in order. */
+function concat(parts: Uint8Array[]): Uint8Array {
+  let length = 0
+  for (const part of parts) length += part.length
+  const bytes = new Uint8Array(length)
+  let at = 0
+  for (const part of parts) {
+    bytes.set(part, at)
+    at += part.length
+  }
+  return bytes
+}
+
+/**
+ * Rebuild the file from its lines, dropping the ones whose start is in `dropped` and swapping in
+ * `replaced` for the ones it names.
+ *
+ * Keyed on a line's first byte, which is unique across the file because the ranges tile it.
+ */
+function rebuild(
+  source: Uint8Array,
+  dropped: Set<number>,
+  replaced: Map<number, Uint8Array>
+): Uint8Array {
+  const parts: Uint8Array[] = []
+  for (const line of lines(source)) {
+    if (dropped.has(line.from)) continue
+    parts.push(replaced.get(line.from) ?? source.subarray(line.from, line.to))
+  }
+  return concat(parts)
 }

@@ -1,6 +1,12 @@
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store'
-import { searchCharts, type ChartData } from '../api/enchor'
-import { advancedCount, cloneAdvanced, emptyAdvanced, type AdvancedQuery } from '../api/advanced'
+import { searchCharts, sortFor, type ChartData } from '../api/enchor'
+import {
+  advancedBody,
+  advancedCount,
+  cloneAdvanced,
+  emptyAdvanced,
+  type AdvancedQuery
+} from '../api/advanced'
 import { globalQuery } from './global-search'
 
 export interface SearchConfig {
@@ -178,8 +184,63 @@ export interface SearchStore {
    * Whether Explore has appended as much as it will without being asked. See `AUTO_APPEND_CAP`.
    */
   atAutoCap: Readable<boolean>
+  /**
+   * The sentence over the list when the rows were handed to the store instead of searched for,
+   * and null the rest of the time.
+   *
+   * Explore's rows normally answer a question the header is still showing: the term in the box,
+   * the filters, the order. A handed-over set answers none of them, so without a line saying
+   * where it came from the list is five charts with an empty search box over it, which reads as
+   * a bug. Holding the line here rather than in the caller is what makes it go away at the right
+   * moment: the store already knows when a real run replaces the rows, and nothing else does.
+   */
+  presented: Readable<string | null>
+  /**
+   * Put a note over the list, and with it the rows it describes.
+   *
+   * `charts` null means the note is about something still being fetched, or something that
+   * failed: the rows on screen are left exactly as they were, because a surprise that could not
+   * be found is no reason to throw away what the user was looking at.
+   *
+   * With rows, this takes the list over. Anything in flight or waiting out the debounce is
+   * cancelled first, or it would answer a moment later and replace them.
+   */
+  present: (note: string, charts: ChartData[] | null) => void
+  /**
+   * Which of `SORT_OPTIONS` the results were asked for, by its `value`. Empty is the service's
+   * own order.
+   *
+   * Here rather than in the header for the reason the filters are: Explore is destroyed by every
+   * navigation, and a header-owned choice would go back to "Best match" while the rows it
+   * ordered stayed on screen.
+   */
+  sort: Readable<string>
   setQuery: (value: string) => void
   setFilters: (instrument: string | null, difficulty: string | null) => void
+  /** Re-runs in a different order. One of `SORT_OPTIONS`' values; anything else is that order. */
+  setSort: (value: string) => void
+  /**
+   * Sets both ends of the intensity band and re-runs.
+   *
+   * The same two advanced fields the panel's Intensity row edits, not a second copy of them:
+   * this writes `minIntensity` and `maxIntensity` into the applied query and the draft together,
+   * so the header and the panel can never disagree about what is being filtered by. Empty
+   * strings mean that end is not bounded, exactly as a blank box in the panel does.
+   */
+  setIntensity: (min: string, max: string) => void
+  /**
+   * Edits the applied advanced query in place from the filter header, and re-runs.
+   *
+   * The header's band and its chips are views of fields the panel already holds, so neither one
+   * may keep a value of its own: `edit` is applied to the applied query and to the draft
+   * together, which is what stops a chip and a panel row from disagreeing about one filter.
+   *
+   * The draft takes the same edit on top of what it is holding rather than being replaced, so a
+   * form that was filled in and never searched keeps its typing. Nothing happens at all when the
+   * edit would send the same request body, because that is one of the 50 requests a minute the
+   * API allows spent on the rows already on screen.
+   */
+  setAdvancedField: (edit: (query: AdvancedQuery) => void) => void
   /** Records what the panel holds. Changes no results; `applyAdvanced` is what searches. */
   setAdvancedDraft: (next: AdvancedQuery) => void
   /** Runs the draft as the query. */
@@ -252,6 +313,9 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const advancedApplied = writable<AdvancedQuery>(emptyAdvanced())
   const advancedDraft = writable<AdvancedQuery>(emptyAdvanced())
   const advancedOpen = writable(false)
+  // The service's own order until asked otherwise, which is what a search engine's first answer
+  // should be: `sort: null` is what the endpoint does when nobody sends one.
+  const sortKey = writable('')
   const activeCount = derived(advancedApplied, advancedCount)
   const draftCount = derived(advancedDraft, advancedCount)
   const advancedDropped = writable(0)
@@ -260,6 +324,7 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   const autoCap = writable(AUTO_APPEND_CAP)
   const atAutoCap = derived([results, autoCap], ([rows, cap]) => rows.length >= cap)
   const exhausted = writable(false)
+  const presented = writable<string | null>(null)
   const hasMore = derived(
     [groups, results, found, exhausted],
     ([songs, rows, total, done]) => !done && rows.length > 0 && songs.length < total
@@ -276,6 +341,9 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
   let page = 1
   let instrument: string | null = null
   let difficulty: string | null = null
+  // Read at request time rather than subscribed to, like `instrument` and `difficulty` beside
+  // it: nothing renders from this copy, the store is what the header renders from.
+  let sort = sortFor('')
   let pending: PendingRun | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let controller: AbortController | null = null
@@ -288,17 +356,33 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     error.set(null)
     try {
       const response = await searchCharts(
-        { search: query, page, instrument, difficulty, advanced: get(advancedApplied) },
+        { search: query, page, instrument, difficulty, sort, advanced: get(advancedApplied) },
         fetchFn,
         {
           signal: controller.signal,
           retryDelayMs
         }
       )
-      results.update((prev) => (append ? [...prev, ...response.data] : response.data))
+      // Nothing between `response.json()` and here checks that a 200 carried a page of charts,
+      // and what `results` holds is handed straight to `groups`, which reads a field off every
+      // row. A throw there is not one failed search. It happens inside a store notification, and
+      // svelte/store's notification queue is module-global, so an exception escaping one leaves
+      // that queue non-empty: every `set` in the renderer afterwards updates its value and tells
+      // nobody, so the app keeps running, stops redrawing, and reports nothing. Measured in a
+      // real engine against a different subscriber that threw, Explore was where it showed
+      // first, because its rows land a moment after the view mounts: the grid stayed on the
+      // empty array it read on the way in while the store held a full page.
+      //
+      // So a body that is not rows is a failed search, which is a state Explore already draws a
+      // card and a Retry button for. Checked here rather than in `groupBySong`, which is also
+      // called on rows this store has already accepted.
+      const rows = response.data
+      if (!Array.isArray(rows) || rows.some((chart) => typeof chart !== 'object' || chart === null))
+        throw new Error('Search failed: invalid response')
+      results.update((prev) => (append ? [...prev, ...rows] : rows))
       // An empty page is the end of the data whatever `found` says, and it is the one thing that
       // stops an appending list asking for the next page forever.
-      if (append && response.data.length === 0) exhausted.set(true)
+      if (append && rows.length === 0) exhausted.set(true)
       // Expansion keys are songIds from the rows currently on screen, so it goes
       // stale exactly when those rows are replaced, and not when a run merely
       // starts. A failed run leaves the old rows visible, and collapsing groups
@@ -309,6 +393,11 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
         expanded.set(new Set())
         selected.set(new Set())
         scrollTop = 0
+        // These rows are a search's own answer, so whatever note described the last handed-over
+        // set no longer describes anything on screen. Cleared here rather than when a run starts:
+        // a run that fails leaves the previous rows up, and the note that explains them has to
+        // stay up with them.
+        presented.set(null)
         // A different question is a different list, so the appetite for it starts over: the
         // previous one's raised cap would let a fresh search run straight past the point the user
         // had to ask at last time.
@@ -421,11 +510,72 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     instrument = nextInstrument
     difficulty = nextDifficulty
     filters.set({ instrument, difficulty })
+    // Intensity is measured per instrument and is a no-op without one; see ADVANCED_RANGES.
+    // Going back to "Any instrument" therefore takes the band with it, in the same click and
+    // the same request, and the header's own control visibly returns to Any as it does. Leaving
+    // the numbers set would leave a filter on screen that the answer was not narrowed by.
+    if (instrument === null) clearIntensityFields()
     // A filter change is a click, not typing: skip the debounce, and carry any term still inside
     // it into this run rather than dropping it.
     takePending()
     page = 1
     void run(false)
+  }
+
+  /** Empties both ends of the band in the applied query and in the draft, without running. */
+  function clearIntensityFields(): void {
+    const applied = get(advancedApplied)
+    const draft = get(advancedDraft)
+    const bounded =
+      applied.numbers.minIntensity !== '' ||
+      applied.numbers.maxIntensity !== '' ||
+      draft.numbers.minIntensity !== '' ||
+      draft.numbers.maxIntensity !== ''
+    if (!bounded) return
+    advancedApplied.set(withIntensity(applied, '', ''))
+    advancedDraft.set(withIntensity(draft, '', ''))
+    draftReset.update((n) => n + 1)
+  }
+
+  function withIntensity(query: AdvancedQuery, min: string, max: string): AdvancedQuery {
+    const next = cloneAdvanced(query)
+    next.numbers.minIntensity = min
+    next.numbers.maxIntensity = max
+    return next
+  }
+
+  function setSort(value: string): void {
+    if (value === get(sortKey)) return
+    sortKey.set(value)
+    sort = sortFor(value)
+    // A click, like a filter change: no debounce, and any term still inside one comes along.
+    takePending()
+    page = 1
+    void run(false)
+  }
+
+  function setIntensity(min: string, max: string): void {
+    setAdvancedField((query) => {
+      query.numbers.minIntensity = min
+      query.numbers.maxIntensity = max
+    })
+  }
+
+  function setAdvancedField(edit: (query: AdvancedQuery) => void): void {
+    const applied = get(advancedApplied)
+    const next = cloneAdvanced(applied)
+    edit(next)
+    // Compared as request bodies rather than as forms, the way the panel decides whether it is
+    // holding an unsearched edit: an edit the endpoint would not be told about is not a question.
+    if (JSON.stringify(advancedBody(next)) === JSON.stringify(advancedBody(applied))) return
+    // Written into the draft as well as the applied query, so an open panel shows what the header
+    // just set rather than what it used to hold. `draftReset` is what tells the panel to re-seed
+    // the local copy its inputs are bound to; see `advancedDraftReset`.
+    const draft = cloneAdvanced(get(advancedDraft))
+    edit(draft)
+    advancedDraft.set(draft)
+    draftReset.update((n) => n + 1)
+    applyQuery(next)
   }
 
   function toggleExpanded(songId: number): void {
@@ -508,18 +658,71 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     await run(true)
   }
 
+  /**
+   * Show rows the store did not fetch, under a note saying what they are.
+   *
+   * The header's own controls are deliberately left alone. The instrument, the difficulty, the
+   * order and the advanced panel all describe the next question rather than these rows, and
+   * clearing them would either lie to a mounted Explore (which seeds its selects once, on mount)
+   * or spend a request putting them back. The note is what says these five did not come from
+   * them.
+   *
+   * `exhausted` is what stops the list asking for more. `found` is the number of rows and there
+   * is no page 2 of a handed-over set, so without it a set whose charts share a songId would
+   * group to fewer than `found` and arm the sentinel, which would append page 2 of the wildcard
+   * under five charts that had nothing to do with it.
+   *
+   * The wildcard is recorded as already answered for the same reason `applyQuery` records it:
+   * Explore re-applies the global query from an `$effect` on every mount, and a remount that
+   * found the question unasked would run it and replace these rows.
+   */
+  function present(note: string, charts: ChartData[] | null): void {
+    presented.set(note)
+    if (charts === null) return
+    cancelPending()
+    controller?.abort()
+    controller = null
+    results.set(charts)
+    found.set(charts.length)
+    expanded.set(new Set())
+    selected.set(new Set())
+    scrollTop = 0
+    autoCap.set(AUTO_APPEND_CAP)
+    exhausted.set(true)
+    error.set(null)
+    // An aborted run returns without touching this, so nothing else would put it back.
+    loading.set(false)
+    searched.set(true)
+    query = '*'
+    lastRan = '*'
+    page = 1
+    globalQuery.set('')
+  }
+
   function setAdvancedDraft(next: AdvancedQuery): void {
     advancedDraft.set(cloneAdvanced(next))
   }
 
   function applyAdvanced(): void {
     const next = cloneAdvanced(get(advancedDraft))
-    const narrowing = advancedCount(next) > 0
     // A form with nothing in it, submitted while nothing was applied, is not a question. The
     // panel is a `<form>`, so Enter in any of its thirty controls submits it, and taking the term
     // over for a query that ends up narrowed by nothing threw away what was typed in the search
     // box with nothing left to say so: `advancedDropped` counts filters and there were none.
-    if (!narrowing && get(activeCount) === 0) return
+    if (advancedCount(next) === 0 && get(activeCount) === 0) return
+    applyQuery(next)
+  }
+
+  /**
+   * Make one advanced query the applied one and run it.
+   *
+   * Shared by the panel's Search button and by the header's intensity band, because both are the
+   * same act: a set of advanced fields becoming the question. Anything that only one of them
+   * needs stays in its own caller, which is why the empty-form guard is in `applyAdvanced` and
+   * the draft write is in `setIntensity`.
+   */
+  function applyQuery(next: AdvancedQuery): void {
+    const narrowing = advancedCount(next) > 0
     // A press of Search, like a filter change, is a click rather than typing, and it carries any
     // term still inside the debounce window with it.
     takePending()
@@ -592,8 +795,14 @@ export function createSearch(config: SearchConfig = {}): SearchStore {
     advancedOpen: { subscribe: advancedOpen.subscribe },
     hasMore,
     atAutoCap,
+    sort: { subscribe: sortKey.subscribe },
+    presented: { subscribe: presented.subscribe },
+    present,
     setQuery,
     setFilters,
+    setSort,
+    setIntensity,
+    setAdvancedField,
     setAdvancedDraft,
     applyAdvanced,
     clearAdvanced,

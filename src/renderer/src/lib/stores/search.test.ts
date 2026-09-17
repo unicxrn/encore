@@ -1,8 +1,8 @@
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { describe, expect, it, vi } from 'vitest'
 import type { ChartData, SearchResult } from '../api/enchor'
 import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
-import { AUTO_APPEND_CAP, createSearch, groupBySong } from './search'
+import { AUTO_APPEND_CAP, createSearch, groupBySong, type SongGroup } from './search'
 import { globalQuery } from './global-search'
 
 const makeChart = (
@@ -645,6 +645,84 @@ describe('SearchStore groups', () => {
     expect(gs[1].primary.chartId).toBe(3)
     expect(gs[1].others).toHaveLength(0)
   })
+  it('answers a subscriber that arrives after the rows did', async () => {
+    // Explore is destroyed by every navigation and by opening a chart Detail, so rows can land
+    // while nothing is listening to this at all: Surprise me writes them from the sidebar, and a
+    // search started before the user walked away answers behind them. A `derived` computes when
+    // its first subscriber arrives, not when it was created, which is what makes that safe.
+    // Pinned because it looks like the opposite is true, and a store kept in step by hand instead
+    // would be a second place for the rows and the groups to disagree.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong', 'Monkey Wrench'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('foo fighters')
+    await new Promise((r) => setTimeout(r, 20))
+    let seen: SongGroup[] = []
+    const stop = search.groups.subscribe((groups) => (seen = groups))
+    expect(seen.map((g) => g.primary.name)).toEqual(['Everlong', 'Monkey Wrench'])
+    stop()
+  })
+})
+
+/**
+ * A 200 whose body is not a page of charts.
+ *
+ * Measured, in a real engine and not in jsdom: a store subscriber that throws leaves
+ * svelte/store's module-global `subscriber_queue` non-empty, and every `set` after that one
+ * updates its value and notifies nobody. Nothing recovers it, nothing reports it, and `get` keeps
+ * answering correctly, so the renderer looks fine and has stopped redrawing. Explore is where it
+ * shows first: its rows land a moment after the view mounts, so the grid stays on the empty array
+ * it read on the way in while the store holds a full page.
+ *
+ * `groups` is the subscriber that would throw, and what it is handed comes straight out of
+ * `response.json()`, which nothing validates. So the rule is here rather than in the grouping: a
+ * body without rows is a failed search, which Explore already has a card and a Retry button for.
+ */
+describe('a search answered with something that is not a page of charts', () => {
+  const badBodies: [string, unknown][] = [
+    ['no data at all', { found: 1, out_of: 1, page: 1 }],
+    ['data null', { found: 1, out_of: 1, page: 1, data: null }],
+    ['data an object', { found: 1, out_of: 1, page: 1, data: { 0: 'x' } }],
+    ['a row that is not a chart', { found: 1, out_of: 1, page: 1, data: [null] }]
+  ]
+  for (const [what, body] of badBodies) {
+    it(`reports ${what} as a failed search and leaves the rows alone`, async () => {
+      const fetchFn = vi.fn().mockImplementation(() => ok(body))
+      const search = createSearch({ fetchFn, debounceMs: 5 })
+      // Explore holds this subscription for as long as it is mounted, which is what makes the
+      // grouping run inside the notification rather than on the next read.
+      const stop = search.groups.subscribe(() => {})
+      search.setQuery('everlong')
+      await new Promise((r) => setTimeout(r, 30))
+      expect(get(search.error)).toContain('invalid response')
+      expect(get(search.results)).toEqual([])
+      expect(get(search.groups)).toEqual([])
+      expect(get(search.searched)).toBe(true)
+      expect(get(search.loading)).toBe(false)
+      stop()
+      // The canary, and the whole point of the rule above: one throw inside a notification stops
+      // every store in the renderer, this one included.
+      const canary = writable(0)
+      let heard = 0
+      const stopCanary = canary.subscribe((v) => (heard = v))
+      canary.set(7)
+      stopCanary()
+      expect(heard).toBe(7)
+    })
+  }
+  it('keeps the page already on screen when a bad body answers an append', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(() => ok(result(['Everlong'], 50)))
+      .mockImplementationOnce(() => ok({ found: 50, out_of: 50, page: 2 }))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    const stop = search.groups.subscribe(() => {})
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    await search.loadMore()
+    expect(get(search.error)).toContain('invalid response')
+    expect(get(search.results).map((c) => c.name)).toEqual(['Everlong'])
+    stop()
+  })
 })
 
 describe('rate-limited Explore settles', () => {
@@ -1267,5 +1345,332 @@ describe('how far Explore will append', () => {
 
     expect(fetchFn).toHaveBeenCalledTimes(2)
     expect(lastBody(fetchFn).page).toBe(2)
+  })
+})
+
+describe('result order', () => {
+  it('sends no sort until one is chosen, which is the service deciding', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.sort)).toBe('')
+    expect(lastBody(fetchFn).sort).toBeNull()
+  })
+
+  it('sends the field and the direction the chosen order stands for', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setSort('modifiedTime:desc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'modifiedTime', direction: 'desc' })
+    expect(lastBody(fetchFn).page).toBe(1)
+  })
+
+  it('re-runs from page 1, because page 2 of one order is not page 2 of another', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 500)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    await search.loadMore()
+    expect(lastBody(fetchFn).page).toBe(2)
+
+    search.setSort('length:desc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).page).toBe(1)
+    expect(get(search.results).map((c) => c.name)).toEqual(['One'])
+  })
+
+  it('spends nothing on choosing the order that is already on', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('name:asc')
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+    search.setSort('name:asc')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn.mock.calls.length).toBe(spent)
+  })
+
+  it('orders the advanced endpoint too, which honours sort as the plain one does', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('artist:asc')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setAdvancedDraft(draftWith((q) => (q.text.name.value = 'bloom')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'artist', direction: 'asc' })
+  })
+
+  it('keeps the order across a filter change and a new term', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setSort('year:desc')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'year', direction: 'desc' })
+
+    search.setQuery('nirvana')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).sort).toEqual({ type: 'year', direction: 'desc' })
+  })
+})
+
+describe('the intensity band', () => {
+  it('sends the two advanced fields the panel would have sent', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search/advanced')
+    expect(lastBody(fetchFn)).toMatchObject({
+      instrument: 'guitar',
+      minIntensity: 4,
+      maxIntensity: 5
+    })
+  })
+
+  it('sends a floor above the drawn scale as the number it is, not clamped to six', async () => {
+    // Charters rate past 6 and the service answers on those ratings: `minIntensity: 7` with
+    // guitar chosen answers with diff_guitar of 7, 8, 9 and 20 (measured 2026-09-15). A control
+    // that sent 6 here would quietly answer a different question.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('7', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).minIntensity).toBe(7)
+    expect(lastBody(fetchFn).maxIntensity).toBeUndefined()
+  })
+
+  it('is one filter set with the panel, not a second copy of it', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('drums', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('5', '6')
+    await new Promise((r) => setTimeout(r, 20))
+    // The panel edits this object, so what the header set has to be in it.
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('5')
+    expect(get(search.advancedDraft).numbers.maxIntensity).toBe('6')
+    expect(get(search.advanced).numbers.minIntensity).toBe('5')
+  })
+
+  it('counts toward the filters the closed panel reports', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(1)
+  })
+
+  it('goes with the instrument, because it means nothing without one', async () => {
+    // Measured: with no instrument the band matches "some instrument is in it", and an uncharted
+    // instrument carries -1, so `maxIntensity: 1` alone answers with 95,093 of the 95,299 charts
+    // there are. Leaving the numbers set would leave a filter on screen narrowing nothing.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(2)
+
+    search.setFilters(null, null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedCount)).toBe(0)
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('')
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+    expect(lastBody(fetchFn).minIntensity).toBeUndefined()
+  })
+
+  it('leaves the rest of the panel alone when it clears the band', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setAdvancedDraft(draftWith((q) => (q.text.charter.value = 'someone')))
+    search.applyAdvanced()
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('keys', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('3', '')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setFilters(null, null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advanced).text.charter.value).toBe('someone')
+    expect(lastBody(fetchFn).charter).toEqual({ value: 'someone', exact: false, exclude: false })
+    expect(lastBody(fetchFn).minIntensity).toBeUndefined()
+  })
+
+  it('takes the term over, the way the panel does, because the endpoint ignores it', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    globalQuery.set('metallica')
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setIntensity('5', '')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(lastBody(fetchFn).search).toBe('*')
+    expect(get(globalQuery)).toBe('')
+    globalQuery.set('')
+  })
+
+  it('is counted by the notice when a typed term drops it', async () => {
+    // The band is an advanced filter like any other, so the rule in `setQuery` takes it: a term
+    // and the advanced fields cannot both narrow one query. What matters here is that the count
+    // the notice reports includes it, rather than the band falling quietly out of the header.
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+
+    search.setQuery('metallica')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(get(search.advancedDropped)).toBe(2)
+    expect(get(search.advanced).numbers.minIntensity).toBe('')
+    // The panel still holds it, so Restore is a real offer.
+    expect(get(search.advancedDraft).numbers.minIntensity).toBe('4')
+    expect(lastUrl(fetchFn)).toBe('https://api.enchor.us/search')
+  })
+
+  it('spends nothing on setting the band it is already on', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['One'], 50)))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('x')
+    await new Promise((r) => setTimeout(r, 20))
+    search.setFilters('guitar', null)
+    await new Promise((r) => setTimeout(r, 20))
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    const spent = fetchFn.mock.calls.length
+    search.setIntensity('4', '5')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchFn.mock.calls.length).toBe(spent)
+  })
+})
+
+/**
+ * Rows the store was handed rather than ones it searched for.
+ *
+ * The whole of what `present` has to get right is that the list stops behaving like a search:
+ * nothing appends under the rows, nothing in flight replaces them a moment later, and the mount
+ * effect that re-applies the global query on every remount finds its question already answered.
+ * The note over them is the store's, because the store is what knows when they stop being there.
+ */
+describe('a result set the store was handed', () => {
+  const five = [1, 2, 3, 4, 5].map((id) => makeChart(id, id))
+
+  it('shows the rows under a note, and counts them as the whole answer', () => {
+    const search = createSearch({ fetchFn: vi.fn(), debounceMs: 5 })
+    search.present('five charts', five)
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+    expect(get(search.found)).toBe(5)
+    expect(get(search.presented)).toBe('five charts')
+    expect(get(search.searched)).toBe(true)
+    expect(get(search.error)).toBeNull()
+    expect(get(search.loading)).toBe(false)
+  })
+
+  it('refuses to append under them, whatever their songIds group to', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    // Two charts of one song group to one row against a count of two, which is exactly the shape
+    // `hasMore` reads as "there is more". Without `exhausted` the sentinel would arm and append
+    // page 2 of the wildcard under a handed-over set.
+    search.present('two versions', [makeChart(1, 42), makeChart(2, 42)])
+    expect(get(search.hasMore)).toBe(false)
+    await search.loadMore()
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('cancels a search still waiting out the debounce, which would replace them', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.setQuery('everlong')
+    search.present('five charts', five)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('records the wildcard as answered, so a remount does not re-query over them', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    // What Explore's mount effect does on every navigation back to it.
+    search.setQuery('')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(get(search.presented)).toBe('five charts')
+  })
+
+  it('leaves the rows alone when the note is about something still being fetched', () => {
+    const search = createSearch({ fetchFn: vi.fn(), debounceMs: 5 })
+    search.present('five charts', five)
+    search.present('looking for more', null)
+    expect(get(search.presented)).toBe('looking for more')
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('drops the note when a search of its own answers, because it no longer describes anything', async () => {
+    const fetchFn = vi.fn().mockImplementation(() => ok(result(['Everlong'])))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(get(search.results).map((c) => c.name)).toEqual(['Everlong'])
+    expect(get(search.presented)).toBeNull()
+  })
+
+  it('keeps the note when a search fails, because the rows it describes are still up', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(new Response('no', { status: 404 }))
+    const search = createSearch({ fetchFn, debounceMs: 5 })
+    search.present('five charts', five)
+    search.setQuery('everlong')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(get(search.error)).not.toBeNull()
+    expect(get(search.results).map((c) => c.chartId)).toEqual([1, 2, 3, 4, 5])
+    expect(get(search.presented)).toBe('five charts')
   })
 })

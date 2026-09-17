@@ -26,8 +26,8 @@ import { hasIniExtension, iniFileScanChartReads, readChartIniFiles } from './cha
  * There is deliberately no second write path here. The bytes go back through `writeChartFile`'s own
  * machinery: `withChartLock`, `writeChartAssetFromFile` for a folder chart, and `rewriteSngPlan`
  * (and so `repackSng` + `verifyRepack` + the atomic rename) for a `.sng`. The result is re-scanned
- * and refused unless each of the chart's two identities — scan-chart's `chartHash` and the
- * checksum Clone Hero records — is one of exactly two values. Not one: `applyFix` may
+ * and refused unless each of the chart's two identities (scan-chart's `chartHash` and the
+ * checksum Clone Hero records) is one of exactly two values. Not one: `applyFix` may
  * only leave the hash alone, but an undo of a repair that DID move it has to be allowed to move it
  * back, and that is the case the undo matters most for. `assertRestoreHash` spells out both. An
  * undo that could break multiplayer would be a worse bug than the irreversibility it exists to

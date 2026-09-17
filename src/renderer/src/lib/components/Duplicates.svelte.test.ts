@@ -13,6 +13,7 @@ import {
   TAGGED_CHARTER,
   TAGGED_CHARTER_TEXT
 } from '../../../../../test/helpers/marked-up-names'
+import { duplicates, duplicatesError, loadDuplicates } from '../stores/duplicates'
 import Duplicates from './Duplicates.svelte'
 
 /**
@@ -100,12 +101,24 @@ function stub(result: DuplicateReport, extra: Record<string, unknown> = {}): Stu
   return { reveal, remove }
 }
 
-/** Renders and opens the panel, which is collapsed until something is found and shown. */
+/**
+ * Load the report through the store, then render the page it feeds.
+ *
+ * The page reads a launch-wide store rather than fetching on mount, so a test drives the load
+ * itself. That is also what it buys: everything below is settled before the first assertion, with
+ * no `findBy` waiting on a fetch that has already happened.
+ */
 async function open(result: DuplicateReport): Promise<Stubs> {
   const stubs = stub(result)
+  await loadDuplicates()
   render(Duplicates)
-  fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
   return stubs
+}
+
+/** The same, for the tests that need a stub of their own. */
+async function show(): Promise<void> {
+  await loadDuplicates()
+  render(Duplicates)
 }
 
 /** Open the confirmation for one copy. Nothing is removed until the second press. */
@@ -115,16 +128,20 @@ async function confirmFor(path: string): Promise<void> {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // Module state: a report left behind would be the next test's starting point.
+  duplicates.set(null)
+  duplicatesError.set(null)
 })
 
 describe('Duplicates: a library with none', () => {
   it('says so in one line and offers nothing to open', async () => {
     stub(report())
-    render(Duplicates)
+    await show()
 
-    expect(await screen.findByText('Nothing in your library is installed twice.')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Show' })).toBeNull()
+    expect(screen.getByText('Nothing in your library is installed twice.')).toBeTruthy()
+    // Nothing to export and nothing to be careful about, so neither is drawn.
     expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull()
+    expect(screen.queryByText(/A removal goes to your system Trash/)).toBeNull()
   })
 
   it('reports a failed read rather than an empty library', async () => {
@@ -133,9 +150,9 @@ describe('Duplicates: a library with none', () => {
     vi.stubGlobal('encore', {
       catalogDuplicates: (): Promise<DuplicateReport> => Promise.reject(new Error('no ipc'))
     })
-    render(Duplicates)
+    await show()
 
-    expect(await screen.findByText(/ERROR: no ipc/)).toBeTruthy()
+    expect(screen.getByText(/ERROR: no ipc/)).toBeTruthy()
     expect(screen.queryByText(/Nothing in your library/)).toBeNull()
   })
 })
@@ -171,8 +188,7 @@ describe('Duplicates: the same chart installed twice', () => {
     stub(report({ identical: [identical()] }), {
       chartReveal: vi.fn(() => Promise.reject(new Error('Refusing to open a path outside')))
     })
-    render(Duplicates)
-    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await show()
 
     await fireEvent.click(
       screen.getByRole('button', { name: 'Show in folder: /library/Rush - YYZ' })
@@ -298,8 +314,7 @@ describe('Duplicates: removing one copy of an identical pair', () => {
     stub(report({ identical: [mixed()] }), {
       chartRemove: vi.fn(() => Promise.reject(new Error('Failed to move item to trash')))
     })
-    render(Duplicates)
-    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await show()
 
     await confirmFor('/library/Rush - YYZ (1)')
     await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
@@ -318,8 +333,7 @@ describe('Duplicates: removing one copy of an identical pair', () => {
         Promise.resolve({ path, outcome: 'already-gone' as const })
       )
     })
-    render(Duplicates)
-    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await show()
 
     await confirmFor('/library/Rush - YYZ (1)')
     await fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
@@ -468,16 +482,16 @@ describe('Duplicates: a report too long to draw whole', () => {
 describe('Duplicates: charts the comparison cannot see', () => {
   it('says how many charts have no chart ID yet, above everything else', async () => {
     stub(report({ unidentifiedCharts: 12, totalCharts: 200 }))
-    render(Duplicates)
+    await show()
 
-    expect(await screen.findByText(/12 of your 200 charts carry no chart ID yet/)).toBeTruthy()
+    expect(screen.getByText(/12 of your 200 charts carry no chart ID yet/)).toBeTruthy()
   })
 
   it('says nothing about it when every chart has one', async () => {
     stub(report({ identical: [identical()] }))
-    render(Duplicates)
+    await show()
 
-    expect(await screen.findByRole('button', { name: 'Show' })).toBeTruthy()
+    expect(screen.getByText('The same chart, installed twice')).toBeTruthy()
     expect(screen.queryByText(/carry no chart ID yet/)).toBeNull()
   })
 })
@@ -491,8 +505,7 @@ describe('Duplicates: export', () => {
         return Promise.resolve('/tmp/encore-duplicates.csv')
       }
     })
-    render(Duplicates)
-    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await show()
     await fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
 
     await screen.findByText(/SAVED/)
@@ -553,8 +566,7 @@ describe('Duplicates names written in Clone Hero markup', () => {
         return Promise.resolve('/tmp/encore-duplicates.csv')
       }
     })
-    render(Duplicates)
-    fireEvent.click(await screen.findByRole('button', { name: 'Show' }))
+    await show()
     await fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
 
     await screen.findByText(/SAVED/)

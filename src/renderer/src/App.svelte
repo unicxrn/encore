@@ -3,10 +3,14 @@
   import Assets from './lib/components/Assets.svelte'
   import Browse from './lib/components/Browse.svelte'
   import Detail from './lib/components/Detail.svelte'
+  import Duplicates from './lib/components/Duplicates.svelte'
+  import MetadataEditor from './lib/components/MetadataEditor.svelte'
   import ErrorFallback from './lib/components/ErrorFallback.svelte'
   import Home, { type ChartTarget } from './lib/components/Home.svelte'
+  import Setlists from './lib/components/Setlists.svelte'
   import Icon from './lib/components/Icon.svelte'
   import Library from './lib/components/Library.svelte'
+  import Rail from './lib/components/Rail.svelte'
   import RuntimeErrorBar from './lib/components/RuntimeErrorBar.svelte'
   import Settings from './lib/components/Settings.svelte'
   import Stats from './lib/components/Stats.svelte'
@@ -18,7 +22,9 @@
   import Welcome from './lib/components/Welcome.svelte'
   import WelcomeTour from './lib/components/WelcomeTour.svelte'
   import WhatsNew from './lib/components/WhatsNew.svelte'
-  import { initSettings, needsWelcome, settingsLoaded } from './lib/stores/settings'
+  import { initSettings, needsWelcome, settings, settingsLoaded } from './lib/stores/settings'
+  import { encore } from './lib/stores/bridge'
+  import { errorHeadline } from './lib/errors'
   import { finishTour, tourOpen } from './lib/stores/tour'
   import {
     closeWhatsNew,
@@ -29,16 +35,37 @@
   import { initDownloads } from './lib/stores/downloads'
   import { initScan } from './lib/stores/scan'
   import { initAssets } from './lib/stores/assets'
+  import { initDuplicates } from './lib/stores/duplicates'
+  import { loadFavourites } from './lib/stores/favourites'
+  import { loadSetlists } from './lib/stores/setlists'
   import { appUpdate, downloadAppUpdate, initAppUpdate } from './lib/stores/app-update'
   import { offeredUpdate } from '../../shared/app-update'
   import { globalQuery } from './lib/stores/global-search'
   import { togglePlay } from './lib/stores/preview-controller'
   import { matchShortcut, renderKeys, type ShortcutView } from './lib/shortcuts'
+  import { railOnScreen } from './lib/rail-visible'
+  import { surprise } from './lib/stores/surprise'
 
   let view = $state<ViewId>('home')
-  // Chart opened from Home or Explore. While set, Detail replaces the current
-  // view; Back clears it and returns to the view underneath.
+  // The chart page's subject: opened from Installed's rows, from the rail's All details, or by
+  // `selectChart` falling through at a width with no rail. While set, Detail replaces the
+  // current view; Back clears it and returns to the view underneath.
   let detailChart = $state<ChartTarget | null>(null)
+  /**
+   * The rail's subject: the last chart this launch picked out, and null before the first one.
+   *
+   * Written four ways now. An Explore row picks a chart without navigating anywhere, a Home row
+   * does the same, an Installed row's Preview button does the same, and opening a chart page
+   * still points the rail at what the page is showing.
+   *
+   * Deliberately NOT cleared when Detail closes, and deliberately not cleared by navigating to
+   * Settings or Stats. The rail is "what you are previewing", which is the same subject the
+   * player bar directly beneath it already holds across every view; a rail that emptied on the
+   * two views with nothing to select would be contradicting the bar under it on the same
+   * screen. What it costs is that the rail is empty until the first chart of the session, which
+   * is a state that ends and does not come back.
+   */
+  let railChart = $state<ChartTarget | null>(null)
   let downloadsOpen = $state(false)
   let shortcutsOpen = $state(false)
   let searchEl = $state<HTMLInputElement | null>(null)
@@ -50,9 +77,12 @@
     home: 'Home',
     browse: 'Explore',
     library: 'Installed',
+    setlists: 'Setlists',
     assets: 'Asset Studio',
-    stats: 'Stats',
+    stats: 'Statistics',
     tools: 'Issues',
+    duplicates: 'Duplicates',
+    metadata: 'Metadata editor',
     settings: 'Settings'
   }
 
@@ -77,6 +107,80 @@
     void window.encore.windowControl(action)
   }
 
+  /**
+   * What the two title-bar buttons could not do, in the words the user needs.
+   *
+   * A launch that the operating system refused, or a reveal of a folder that has since been
+   * removed from the library, is a direct answer to a press: it belongs beside the button that
+   * was pressed and not in a console nobody can open in a packaged build. `RuntimeErrorBar` is
+   * the other on-screen surface and is deliberately not this one: it exists for the errors that
+   * unwind past every boundary with nobody waiting on them, and it labels itself BACKGROUND
+   * ERROR, which this is not.
+   *
+   * The note renders `position: absolute` under the bar, so a message of any length costs the
+   * 50px title row nothing. scripts/measure-top-bar.mjs measures that rather than assuming it.
+   */
+  let topbarError = $state<string | null>(null)
+
+  /**
+   * Whether Encore launches the game on this platform at all.
+   *
+   * Linux and Windows; see `gameLaunchSupported` in main/game/executable.ts for why macOS is
+   * out. The button is not drawn there rather than being drawn and always refusing: a control
+   * that cannot work on this machine is worth less than the room it takes in a 50px row.
+   * `window.encore` is read directly because the platform is a value on the bridge rather than a
+   * channel, and it cannot change while the process runs.
+   */
+  const canLaunchGame = typeof window === 'undefined' || window.encore?.platform !== 'darwin'
+
+  /**
+   * Start Clone Hero, or go and ask where it is.
+   *
+   * An unset path leads to the setting rather than failing: the user pressed a button that names
+   * a thing Encore does not yet know how to do, and the answer to that is the one screen where
+   * they can say. A path that IS set is main's to check and to run, and its refusal is what the
+   * note below shows.
+   */
+  const launchGame = async (): Promise<void> => {
+    topbarError = null
+    if ($settings.gamePath === '') {
+      goTo('settings')
+      return
+    }
+    try {
+      await encore().gameLaunch()
+    } catch (err) {
+      topbarError = errorHeadline(err)
+    }
+  }
+
+  /**
+   * Open the library in the system file manager.
+   *
+   * `chartReveal` rather than a channel of its own, which is the point: main already has one
+   * guarded route from a path to the desktop shell, it already refuses anything outside the
+   * configured folders, and a library folder is inside itself by that check. A second channel
+   * would be a second place for that guard to be forgotten.
+   *
+   * The folder is the one downloads land in, since that is the one a user asking for "my
+   * library" has just put something into. With none configured there is nothing to open, and
+   * Settings is where that is fixed.
+   */
+  const openLibrary = async (): Promise<void> => {
+    topbarError = null
+    const folders = $settings.libraryFolders
+    const target = folders.find((f) => f.isDefault) ?? folders[0]
+    if (!target) {
+      goTo('settings')
+      return
+    }
+    try {
+      await encore().chartReveal(target.path)
+    } catch (err) {
+      topbarError = errorHeadline(err)
+    }
+  }
+
   const onSearchInput = (value: string): void => {
     globalQuery.set(value)
     detailChart = null
@@ -86,6 +190,48 @@
   const goTo = (id: ViewId): void => {
     detailChart = null
     view = id
+  }
+
+  /**
+   * Five charts the user does not have, and the view they belong in.
+   *
+   * Explore is where this lands because Explore is the list of charts that are not in the
+   * library: the rows, the health dot, the pips, the per-row download, the multi-select and the
+   * rail a row fills are all already built for exactly these five charts, and a surprise shown
+   * anywhere else would be a second, poorer copy of that list. The store puts a line over it
+   * saying where the rows came from; see `SearchStore.present`.
+   *
+   * Navigating first rather than when the answer arrives. The press has to be visibly heard, the
+   * roll's own note is on the view it is navigating to, and a failure then lands beside the list
+   * rather than in a sidebar tile with no room for a sentence.
+   */
+  const surpriseMe = (): void => {
+    goTo('browse')
+    void surprise.roll()
+  }
+
+  /**
+   * Point the rail at a chart, without taking the list away.
+   *
+   * What Explore's rows do, what Home's rows do, and what Installed's per-row Preview button
+   * does. Browsing is a scanning task: the pips, the health dot, the statistics and the highway
+   * in the rail are the whole of "is this the version I want", and a page swap per chart is the
+   * wrong weight for a question answered that often. The chart page is still there, reached from the rail once a
+   * chart is in it, for the four things only it has.
+   *
+   * The fallback is the width case. Below the shell's breakpoint the rail is `display: none`, so
+   * filling it would be a click with nothing to show for it; there the chart page is the only
+   * place the answer can go, and the rail is pointed at it anyway so widening the window later
+   * finds the column already holding the right chart. `railOnScreen` asks the element rather
+   * than the window, so the breakpoint stays written down once, in the media query below.
+   *
+   * Installed cannot reach the fallback: its Preview button is hidden by the same query that
+   * hides the rail. It shares this handler regardless, because a second copy of the rule is a
+   * second place for it to go wrong.
+   */
+  const selectChart = (target: ChartTarget): void => {
+    railChart = target
+    if (!railOnScreen()) detailChart = target
   }
 
   /**
@@ -174,12 +320,18 @@
     openOfferedWhatsNew(updateOffer.version)
   }
 
+  // The rail follows what the user opens, and holds it afterwards. Written here rather than at
+  // each caller for the reason the downloads effect below gives: the callers are many.
+  $effect(() => {
+    if (detailChart !== null) railChart = detailChart
+  })
+
   /**
    * Navigating closes the downloads panel.
    *
    * Keyed on `viewKey` rather than wired into each caller, because the callers are many and
-   * scattered: the sidebar, `Mod+1-7`, the search field, Home's links, every card that opens a
-   * chart, Detail's Back and the error fallback's Go to Home. One of those forgetting to close
+   * scattered: the sidebar, `Mod+1-7`, the search field, Home's links, an Installed row, the
+   * rail's All details, Detail's Back and the error fallback's Go to Home. One of those forgetting to close
    * the panel would be the bug this exists to prevent, so the closing is attached to the one
    * thing every one of them does: change what the content pane shows.
    *
@@ -295,6 +447,17 @@
     const offDownloads = initDownloads()
     const offScan = initScan()
     const offAssets = initAssets()
+    // Read once for the launch rather than once per visit to the view, because the sidebar draws
+    // a count off it and the sidebar is always mounted. See the store for what one read costs.
+    const offDuplicates = initDuplicates()
+    // Once for the launch, for the reason the store gives: the rail asks which chart is hearted
+    // on every navigation, and App destroys the rail's neighbours on each one.
+    void loadFavourites()
+    // Once for the launch, and for the same reason: the sidebar draws how many setlists there are
+    // the whole time, and the rail asks which of them hold a chart on every navigation. The
+    // failure is swallowed here and reported by the Setlists view, which re-reads on mount; a
+    // message about a list nobody has asked to see would be an alarm for an absent count.
+    void loadSetlists().catch(() => {})
     // Subscribed here rather than in Settings, because the two states that arrive unasked (the
     // startup check's result, and download progress) land while that tab is closed as often as
     // not, and a subscription that only exists while the panel is mounted would miss them.
@@ -308,6 +471,7 @@
       offDownloads()
       offScan()
       offAssets()
+      offDuplicates()
       offAppUpdate()
       offWhatsNew()
       window.removeEventListener('keydown', onKeydown)
@@ -343,10 +507,18 @@
     />
   {/snippet}
   <div class="app">
+    <Sidebar
+      {view}
+      {downloadsOpen}
+      onNavigate={goTo}
+      onToggleDownloads={() => (downloadsOpen = !downloadsOpen)}
+      onShowShortcuts={() => (shortcutsOpen = true)}
+      onSurprise={surpriseMe}
+    />
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- titlebar is a drag region; dblclick-maximize matches native caption-bar behavior -->
-    <header class="titlebar" ondblclick={() => control('maximize')}>
+    <!-- topbar is a drag region; dblclick-maximize matches native caption-bar behavior -->
+    <header class="topbar" ondblclick={() => control('maximize')}>
       <div class="search" ondblclick={(e) => e.stopPropagation()}>
         <input
           bind:this={searchEl}
@@ -359,6 +531,29 @@
              reader reading "Ctrl K" after it would be describing a key the user
              has no way to act on from inside the field's announcement. -->
         <span class="kbd" aria-hidden="true">{searchHint.join(' ').toUpperCase()}</span>
+      </div>
+      <!-- The two things the title bar can do about the world outside Encore, in the order the
+           approved design puts them: the game first, then the folder the charts are in, then the
+           window controls. Both are `no-drag`, or a press would begin a window move instead. -->
+      <div class="actions">
+        {#if canLaunchGame}
+          <button
+            class="action"
+            onclick={() => void launchGame()}
+            ondblclick={(e) => e.stopPropagation()}
+          >
+            <Icon name="play" size={13} />
+            <span>Launch Clone Hero</span>
+          </button>
+        {/if}
+        <button
+          class="action"
+          onclick={() => void openLibrary()}
+          ondblclick={(e) => e.stopPropagation()}
+        >
+          <Icon name="folder" size={13} />
+          <span>My library</span>
+        </button>
       </div>
       <div class="controls">
         <!-- ondblclick stops propagation so button double-clicks don't trigger the header maximize -->
@@ -379,16 +574,17 @@
           aria-label="Close"><Icon name="x" size={14} /></button
         >
       </div>
+      <!-- Out of flow, so a sentence of any length costs the 50px row nothing. `role="alert"`
+           because it is the answer to something the user just pressed and nothing else on screen
+           will have changed to say so. -->
+      {#if topbarError !== null}
+        <div class="topbar-note" role="alert">
+          <p>{topbarError}</p>
+          <button class="hairline" onclick={() => (topbarError = null)}>Dismiss</button>
+        </div>
+      {/if}
     </header>
-    <div class="body">
-      <Sidebar
-        {view}
-        {downloadsOpen}
-        onNavigate={goTo}
-        onToggleDownloads={() => (downloadsOpen = !downloadsOpen)}
-        onShowShortcuts={() => (shortcutsOpen = true)}
-      />
-      <!-- The {#key} here is the boundary's reset, NOT a re-render device: the {#if} chain below
+    <!-- The {#key} here is the boundary's reset, NOT a re-render device: the {#if} chain below
          already creates a fresh component (and a fresh root element) on every navigation, and an
          earlier {#key} around a wrapper div was removed for adding a second teardown to each one.
          What it buys back is that a boundary which has caught an error keeps showing its fallback
@@ -396,63 +592,109 @@
          Tools crash on screen. Keyed on the chart object rather than the view id so opening a
          different chart clears a failed Detail too. The fade still rides on the new root element
          via CSS; {#key} adds no element of its own. -->
-      {#key viewKey}
-        <main class="view">
-          <svelte:boundary>
-            {#snippet failed(error, reset)}
-              <ErrorFallback
-                {error}
-                where={viewName}
-                scope="view"
-                onRetry={reset}
-                onLeave={() => {
-                  detailChart = null
-                  view = 'home'
-                }}
-              />
-            {/snippet}
-            {#if detailChart}
-              <Detail
-                target={detailChart}
-                onBack={() => (detailChart = null)}
-                onNavigate={(id) => {
-                  detailChart = null
-                  view = id
-                }}
-              />
-            {:else if view === 'home'}
-              <!-- The welcome replaces Home only, never the whole app: the sidebar keeps working, so
+    {#key viewKey}
+      <main class="view">
+        <svelte:boundary>
+          {#snippet failed(error, reset)}
+            <ErrorFallback
+              {error}
+              where={viewName}
+              scope="view"
+              onRetry={reset}
+              onLeave={() => {
+                detailChart = null
+                view = 'home'
+              }}
+            />
+          {/snippet}
+          {#if detailChart}
+            <Detail
+              target={detailChart}
+              onBack={() => (detailChart = null)}
+              onNavigate={(id) => {
+                detailChart = null
+                view = id
+              }}
+            />
+          {:else if view === 'home'}
+            <!-- The welcome replaces Home only, never the whole app: the sidebar keeps working, so
              nobody is stuck behind it. It is also why the gate is not applied to the other
              branches: a first-run user who clicks Settings must get Settings. -->
-              {#if !$settingsLoaded}
-                <!-- Deliberately empty for the one frame the settings load takes. `settings` starts
+            {#if !$settingsLoaded}
+              <!-- Deliberately empty for the one frame the settings load takes. `settings` starts
                at its defaults, which have no library folders, so rendering either Home or
                Welcome here would be a guess, and the wrong one flashes on every cold start. -->
-              {:else if $needsWelcome}
-                <Welcome onNavigate={(id) => (view = id)} />
-              {:else}
-                <Home
-                  onNavigate={(id) => (view = id)}
-                  onOpenChart={(target) => (detailChart = target)}
-                />
-              {/if}
-            {:else if view === 'browse'}
-              <Browse onOpenChart={(target) => (detailChart = target)} />
-            {:else if view === 'library'}
-              <Library onOpenChart={(target) => (detailChart = target)} />
-            {:else if view === 'assets'}
-              <Assets />
-            {:else if view === 'stats'}
-              <Stats />
-            {:else if view === 'tools'}
-              <Tools />
-            {:else if view === 'settings'}
-              <Settings />
+            {:else if $needsWelcome}
+              <Welcome onNavigate={(id) => (view = id)} />
+            {:else}
+              <!-- Home's chart rows land where Explore's do. Both are places a chart is
+                   scanned rather than read, so both hand the rail the chart and leave the page
+                   where it is; `selectChart` is also what falls through to the chart page at a
+                   width where there is no rail to fill. -->
+              <Home onNavigate={(id) => (view = id)} onSelectChart={selectChart} />
             {/if}
-          </svelte:boundary>
-        </main>
-      {/key}
-    </div>
+          {:else if view === 'browse'}
+            <!-- Explore has one way out of a row and it does not navigate: the rail is where a
+                 result lands. Nothing here opens the chart page, which is why Browse is handed
+                 no way to; the route to it is the rail's own, beside the chart it is showing. -->
+            <Browse onSelectChart={selectChart} />
+          {:else if view === 'library'}
+            <!-- Two ways out of a row, and only one of them navigates. Preview writes the rail's
+                 subject directly, which is the same slot Detail's effect above writes and the
+                 same one the rail reads, so a previewed chart survives leaving Installed exactly
+                 as an opened one does.
+
+                 Explore differs deliberately: an Installed row is a chart the user already has,
+                 so opening it is a visit to a file they own and the page is the right weight for
+                 that. An Explore row is a candidate among 95,000, and the question is which one
+                 to take. -->
+            <Library onOpenChart={(target) => (detailChart = target)} onSelectChart={selectChart} />
+          {:else if view === 'setlists'}
+            <!-- Given `selectChart` and not `onOpenChart`: a setlist row's job is to let a reader
+                 check a chart without leaving the order they are reading, which is the rail's
+                 whole purpose, and the chart page is one navigation away from there. -->
+            <Setlists onSelectChart={selectChart} />
+          {:else if view === 'assets'}
+            <Assets />
+          {:else if view === 'stats'}
+            <Stats />
+          {:else if view === 'tools'}
+            <!-- Issues points at Duplicates rather than holding it. The report moved out to a
+                 destination of its own, and a view that simply stopped mentioning what it used to
+                 answer would leave the user hunting for it. -->
+            <Tools onNavigate={goTo} />
+          {:else if view === 'duplicates'}
+            <Duplicates />
+          {:else if view === 'metadata'}
+            <MetadataEditor />
+          {:else if view === 'settings'}
+            <Settings />
+          {/if}
+        </svelte:boundary>
+      </main>
+    {/key}
+    <!-- Its own boundary, and a third one rather than a wider one: the rail reads a chart
+         record and renders a preview, so it can throw for reasons the content pane never
+         would, and a rail that throws must cost the user the rail and not the app. -->
+    <svelte:boundary>
+      {#snippet failed(error: unknown, reset: () => void)}
+        <!-- Deliberately not `ErrorFallback`: that draws a whole pane, and this column is
+             374px wide. The message the rail can afford is one line, with the reason in the
+             tooltip for whoever is reporting it. -->
+        <aside class="rail rail-failed" aria-label="Chart detail">
+          <p title={error instanceof Error ? error.message : String(error)}>
+            The rail stopped working.
+          </p>
+          <button class="btn-ghost" onclick={reset}>Try again</button>
+        </aside>
+      {/snippet}
+      <!-- The one route from the rail to the chart page, and it is the rail's rather than
+           Explore's on purpose: a control on every row would be thirty invitations to leave the
+           list, which is the thing this arrangement exists to stop. Here there is one, beside
+           the chart it would open, and it goes with the column below the breakpoint, where the
+           row click opens the page directly and nothing needs routing. -->
+      <Rail target={railChart} onOpenDetail={(target) => (detailChart = target)} />
+    </svelte:boundary>
     <!-- One positioned box for the strip and the bar together. The downloads panel (rendered
          inside PlayerBar) sets `bottom: calc(100% + 10px)` against its containing block, and
          that block has to be this wrapper, not the bar: the strip stacks ABOVE the bar, so a
@@ -500,26 +742,86 @@
 </svelte:boundary>
 
 <style>
+  /* The window frame: three columns, three rows, and every child placed by hand.
+     
+     The placement is the whole of this rule and none of it is optional. A grid with fewer
+     explicit rows than it has children auto-places the overflow into implicit rows, and the
+     symptom is not a warning: the content pane lands in the player's row, the player is pushed
+     into an implicit fourth, and the window paints as a black band with everything crushed at
+     the bottom. That is not a hypothetical; it is what this frame did twice before the rules
+     below were written. `grid-auto-rows: 0` is the belt: anything that ever did auto-place
+     collapses to nothing and shows up in `scripts/measure-play-stats.mjs` as a zero-height
+     region rather than as a silently rearranged window.
+
+     The four launch overlays (the tour, what's new, the update prompt, the shortcut sheet) are
+     `position: fixed` in their own components, so they are out of flow and are not grid items
+     at all. They are the reason the belt exists rather than a reason to widen the template. */
   .app {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 238px 1fr 374px;
+    grid-template-rows: 50px 1fr 70px;
+    grid-auto-rows: 0;
     height: 100vh;
     position: relative;
   }
-  .titlebar {
+  /* Below this the rail is more chrome than the content column can pay for: at the 960px
+     minimum window width the three fixed tracks leave 348px for the view, which is narrower
+     than the rail beside it. The rail is the thing that goes, because it is the only one of
+     the five that repeats what another screen already shows. */
+  @media (max-width: 1120px) {
+    .app {
+      grid-template-columns: 238px 1fr;
+    }
+    .app > :global(.rail) {
+      display: none;
+    }
+    /* Anything whose only job is to point the rail at a chart goes with the rail. Installed's
+       per-row Preview button is the one such control; it lives in Library.svelte and is hidden
+       from here so this width stays written down once, in the query above it. */
+    .app :global(.to-rail) {
+      display: none;
+    }
+    .topbar,
+    .foot {
+      grid-column: 2 / 3;
+    }
+  }
+  /* Column 1, all three rows: the sidebar runs from the window's top edge to its bottom one,
+     so the wordmark sits beside the top bar rather than under it. Placed from here rather than
+     from the component, so all five placements are readable in one block. */
+  .app > :global(.sidebar) {
+    grid-column: 1 / 2;
+    grid-row: 1 / 4;
+    min-height: 0;
+  }
+  .topbar {
+    grid-column: 2 / 4;
+    grid-row: 1 / 2;
     display: flex;
     align-items: center;
-    height: 40px;
-    padding: 0;
+    gap: 10px;
+    height: 100%;
+    /* Padding on the left only. The window controls have to stay flush in the corner (see the
+       focus-ring rule below, which exists because the close button's right edge IS innerWidth),
+       so the row is inset where it begins and not where it ends. */
+    padding: 0 0 0 14px;
     border-bottom: 1px solid var(--hairline);
     -webkit-app-region: drag;
     position: relative;
   }
+  /* In flow rather than absolutely centred, which is what makes room for the two buttons.
+     Centred, the box was placed from the row's midpoint and knew nothing about what was to its
+     right, so the buttons were drawn straight over it. Measured with the centred rule and the
+     buttons both in place (scripts/measure-top-bar.mjs): 237px of overlap at a 960px window,
+     175px at 1120 and again at 1121, 95px at 1280, and clear only at 1920. Laid out in the row,
+     the buttons take their width first and the search takes what is left, up to the same
+     maximum it had before. `min-width` is what stops it collapsing to its content at the 960px
+     window minimum; `flex: 1` is what keeps it as wide as it used to be above that. */
   .search {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(420px, 40vw);
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 180px;
+    max-width: 420px;
     display: flex;
     align-items: center;
     -webkit-app-region: no-drag;
@@ -551,8 +853,40 @@
     padding: 2px 5px;
     pointer-events: none;
   }
-  .controls {
+  /* `margin-left: auto` here rather than on `.controls`: one auto margin puts everything from
+     this point on against the right edge, where two would split the free space and float the
+     buttons somewhere in the middle of the row. */
+  .actions {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 8px;
+    -webkit-app-region: no-drag;
+  }
+  .actions .action {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 29px;
+    padding: 0 11px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+  .actions .action:hover {
+    border-color: var(--accent);
+    color: var(--text-1);
+  }
+  .controls {
     display: flex;
     -webkit-app-region: no-drag;
   }
@@ -585,19 +919,87 @@
     background: var(--accent);
     color: var(--bg);
   }
-  .body {
+  /* Anchored to the title bar and out of its flow, so the row stays exactly 50px whatever the
+     message says. Right-aligned under the buttons it belongs to, capped so a long path wraps
+     rather than running the width of the window, and above the view underneath it. */
+  .topbar-note {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 5;
+    max-width: min(460px, calc(100% - 16px));
     display: flex;
-    flex: 1;
-    min-height: 0;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 6px;
+    padding: 9px 11px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    box-shadow: var(--elev-3);
+    -webkit-app-region: no-drag;
   }
-  .foot {
-    position: relative;
+  .topbar-note p {
+    margin: 0;
+    font-size: var(--fs-secondary);
+    color: var(--text-1);
+  }
+  .topbar-note .hairline {
     flex-shrink: 0;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  /* Row 3 is 70px and this box is content-sized against it, pinned to the row's bottom edge.
+     That is what lets the runtime error strip appear without moving the player bar: the strip
+     grows this box UPWARD, over the bottom of the content column, instead of pushing the bar
+     off the window the way a stretched 70px item would. The downloads panel anchors to this
+     box (see DownloadsPanel's `.panel`), so it keeps clearing the strip by the same 10px. */
+  .foot {
+    grid-column: 2 / 4;
+    grid-row: 3 / 4;
+    align-self: end;
+    position: relative;
+    width: 100%;
   }
   .view {
-    flex: 1;
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
     min-width: 0;
+    min-height: 0;
     overflow: auto;
+  }
+  /* The rail's own column. The component paints it; this rule only places it, for the same
+     reason every other child here carries a placement. */
+  .app > :global(.rail) {
+    grid-column: 3 / 4;
+    grid-row: 2 / 3;
+    min-height: 0;
+  }
+  .rail-failed {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 16px;
+    border-left: 1px solid var(--hairline);
+    font-size: var(--fs-secondary);
+    color: var(--text-2);
+  }
+  .rail-failed .btn-ghost {
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    font-size: var(--fs-secondary);
+    padding: 5px 12px;
+    cursor: pointer;
   }
   /* Each view component renders one root element, and switching views creates a
      new one, so the entry animation plays exactly once per navigation without

@@ -13,7 +13,7 @@ import { parseScoreStats, type PlayRecord } from './scorestats'
  * 1. **It watches a directory, not the file.** Clone Hero rewrites scorestats.json, and a
  *    rewrite on any platform may be an unlink-and-recreate rather than an in-place write. A
  *    watch on the file itself survives the first of those and then silently watches an inode
- *    nothing will ever touch again — the user plays all evening and Encore records nothing.
+ *    nothing will ever touch again: the user plays all evening and Encore records nothing.
  *    Watching the parent directory and filtering by name is immune to that, and is also what
  *    makes a currently-absent file work: the directory exists on a Clone Hero install even
  *    before the first score is written.
@@ -85,8 +85,8 @@ export class PlayWatcher {
    *
    * ENOENT is separated from every other read failure only to set the status, because the two
    * mean different things to a user: "Clone Hero has not recorded a score here" versus "there is
-   * a file and Encore cannot use it". Neither is worth a log line — the second happens routinely
-   * while Clone Hero is writing — and neither reaches a caller as an exception.
+   * a file and Encore cannot use it". Neither is worth a log line (the second happens routinely
+   * while Clone Hero is writing) and neither reaches a caller as an exception.
    */
   async refresh(): Promise<boolean> {
     if (this.path === null) {
@@ -132,7 +132,7 @@ export class PlayWatcher {
       // Depth 0 keeps this to the directory's own entries. Clone Hero's data root also holds
       // Songs/, which on a real library is tens of thousands of files, and recursing into it
       // would make this watcher many times more expensive than the library watcher it sits
-      // beside — to learn nothing, since only one file here is ever read.
+      // beside, to learn nothing, since only one file here is ever read.
       depth: 0,
       ignored: (p: string) => p !== dirname(file) && p !== file
     })

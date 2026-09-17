@@ -82,7 +82,7 @@ describe('normalizeChecksum', () => {
  *
  * Everything else here is self-consistent: it proves that `cloneHeroChecksum` computes an MD5 of
  * the chart file, which is only interesting if that is the same number Clone Hero writes into
- * scorestats.json. Nothing hermetic can establish that — a fixture whose checksum we generated
+ * scorestats.json. Nothing hermetic can establish that. A fixture whose checksum we generated
  * ourselves would agree with us by construction and say nothing about the game. So this reads
  * the owner's actual files.
  *

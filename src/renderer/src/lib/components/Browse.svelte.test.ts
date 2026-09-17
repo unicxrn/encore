@@ -1,12 +1,12 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { browseSearch } from '../stores/search'
 import { globalQuery } from '../stores/global-search'
 import { settings } from '../stores/settings'
 import { defaultSettings } from '../../../../shared/settings-defaults'
-import type { ChartData, SearchResult } from '../api/enchor'
-import type { AdvancedQuery } from '../api/advanced'
+import { DIFFICULTIES, type ChartData, type SearchResult } from '../api/enchor'
+import { emptyAdvanced, type AdvancedQuery } from '../api/advanced'
 import {
   EIGHT_TAG_CHARTER,
   EIGHT_TAG_CHARTER_TEXT
@@ -23,7 +23,16 @@ vi.mock('../api/enchor', async (importOriginal) => ({
   searchCharts: (...args: unknown[]) => searchCharts(...args) as Promise<SearchResult>
 }))
 
-import Browse from './Browse.svelte'
+import Browse, { hideOwned } from './Browse.svelte'
+
+/**
+ * The difficulty control, which is a group of dots rather than a list.
+ *
+ * Reached by the group's accessible name, so every query for a dot is scoped to it: "Expert" and
+ * "Hard" are ordinary enough words that an unscoped query would eventually pick up a badge.
+ */
+const difficultyDots = (): HTMLElement =>
+  screen.getByRole('group', { name: 'Filter by difficulty' })
 
 function chart(
   chartId: number,
@@ -114,7 +123,7 @@ function sentinelInView(visible = true): void {
 }
 
 function renderBrowse(
-  onOpenChart: (target: unknown) => void = () => {},
+  onSelectChart: (target: unknown) => void = () => {},
   {
     inLibrary = false,
     // Explore is reachable with nothing configured (the welcome's "Explore
@@ -136,13 +145,19 @@ function renderBrowse(
       Promise.resolve(
         keys.map((k) => (typeof inLibrary === 'function' ? inLibrary(k) : inLibrary))
       ),
+    // The row's health dot reads `explainIssue`, whose answer for `badVideo` depends on the
+    // machine. Pinned rather than left undefined so these tests are not about this one.
+    platform: 'linux',
     downloadAdd
   })
-  return render(Browse, { onOpenChart })
+  return render(Browse, { onSelectChart })
 }
 
 afterEach(async () => {
   downloadAdd.mockReset()
+  // Module-scoped, like `browseSearch` below and for the same reason: it has to outlive the
+  // remount every navigation causes, which means it also outlives every test here.
+  hideOwned.set(false)
   // `settings` is another module-level writable this file writes to; left set,
   // a library folder from one test is what the next one's first paint reads.
   settings.set(defaultSettings())
@@ -162,6 +177,13 @@ afterEach(async () => {
   // which would put two rows for the same song on screen and make `getByRole`
   // ambiguous. Collapse whatever is open, the way a fresh store would be.
   for (const songId of get(browseSearch.expanded)) browseSearch.toggleExpanded(songId)
+  // Instrument, difficulty and the order are the same module-scoped singleton the rest of this
+  // hook resets. An instrument one test chose is still chosen on the next test's first paint,
+  // and it is what decides whether the intensity band is live. Guarded rather than set
+  // unconditionally, so a file where nothing touches them spends no request per test.
+  const chosen = get(browseSearch.filters)
+  if (chosen.instrument !== null || chosen.difficulty !== null) browseSearch.setFilters(null, null)
+  if (get(browseSearch.sort) !== '') browseSearch.setSort('')
   // Unstubbed last, and only once the run `clearAdvanced` may have started has settled. Browse is
   // still mounted while this hook runs (the library's cleanup is registered before it, so it runs
   // after), and its in-library effect reaches for the bridge every time the rows change. Pulling
@@ -172,10 +194,10 @@ afterEach(async () => {
 })
 
 describe('Browse expanded version groups', () => {
-  it('keeps a group expanded across the unmount an opened chart causes', async () => {
-    // App renders Detail *instead of* Browse, so visiting a chart destroys this
-    // component. Before the expansion state moved into the shared store, every
-    // expanded group collapsed on the way back.
+  it('keeps a group expanded across the unmount leaving the view causes', async () => {
+    // App renders every other view *instead of* Browse, so navigating away, or taking the
+    // rail's route to a chart page, destroys this component. Before the expansion state moved
+    // into the shared store, every expanded group collapsed on the way back.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
 
     const first = renderBrowse()
@@ -197,10 +219,15 @@ describe('Browse expanded version groups', () => {
 })
 
 // The charter is what tells the two rows of TWO_VERSIONS apart (same song, same
-// artist, same length), so these match the control that opens a chart by charter
-// rather than by title.
-const OPENS_PRIMARY = /CharterA/
-const OPENS_ALTERNATE = /CharterB/
+// artist, same length), so these match the control that hands a chart to the rail
+// by charter rather than by title.
+//
+// Anchored on the title the same way the two below are anchored on their verb. Three controls
+// in a row now carry the chart's full description: the title, the checkbox that selects it and
+// the button that downloads it. Only the first is named by the chart alone, so `^Everlong` is
+// what separates it from "Select Everlong…" and "Download Everlong…".
+const TITLE_PRIMARY = /^Everlong .*CharterA/
+const TITLE_ALTERNATE = /^Everlong .*CharterB/
 // The checkboxes carry the same charter, prefixed, and are matched separately so
 // a query for one control can never pick up the other.
 const SELECTS_PRIMARY = /^Select .*CharterA/
@@ -211,45 +238,45 @@ describe('Browse rows', () => {
     await fireEvent.click(await screen.findByLabelText('2 versions'))
   }
 
-  it('opens a chart when its row is clicked', async () => {
+  it('fills the rail when a row is clicked, without leaving the list', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
-    await fireEvent.click(await screen.findByRole('button', { name: OPENS_PRIMARY }))
+    await fireEvent.click(await screen.findByRole('button', { name: TITLE_PRIMARY }))
 
     // Once, not twice: a row that both handles its own click and lets an inner
-    // control's click bubble up to it would navigate twice per click.
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 1 } })
+    // control's click bubble up to it would hand the same chart over twice per click.
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 1 } })
   })
 
-  it('opens an alternate version when its row is clicked', async () => {
+  it('fills the rail with an alternate version when its row is clicked', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await showAlternates()
 
-    await fireEvent.click(screen.getByRole('button', { name: OPENS_ALTERNATE }))
+    await fireEvent.click(screen.getByRole('button', { name: TITLE_ALTERNATE }))
 
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
   })
 
-  it('does not open a chart when the version toggle is used', async () => {
+  it('does not touch the rail when the version toggle is used', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
     await showAlternates()
 
-    // The toggle sits inside the row's clickable area, so expanding a group must
-    // not also navigate away from the list it was expanded in.
-    expect(onOpenChart).not.toHaveBeenCalled()
+    // The toggle sits inside the row's clickable area, so expanding a group must not also
+    // replace what the rail beside the list is showing.
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByLabelText('2 versions').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('opens charts from a real button, which is what carries Enter and Space', async () => {
+  it('picks charts from a real button, which is what carries Enter and Space', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
     await showAlternates()
@@ -260,14 +287,14 @@ describe('Browse rows', () => {
     // thing the platform derives it from: an actual <button>. A <span
     // role="button"> passes getByRole and loses Space unless someone remembers
     // to handle it, which is the trap this pins shut.
-    for (const name of [OPENS_PRIMARY, OPENS_ALTERNATE]) {
-      const open = screen.getByRole('button', { name })
-      expect(open.tagName).toBe('BUTTON')
-      expect((open as HTMLButtonElement).disabled).toBe(false)
+    for (const name of [TITLE_PRIMARY, TITLE_ALTERNATE]) {
+      const title = screen.getByRole('button', { name })
+      expect(title.tagName).toBe('BUTTON')
+      expect((title as HTMLButtonElement).disabled).toBe(false)
     }
   })
 
-  it('names the control that opens a chart after the chart it opens', async () => {
+  it('names the control that picks a chart after the chart it picks', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
     await showAlternates()
@@ -288,7 +315,7 @@ describe('Browse rows', () => {
     expect(await screen.findByText('01')).toBeTruthy()
   })
 
-  it('keeps the version toggle outside the control that opens the chart', async () => {
+  it('keeps the version toggle outside the control that picks the chart', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     renderBrowse()
 
@@ -296,8 +323,8 @@ describe('Browse rows', () => {
     // browser does with the inner control undefined. The version toggle is the
     // one such control the row has today; the checkbox and per-row download
     // button that follow depend on the same rule holding.
-    const open = await screen.findByRole('button', { name: OPENS_PRIMARY })
-    expect(open.contains(screen.getByLabelText('2 versions'))).toBe(false)
+    const title = await screen.findByRole('button', { name: TITLE_PRIMARY })
+    expect(title.contains(screen.getByLabelText('2 versions'))).toBe(false)
   })
 })
 
@@ -340,9 +367,9 @@ describe('Browse grid view', () => {
     expect(screen.getByText('01')).toBeTruthy()
   })
 
-  it('keeps the chosen mode across the unmount an opened chart causes', async () => {
-    // App renders Detail *instead of* Browse, so visiting a chart destroys this
-    // component. A per-instance mode would drop the user back into the list.
+  it('keeps the chosen mode across the unmount leaving the view causes', async () => {
+    // App renders every other view *instead of* Browse, so leaving destroys this component.
+    // A per-instance mode would drop the user back into the list.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
     const first = renderBrowse()
     await screen.findByText('01')
@@ -386,8 +413,8 @@ describe('Browse grid view', () => {
     // alternates would leave someone downloading one of three charts believing
     // it was the only one.
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await screen.findByText('01')
     await showGrid()
 
@@ -397,24 +424,24 @@ describe('Browse grid view', () => {
     await fireEvent.click(chip)
 
     expect(screen.queryAllByText('CharterB').length).toBeGreaterThan(0)
-    // The chip sits inside the card's clickable area, and the card opens a
-    // chart: revealing versions must not navigate away from them.
-    expect(onOpenChart).not.toHaveBeenCalled()
+    // The chip sits inside the card's clickable area, and the card picks a
+    // chart: revealing versions must not replace what the rail is showing.
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByLabelText('2 versions').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('opens the alternate a revealed card stands for', async () => {
+  it('picks the alternate a revealed card stands for', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
     await screen.findByText('01')
     await showGrid()
     await fireEvent.click(screen.getByLabelText('2 versions'))
 
-    await fireEvent.click(screen.getByRole('button', { name: OPENS_ALTERNATE }))
+    await fireEvent.click(screen.getByRole('button', { name: TITLE_ALTERNATE }))
 
-    expect(onOpenChart).toHaveBeenCalledTimes(1)
-    expect(onOpenChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
+    expect(onSelectChart).toHaveBeenCalledTimes(1)
+    expect(onSelectChart.mock.calls[0][0]).toMatchObject({ kind: 'remote', chart: { chartId: 2 } })
   })
 
   it('selects a chart from a card, as a row does', async () => {
@@ -477,17 +504,17 @@ describe('Browse multi-select', () => {
     expect(screen.queryByText('1 selected')).toBeNull()
   })
 
-  it('does not open a chart when its checkbox is ticked', async () => {
+  it('does not pick a chart when its checkbox is ticked', async () => {
     searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
-    const onOpenChart = vi.fn()
-    renderBrowse(onOpenChart)
+    const onSelectChart = vi.fn()
+    renderBrowse(onSelectChart)
 
     // The checkbox sits inside the row's clickable area. The row stands aside
     // for clicks from `button, input, a, select`, and this is what proves an
     // `<input type="checkbox">` is covered by that rule rather than assuming it.
     await fireEvent.click(await screen.findByRole('checkbox', { name: SELECTS_PRIMARY }))
 
-    expect(onOpenChart).not.toHaveBeenCalled()
+    expect(onSelectChart).not.toHaveBeenCalled()
     expect(screen.getByText('1 selected')).toBeTruthy()
   })
 
@@ -810,7 +837,7 @@ describe('Browse advanced search', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Advanced search' }))
   }
 
-  /** What opening a chart Detail does to this view: destroys it, then builds it again. */
+  /** What leaving this view does to it: destroys it, then builds it again on the way back. */
   function remount(): void {
     mounted?.unmount()
     mounted = renderBrowse()
@@ -953,7 +980,7 @@ describe('Browse advanced search', () => {
       expect(await screen.findByText(/Searching cleared 1 advanced filter\./)).toBeTruthy()
     })
 
-    it('keeps the panel holding every field, across the unmount a chart opens', async () => {
+    it('keeps the panel holding every field, across the unmount leaving the view causes', async () => {
       // The whole rule rests on this. Clearing what was APPLIED while leaving the DRAFT alone is
       // what makes an accidental keystroke in the title bar recoverable instead of expensive.
       await openPanel()
@@ -1048,7 +1075,7 @@ describe('Browse advanced search', () => {
     expect(get(browseSearch.advancedDraft).text.album.value).toBe('')
   })
 
-  it('keeps a form that was filled in but never searched across the unmount a chart opens', async () => {
+  it('keeps a form that was filled in but never searched across an unmount', async () => {
     // App renders Detail instead of Browse, so visiting a chart destroys this component and the
     // panel with it. Ten fields typed and lost is worse than a search nobody ran.
     await openPanel()
@@ -1137,8 +1164,11 @@ describe('Explore names written in Clone Hero markup', () => {
   it('draws title, artist, album and charter as text in the list', async () => {
     await renderMarked('list')
     const row = document.querySelector('.row')
+    // The year joined this line with the redesigned row. It is the same rule as the two before
+    // it: what the chart says, stripped of Clone Hero's colour markup, with the separator of an
+    // empty field dropped rather than left behind.
     expect(row?.querySelector('.artist')?.textContent?.trim()).toBe(
-      'Foo Fighters · The Colour and the Shape'
+      'Foo Fighters · The Colour and the Shape · 1997'
     )
     expect(row?.querySelector('.charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
   })
@@ -1150,7 +1180,7 @@ describe('Explore names written in Clone Hero markup', () => {
     expect(card?.querySelector('.c-charter')?.textContent?.trim()).toBe(EIGHT_TAG_CHARTER_TEXT)
   })
 
-  it('gives the open button an accessible name that matches what is drawn', async () => {
+  it('gives the title button an accessible name that matches what is drawn', async () => {
     // The point of stripping this one: a screen reader announcing a colour tag while the eye
     // reads a charter is the two disagreeing about the same chart.
     await renderMarked()
@@ -1177,7 +1207,7 @@ describe('Explore names written in Clone Hero markup', () => {
       },
       downloadAdd
     })
-    render(Browse, { onOpenChart: () => {} })
+    render(Browse, { onSelectChart: () => {} })
     await screen.findByText('Everlong')
 
     await waitFor(() => {
@@ -1188,5 +1218,885 @@ describe('Explore names written in Clone Hero markup', () => {
       artist: '<b>Foo Fighters</b>',
       charter: EIGHT_TAG_CHARTER
     })
+  })
+})
+
+/**
+ * What the redesigned row says about a chart, and what it refuses to say.
+ *
+ * All of it comes out of the search response: Chorus runs scan-chart over every chart it
+ * ingests and hands back the issue arrays, the note data and thirteen difficulty ratings with
+ * each result, so none of this costs a request. jsdom applies no CSS, so these assert what is
+ * in the row and what it is called, never how it looks; `scripts/measure-explore-row.mjs`
+ * carries the look.
+ */
+describe('Explore result rows', () => {
+  const RICH: ChartData[] = [
+    {
+      ...chart(31, null, 'CharterRich'),
+      name: 'Rich Row',
+      hasVideoBackground: true,
+      modchart: true,
+      diff_guitar: 4,
+      diff_bass: 0,
+      diff_drums: -1,
+      folderIssues: [{ folderIssue: 'noAudio', description: 'This chart has no audio file.' }],
+      notesData: {
+        instruments: ['guitar', 'bass'],
+        has2xKick: true,
+        hasLyrics: true,
+        hasOpenNotes: true,
+        hasTapNotes: true,
+        hasSoloSections: true
+      }
+    }
+  ]
+
+  const PLAIN: ChartData[] = [
+    {
+      ...chart(32, null, 'CharterPlain'),
+      name: 'Plain Row',
+      diff_guitar: 2,
+      notesData: { instruments: ['guitar'], hasLyrics: true, hasOpenNotes: true }
+    }
+  ]
+
+  // Same trick the markup block above uses: `browseSearch` is module-scoped and answers from
+  // memory, so a block's rows only reach the screen behind a term nothing else here asks for.
+  async function renderRows(data: ChartData[], term: string, inLibrary = false): Promise<void> {
+    searchCharts.mockResolvedValue({ found: data.length, out_of: data.length, page: 1, data })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse(() => {}, { inLibrary })
+    await screen.findByText(data[0].name)
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws the three badges it kept and none of the ones it dropped', async () => {
+    await renderRows(RICH, 'rich-row')
+    expect(screen.getByText('VIDEO')).toBeTruthy()
+    expect(screen.getByText('2X KICK')).toBeTruthy()
+    expect(screen.getByText('MODCHART')).toBeTruthy()
+    // hasLyrics, hasOpenNotes, hasTapNotes and hasSoloSections are all true on this fixture and
+    // all deliberately undrawn: each is set on roughly half of Chorus, so a badge for it marks
+    // half the list and separates nothing. They are the reason the set is three and not seven.
+    for (const dropped of ['LYRICS', 'OPEN', 'TAP', 'SOLO']) {
+      expect(screen.queryByText(dropped)).toBeNull()
+    }
+  })
+
+  it('draws one difficulty group per part, in each of the three states', async () => {
+    await renderRows(RICH, 'rich-row')
+    // diff_guitar 4 with guitar in the note data.
+    expect(screen.getByLabelText('Guitar: difficulty 4 of 6')).toBeTruthy()
+    // diff_bass 0 with bass in the note data: charted, and rated at the bottom of the scale.
+    // The row must not turn this into "no bass", which is the whole reason for the component.
+    expect(screen.getByLabelText('Bass: difficulty 0 of 6')).toBeTruthy()
+    // diff_drums -1 and no drums in the note data.
+    expect(screen.getByLabelText('Drums: not charted')).toBeTruthy()
+  })
+
+  it('marks a chart Chorus found a real problem in, before anything is downloaded', async () => {
+    await renderRows(RICH, 'rich-row')
+    const dot = document.querySelector('.row .dot')
+    expect(dot?.classList.contains('broken')).toBe(true)
+    expect(dot?.getAttribute('title')).toContain('No audio')
+  })
+
+  it('draws no health mark at all on a chart with nothing wrong', async () => {
+    // 60 charts in 100 are in this state. A mark on all of them would be a mark that means
+    // nothing, and the rows that do carry one would stop standing out.
+    await renderRows(PLAIN, 'plain-row')
+    expect(document.querySelector('.row .dot')).toBeNull()
+  })
+
+  it('queues one chart from its own row, through the same call the selection uses', async () => {
+    await renderRows(PLAIN, 'plain-row')
+    await fireEvent.click(screen.getByRole('button', { name: /^Download .*CharterPlain/ }))
+    expect(downloadAdd.mock.calls.map((c) => (c[0] as { md5: string }).md5)).toEqual([PLAIN[0].md5])
+    // The button is spent: the queue is where this chart lives now, and a second press would
+    // be answered by the manager's md5 dedupe with nothing to show for it.
+    expect(await screen.findByText('QUEUED')).toBeTruthy()
+  })
+
+  it('offers no download for a chart already in the library, and says so instead', async () => {
+    await renderRows(PLAIN, 'plain-row', true)
+    expect(await screen.findByText('IN LIBRARY')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Download / })).toBeNull()
+  })
+
+  it('answers the missing library folder once, rather than queueing a doomed download', async () => {
+    searchCharts.mockResolvedValue({ found: 1, out_of: 1, page: 1, data: PLAIN })
+    browseSearch.setMode('list')
+    browseSearch.setQuery('plain-row')
+    renderBrowse(() => {}, { libraryFolders: [] })
+    await screen.findByText('Plain Row')
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Download .*CharterPlain/ }))
+
+    expect(downloadAdd).not.toHaveBeenCalled()
+    expect(screen.getByText(/No library folder yet/)).toBeTruthy()
+  })
+})
+
+/**
+ * The filter header: three controls that narrow, and one that orders.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says where any of this sits, how
+ * wide it is, or whether the row wraps before it clips. That is what `scripts/measure-explore-
+ * header.mjs` is for. These pin what each control offers, what it sends, and the one rule that
+ * ties two of them together.
+ */
+describe('Explore filter header', () => {
+  const show = async (): Promise<void> => {
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    renderBrowse()
+    await screen.findByLabelText('Filter by instrument')
+  }
+
+  const pick = async (label: string, value: string): Promise<void> => {
+    await fireEvent.change(screen.getByLabelText(label), { target: { value } })
+  }
+
+  const lastParams = (): {
+    instrument: string | null
+    difficulty: string | null
+    sort: { type: string; direction: string } | null
+    advanced: AdvancedQuery
+  } =>
+    searchCharts.mock.calls.at(-1)?.[0] as {
+      instrument: string | null
+      difficulty: string | null
+      sort: { type: string; direction: string } | null
+      advanced: AdvancedQuery
+    }
+
+  it('offers the ten instruments the endpoint takes, and not vocals', async () => {
+    // Vocals is the one the prototype drew and the endpoint refuses: sending it answers 400 and
+    // names the ten back (measured 2026-09-15). A vocal difficulty still shows on a row; it is
+    // not something a chart can be filtered to.
+    await show()
+    const options = [...screen.getByLabelText('Filter by instrument').querySelectorAll('option')]
+    expect(options.map((o) => o.value).filter(Boolean)).toEqual([
+      'guitar',
+      'bass',
+      'drums',
+      'keys',
+      'rhythm',
+      'guitarcoop',
+      'guitarghl',
+      'bassghl',
+      'rhythmghl',
+      'guitarcoopghl'
+    ])
+    expect(options.map((o) => o.value)).not.toContain('vocals')
+  })
+
+  it('asks difficulty and intensity as two different questions', async () => {
+    // Which charted difficulties exist, and how hard the chart is. Collapsing them into one
+    // control loses "expert, but not brutal", which is what someone learning wants.
+    await show()
+    const dots = within(difficultyDots()).getAllByRole('button')
+    expect(dots.map((dot) => dot.getAttribute('aria-label'))).toEqual([
+      'Easy',
+      'Medium',
+      'Hard',
+      'Expert'
+    ])
+    expect(screen.getByRole('group', { name: 'Filter by intensity' })).toBeTruthy()
+  })
+
+  it('draws one dot per difficulty the endpoint has, and no more', async () => {
+    // The endpoint names its whole enum back in the 400 it answers a bad value with:
+    // `'expert' | 'hard' | 'medium' | 'easy'` (measured against the live service on 2026-09-16).
+    // The approved design draws six dots here, which is the intensity scale its own rows draw
+    // six pips of; two of six toggles over four difficulties would filter nothing. DIFFICULTIES
+    // is where the four live, and this pins the dots to that list rather than to a number.
+    await show()
+    const dots = within(difficultyDots()).getAllByRole('button')
+    expect(dots).toHaveLength(DIFFICULTIES.filter((opt) => opt.value !== null).length)
+    expect(dots).toHaveLength(4)
+  })
+
+  it('asks for one difficulty at a time, because that is what the endpoint takes', async () => {
+    // `difficulty` is one string on the wire, not a list: an array of two answers 400 with
+    // `received: array` from the same check that names the enum (measured 2026-09-16). A second
+    // press therefore moves the choice rather than adding to it.
+    await show()
+    const dots = difficultyDots()
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Hard' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('hard'))
+
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Expert' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
+    expect(
+      within(dots)
+        .getAllByRole('button')
+        .filter((dot) => dot.getAttribute('aria-pressed') === 'true')
+        .map((dot) => dot.getAttribute('aria-label'))
+    ).toEqual(['Expert'])
+  })
+
+  it('goes back to any difficulty when the lit dot is pressed again', async () => {
+    // Nothing in the row says "Any difficulty" any more, so pressing the lit dot is the way out.
+    // The chosen one is named beside the dots while there is one; with none lit the label is
+    // the whole of what the control says, which is what the filter row has width for.
+    await show()
+    const dots = difficultyDots()
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Medium' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('medium'))
+    expect(within(dots).getByText('medium')).toBeTruthy()
+
+    await fireEvent.click(within(dots).getByRole('button', { name: 'Medium' }))
+    await waitFor(() => expect(lastParams().difficulty).toBeNull())
+    expect(within(dots).queryByText('medium')).toBeNull()
+    expect(
+      within(dots)
+        .getAllByRole('button')
+        .every((dot) => dot.getAttribute('aria-pressed') === 'false')
+    ).toBe(true)
+  })
+
+  it('leaves the band off until an instrument is chosen, and says why', async () => {
+    // A chart is rated one instrument at a time, and with none named the endpoint reads the band
+    // against all of them at once; an uncharted instrument carries -1, so every chart clears any
+    // maximum. See ADVANCED_RANGES for the measurement.
+    await show()
+    const low = screen.getByLabelText(
+      'Lowest intensity. Choose an instrument first: a chart is rated one instrument at a time.'
+    )
+    expect((low as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByText('pick an instrument')).toBeTruthy()
+
+    await pick('Filter by instrument', 'guitar')
+
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    expect(
+      (screen.getByLabelText('Lowest intensity for Guitar') as HTMLSelectElement).disabled
+    ).toBe(false)
+    expect(screen.getByLabelText('Highest intensity for Guitar')).toBeTruthy()
+    expect(screen.queryByText('pick an instrument')).toBeNull()
+  })
+
+  it('offers a floor past the top of the drawn scale, and no ceiling above it', async () => {
+    // Ratings are not capped at 6: with guitar chosen, `minIntensity: 7` answers with 2,419
+    // charts reading 7, 8, 9 and 20. The open floor is how the list says the scale carries on.
+    // The ceiling list stops at 6 because Any is already the open top.
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    const low = await screen.findByLabelText('Lowest intensity for Guitar')
+    const high = screen.getByLabelText('Highest intensity for Guitar')
+
+    expect([...low.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'Any',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7+'
+    ])
+    expect([...high.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'Any',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6'
+    ])
+  })
+
+  it('sends the band as the two advanced fields, with the floor uncapped', async () => {
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    await pick('Lowest intensity for Guitar', '7')
+
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('7'))
+    expect(lastParams().instrument).toBe('guitar')
+    expect(lastParams().advanced.numbers.maxIntensity).toBe('')
+
+    await pick('Highest intensity for Guitar', '')
+    await pick('Lowest intensity for Guitar', '4')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('4'))
+  })
+
+  it('keeps both ends when only one of them is changed', async () => {
+    await show()
+    await pick('Filter by instrument', 'drums')
+    await screen.findByLabelText('Lowest intensity for Drums')
+    await pick('Lowest intensity for Drums', '4')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('4'))
+
+    await pick('Highest intensity for Drums', '5')
+    await waitFor(() => expect(lastParams().advanced.numbers.maxIntensity).toBe('5'))
+    expect(lastParams().advanced.numbers.minIntensity).toBe('4')
+  })
+
+  it('takes the band away with the instrument it was a band of', async () => {
+    await show()
+    await pick('Filter by instrument', 'guitar')
+    await screen.findByLabelText('Lowest intensity for Guitar')
+    await pick('Lowest intensity for Guitar', '5')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('5'))
+
+    await pick('Filter by instrument', '')
+
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe(''))
+    expect(lastParams().instrument).toBeNull()
+    expect(
+      screen.getByLabelText(
+        'Lowest intensity. Choose an instrument first: a chart is rated one instrument at a time.'
+      )
+    ).toBeTruthy()
+  })
+
+  it('is the same filter the panel holds, not a second copy of it', async () => {
+    // The brief for this header said the two must not end up as independent sources of one
+    // filter. The band writes the panel's own minIntensity and maxIntensity through the store,
+    // so the open panel reads back what the header set.
+    await show()
+    await pick('Filter by instrument', 'keys')
+    await screen.findByLabelText('Lowest intensity for Keys')
+    await pick('Lowest intensity for Keys', '3')
+    await waitFor(() => expect(lastParams().advanced.numbers.minIntensity).toBe('3'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Advanced search, 1 filter applied' }))
+    expect((screen.getByLabelText('Lowest intensity') as HTMLInputElement).value).toBe('3')
+  })
+
+  it('offers no order the endpoint would refuse', async () => {
+    // The enum is exactly eight fields (measured: `downloads` answers 400 and names them back).
+    // There is no downloads, popularity or rating sort, and the prototype drew one.
+    await show()
+    const labels = [...screen.getByLabelText('Order results').querySelectorAll('option')].map(
+      (o) => o.textContent
+    )
+    expect(labels).toContain('Recently updated')
+    expect(labels).not.toContain('Downloads')
+    expect(labels[0]).toBe('Best match')
+  })
+
+  it('sends the field and direction the chosen order stands for', async () => {
+    await show()
+    await pick('Order results', 'modifiedTime:desc')
+    await waitFor(() =>
+      expect(lastParams().sort).toEqual({ type: 'modifiedTime', direction: 'desc' })
+    )
+  })
+
+  it('sends no order at all until one is chosen, which is the service deciding', async () => {
+    await show()
+    // Through a filter rather than off the first paint: the store is module-scoped and ignores a
+    // question it has already answered, so a bare mount may spend no request at all.
+    await fireEvent.click(within(difficultyDots()).getByRole('button', { name: 'Expert' }))
+    await waitFor(() => expect(lastParams().difficulty).toBe('expert'))
+    expect(lastParams().sort ?? null).toBeNull()
+  })
+})
+
+/**
+ * The chip row the approved design puts under the search row.
+ *
+ * Every chip is a second view of a field the advanced panel holds, never a second field. What
+ * these pin is that one property in both directions, the unit the length chip sends, and the two
+ * chips the design has that this header does not.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says how wide the row is or how
+ * many lines it wraps to. `scripts/measure-explore-header.mjs` answers that in a real engine.
+ */
+describe('Explore filter chips', () => {
+  const show = async (): Promise<void> => {
+    searchCharts.mockResolvedValue({ found: 2, out_of: 2, page: 1, data: TWO_VERSIONS })
+    renderBrowse()
+    await screen.findByLabelText('Filter by instrument')
+  }
+
+  const lastAdvanced = (): AdvancedQuery =>
+    (searchCharts.mock.calls.at(-1)?.[0] as { advanced: AdvancedQuery }).advanced
+
+  const chip = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}:`) })
+
+  const openChip = async (name: string): Promise<void> => {
+    await fireEvent.click(chip(name))
+  }
+
+  const type = async (label: string, value: string): Promise<void> => {
+    await fireEvent.input(screen.getByLabelText(label), { target: { value } })
+  }
+
+  const apply = async (): Promise<void> => {
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+  }
+
+  it('carries the chips this API has a field for, and says Any until one is set', async () => {
+    // Genre, Year, Length, Charter and Album are five of the design's seven. Decade is not a
+    // field: the endpoint takes minYear and maxYear and nothing else, so a Decade chip would be
+    // the Year chip under a second name, which is the one thing this header may not have. Sort
+    // is not a filter and already has eleven orders in the row above.
+    await show()
+    const chips = [...document.querySelectorAll('.fdrops .fd')].map((el) =>
+      el.getAttribute('aria-label')
+    )
+    expect(chips).toEqual(['Genre: Any', 'Year: Any', 'Length: Any', 'Charter: Any', 'Album: Any'])
+    expect(chips.some((label) => label?.startsWith('Decade'))).toBe(false)
+    expect(chips.some((label) => label?.startsWith('Sort'))).toBe(false)
+  })
+
+  it('sends the advanced field a chip names, and reads the value back on the chip', async () => {
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+    expect(screen.getByRole('button', { name: 'Genre: Rock' })).toBeTruthy()
+  })
+
+  it('sends the length chip in minutes, which is what this API counts', async () => {
+    // The trap this view was burned by: a brief said seconds, a 60x conversion was built and
+    // pinned, and a 3 to 6 minute search answered with charts 3 to 6 hours long. The chip
+    // converts nothing, and the unit it names is read off ADVANCED_RANGES rather than restated.
+    await show()
+    await openChip('Length')
+    await type('Length from, in min', '3')
+    await type('Length to, in min', '6')
+    await apply()
+
+    await waitFor(() => expect(lastAdvanced().numbers.minLength).toBe('3'))
+    expect(lastAdvanced().numbers.maxLength).toBe('6')
+    expect(screen.getByRole('button', { name: 'Length: 3 to 6 min' })).toBeTruthy()
+  })
+
+  it('fills the year range from a decade, which is the only decade this API can answer', async () => {
+    await show()
+    await openChip('Year')
+    await fireEvent.click(screen.getByRole('button', { name: '2000s' }))
+
+    await waitFor(() => expect(lastAdvanced().numbers.minYear).toBe('2000'))
+    expect(lastAdvanced().numbers.maxYear).toBe('2009')
+    // Read back as the decade it is, because a range that is exactly a decade is one.
+    expect(screen.getByRole('button', { name: 'Year: 2000s' })).toBeTruthy()
+  })
+
+  it('is the same filter the panel holds, not a second copy of it', async () => {
+    // The same property the intensity band has to have, for the same reason. The chip writes
+    // the panel's own field through the store, so an open panel reads back what a chip set.
+    await show()
+    await openChip('Charter')
+    await type('Charter contains', 'Neversoft')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.charter.value).toBe('Neversoft'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Advanced search, 1 filter applied' }))
+    expect((screen.getByLabelText('Charter') as HTMLInputElement).value).toBe('Neversoft')
+  })
+
+  it('reads back what the panel applied, lit, without being told', async () => {
+    // The other direction, and the one that says the chip holds no value of its own: this query
+    // never went through a chip at all.
+    await show()
+    const query = emptyAdvanced()
+    query.text.album.value = 'Toxicity'
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+
+    const set = await screen.findByRole('button', { name: 'Album: Toxicity' })
+    expect(set.classList.contains('set')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Genre: Any' }).classList.contains('set')).toBe(false)
+  })
+
+  it('names an excluded field as an exclusion, because Exclude inverts what it means', async () => {
+    // A chip reading "Rock" over a search that is refusing Rock is the one lie this row could
+    // tell. Exclude stays in the panel; what it does shows here.
+    await show()
+    const query = emptyAdvanced()
+    query.text.genre = { value: 'Rock', exact: false, exclude: true }
+    browseSearch.setAdvancedDraft(query)
+    browseSearch.applyAdvanced()
+
+    await screen.findByRole('button', { name: 'Genre: not Rock' })
+  })
+
+  it('empties the field it names, and nothing else', async () => {
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Metal')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Metal'))
+
+    await openChip('Album')
+    await type('Album contains', 'Toxicity')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.album.value).toBe('Toxicity'))
+
+    await openChip('Genre')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe(''))
+    expect(lastAdvanced().text.album.value).toBe('Toxicity')
+  })
+
+  it('leaves typing that was never searched standing in the panel', async () => {
+    // A chip applies its own field. The draft takes the same edit on top of what it is holding
+    // rather than being replaced by the applied query, so a form filled in and not yet searched
+    // is still there afterwards.
+    await show()
+    const draft = emptyAdvanced()
+    draft.text.name.value = 'Everlong'
+    browseSearch.setAdvancedDraft(draft)
+
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+
+    expect(get(browseSearch.advancedDraft).text.name.value).toBe('Everlong')
+    // And not applied: the chip asked about genre, not about the name nobody searched for.
+    expect(lastAdvanced().text.name.value).toBe('')
+  })
+
+  it('spends no request on a chip that was opened and applied unchanged', async () => {
+    // 50 requests a minute, and an Apply that changes no field would be one of them spent on the
+    // rows already on screen.
+    await show()
+    await openChip('Genre')
+    await type('Genre contains', 'Rock')
+    await apply()
+    await waitFor(() => expect(lastAdvanced().text.genre.value).toBe('Rock'))
+    const spent = searchCharts.mock.calls.length
+
+    await openChip('Genre')
+    await apply()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(searchCharts.mock.calls.length).toBe(spent)
+  })
+})
+
+/**
+ * The row as the approved design has it: five instruments as rings over their pips, and a band
+ * of badges under the subtitle carrying what used to be columns.
+ *
+ * jsdom applies no CSS and computes no layout, so nothing here says how wide any of it is, which
+ * of the two folded layouts is in force, or whether the band wraps. `scripts/measure-explore-
+ * row.mjs` answers all of that in a real engine. These pin what is drawn and what it claims.
+ */
+describe('Explore rows as the design draws them', () => {
+  const FULL_BAND: ChartData[] = [
+    {
+      ...chart(51, null, 'BandCharter'),
+      name: 'Full Band',
+      song_length: 196_000,
+      diff_guitar: 4,
+      diff_bass: 2,
+      diff_drums: 5,
+      diff_keys: 3,
+      diff_vocals: 1,
+      notesData: {
+        instruments: ['guitar', 'bass', 'drums', 'keys'],
+        hasVocals: true,
+        noteCounts: [
+          { instrument: 'guitar', difficulty: 'easy', count: 120 },
+          { instrument: 'guitar', difficulty: 'hard', count: 700 },
+          { instrument: 'drums', difficulty: 'expert', count: 900 },
+          // A declared difficulty with no notes on it is not a difficulty the chart was
+          // written at, which is why the count and not the row is what counts.
+          { instrument: 'bass', difficulty: 'medium', count: 0 }
+        ]
+      }
+    }
+  ]
+
+  const EXPERT_ONLY: ChartData[] = [
+    {
+      ...chart(52, null, 'ExpertCharter'),
+      name: 'Expert Only',
+      song_length: null,
+      notesData: {
+        instruments: ['guitar'],
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 1274 }]
+      }
+    }
+  ]
+
+  const UNSCANNED: ChartData[] = [
+    { ...chart(53, null, 'UnscannedCharter'), name: 'Never Scanned', notesData: null }
+  ]
+
+  async function renderRows(data: ChartData[], term: string): Promise<void> {
+    searchCharts.mockResolvedValue({ found: data.length, out_of: data.length, page: 1, data })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse()
+    await screen.findByText(data[0].name)
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('draws all five instruments, including the two the row used to leave out', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Guitar: difficulty 4 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Bass: difficulty 2 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Drums: difficulty 5 of 6')).toBeTruthy()
+    // The two that were only on the chart page before.
+    expect(screen.getByLabelText('Keys: difficulty 3 of 6')).toBeTruthy()
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+    expect(document.querySelectorAll('.row .diffs .part')).toHaveLength(5)
+  })
+
+  it('draws the row as icons and the same five on a card as letters', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    expect(document.querySelectorAll('.row .diffs .ring')).toHaveLength(5)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
+    await screen.findByText('Full Band')
+    // A card is 148px wide and has no line to give a 19px ring, so it keeps the letter form.
+    // Five groups either way: switching layout changes the shape, not the subject.
+    expect(document.querySelectorAll('.card .c-diffs .part')).toHaveLength(5)
+    expect(document.querySelectorAll('.card .c-diffs .ring')).toHaveLength(0)
+    browseSearch.setMode('list')
+  })
+
+  it('reads vocals off the lyric flag, because the scan never lists it as a track', async () => {
+    // `notesData.instruments` counts playable note tracks and vocals is not one, so a row that
+    // trusted the list alone would tell every singer in the catalog that nothing is charted for
+    // them. The fixture above leaves vocals out of `instruments` and sets `hasVocals`.
+    await renderRows(FULL_BAND, 'full-band')
+    expect(screen.getByLabelText('Vocals: difficulty 1 of 6')).toBeTruthy()
+  })
+
+  it('says vocals are not charted when the scan found no lyrics', async () => {
+    // The other half of the rule above: the flag is read, not assumed, so a chart with no
+    // lyrics does not get a lit ring for a part nobody sang.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByLabelText('Vocals: not charted')).toBeTruthy()
+  })
+
+  it('puts the length, the spread and the charter in one band under the subtitle', async () => {
+    await renderRows(FULL_BAND, 'full-band')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect(band).toBeTruthy()
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '3:16',
+      'E/H/X',
+      'BandCharter'
+    ])
+    // They were tracks of their own before, and the width they cost is what paid for the
+    // difficulty column. Nothing outside the band still draws them.
+    expect(document.querySelector('.row > .charter')).toBeNull()
+    expect(document.querySelector('.row .len')).toBeNull()
+  })
+
+  it('names a chart written at one difficulty in a word rather than a letter', async () => {
+    // "X" is the thing a beginner most needs to be told, and one letter is the least legible
+    // way to tell them.
+    await renderRows(EXPERT_ONLY, 'expert-only')
+    expect(screen.getByText('EXPERT ONLY')).toBeTruthy()
+    // No length badge: `song_length` is null on this fixture, and msToTime's placeholder in a
+    // badge would be a badge that says nothing.
+    expect(screen.queryByText('—')).toBeNull()
+  })
+
+  it('claims no spread at all for a chart nobody scanned', async () => {
+    // A chart with no note data is not a chart with no difficulties, and a badge cannot say
+    // "unknown" in four characters.
+    await renderRows(UNSCANNED, 'never-scanned')
+    const band = document.querySelector('.row .song .badges') as HTMLElement
+    expect([...band.querySelectorAll('.badge')].map((b) => b.textContent?.trim())).toEqual([
+      '4:10',
+      'UnscannedCharter'
+    ])
+  })
+})
+
+/**
+ * The bar over the list: the count, the one toggle that survived contact with the API, and the
+ * selection bar that only appears when something is ticked.
+ *
+ * Each block below asks its own question of the store, for the reason the markup block above
+ * gives: `browseSearch` is module-scoped and ignores a term it has already answered, so rows
+ * reach the screen only behind a term nothing else in this file asks for.
+ */
+describe('Explore results bar', () => {
+  // Three versions of one song, so the hidden count has both a dropped chart and a shown
+  // alternate to get right: counting groups rather than charts would report two, not one.
+  const OWNED_TRIO: ChartData[] = [
+    chart(61, 60, 'BarCharterA'),
+    chart(62, 60, 'BarCharterB'),
+    chart(63, 60, 'BarCharterC')
+  ]
+  const PRIMARY = /^Everlong .*BarCharterA/
+  const ALTERNATE = /^Everlong .*BarCharterB/
+  const PICK_PRIMARY = /^Select .*BarCharterA/
+  const PICK_ALTERNATE = /^Select .*BarCharterB/
+
+  async function show(
+    inLibrary: boolean | ((key: MetaKey) => boolean) = false,
+    term = 'results-bar'
+  ): Promise<HTMLElement> {
+    searchCharts.mockResolvedValue({ found: 3, out_of: 3, page: 1, data: OWNED_TRIO })
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    const { container } = renderBrowse(() => {}, { inLibrary })
+    await screen.findByRole('button', { name: PRIMARY })
+    return container.querySelector('.rbar') as HTMLElement
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  const reads = (bar: HTMLElement, sel: string): string =>
+    (bar.querySelector(sel) as HTMLElement | null)?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+
+  it('says how many charts the answer holds, over the list rather than beside the box', async () => {
+    const bar = await show()
+    expect(reads(bar, '.found')).toBe('3 results')
+  })
+
+  it('offers no direct-downloads toggle, because no field in the answer could set one', async () => {
+    // All 66 fields of a search result were dumped on 2026-09-16. Not one of them separates a
+    // direct download from an indirect one: Encore fetches every chart from files.enchor.us by
+    // md5, so the control would be on or off over the same list. The design has it because
+    // Chart Manager also queries RhythmVerse, where an entry can point at somebody else's host.
+    const bar = await show()
+    expect(bar.querySelector('.cbx')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /direct download/i })).toBeNull()
+  })
+
+  it('leaves out the charts already installed, and says how many it left out', async () => {
+    const bar = await show((k) => k.charter === 'BarCharterA', 'results-bar-owned')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: PRIMARY })).toBeNull())
+    // The alternate is still there: the case this exists for is owning one version of a song and
+    // wanting to see the others, so hiding works a chart at a time and not a group at a time.
+    expect(screen.getByRole('button', { name: ALTERNATE })).toBeTruthy()
+    // Counted over the loaded rows, not over the answer: Chorus was never asked about the
+    // library, and its total is what it is whichever way this toggle is set.
+    expect(reads(bar, '.hidden-note')).toBe('1 of the loaded charts hidden')
+    expect(reads(bar, '.found')).toBe('3 results')
+  })
+
+  it('says so rather than showing a blank list when hiding leaves nothing', async () => {
+    // A count over an empty list reads as a bug, and the way out is the toggle rather than the
+    // search box, so the sentence has to name the toggle.
+    await show(true, 'results-bar-all-owned')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    expect(
+      await screen.findByText(/Every chart loaded here is already in your library/)
+    ).toBeTruthy()
+  })
+
+  it('drops a hidden chart from the selection, so the bar counts what can be pointed at', async () => {
+    // The same rule collapsing a group follows, reached from the other side: a tick with no
+    // checkbox left to show it is a count nobody can account for. Every chart this drops is one
+    // the bulk download had already refused to fetch, so nothing queueable is lost.
+    await show((k) => k.charter === 'BarCharterA', 'results-bar-selection')
+    await fireEvent.click(await screen.findByLabelText('3 versions'))
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK_PRIMARY }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK_ALTERNATE }))
+    expect(screen.getByText('2 selected')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide owned' }))
+
+    await waitFor(() => expect(screen.getByText('1 selected')).toBeTruthy())
+  })
+})
+
+/**
+ * What becomes of a selection when the list moves under it. Three things move it: a page appended
+ * by scrolling, a filter change and an order change. The rule is that a selection survives rows
+ * arriving and goes when rows are replaced, because a chartId only means something against the
+ * rows it was ticked on.
+ */
+describe('Explore selection against a list that moves', () => {
+  const PICK = /^Select .*MoveCharterA/
+
+  async function show(term: string): Promise<void> {
+    browseSearch.setMode('list')
+    browseSearch.setQuery(term)
+    renderBrowse()
+    await screen.findByRole('checkbox', { name: PICK })
+    await fireEvent.click(screen.getByRole('checkbox', { name: PICK }))
+    expect(screen.getByText('1 selected')).toBeTruthy()
+  }
+
+  afterEach(async () => {
+    browseSearch.setQuery('')
+    await new Promise((r) => setTimeout(r, 400))
+  })
+
+  it('keeps a selection when scrolling appends a page', async () => {
+    // The ticked rows are all still on screen, so dropping the selection would punish the user
+    // for asking for a second page. The button at the end of the list makes the same call the
+    // scroll sentinel does.
+    let served = 0
+    searchCharts.mockImplementation(() => {
+      served += 1
+      return Promise.resolve({
+        found: 4,
+        out_of: 4,
+        page: served,
+        data: [
+          chart(served * 2 + 69, 70 + served, 'MoveCharterA'),
+          chart(served * 2 + 70, 80 + served, 'MoveCharterB')
+        ]
+      })
+    })
+    await show('selection-append')
+    expect(searchCharts).toHaveBeenCalledTimes(1)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(searchCharts).toHaveBeenCalledTimes(2))
+
+    expect(screen.getByText('1 selected')).toBeTruthy()
+  })
+
+  it('drops a selection when an order change replaces the rows', async () => {
+    // A different order is a different page one: the chartIds a tick names may not be among the
+    // rows that come back, and a bulk download would then fetch charts nobody can see. The same
+    // rule a filter change and a new search term already follow.
+    searchCharts.mockResolvedValue({
+      found: 2,
+      out_of: 2,
+      page: 1,
+      data: [chart(91, null, 'MoveCharterA'), chart(92, null, 'MoveCharterB')]
+    })
+    await show('selection-sort')
+
+    await fireEvent.change(screen.getByLabelText('Order results'), {
+      target: { value: 'name:asc' }
+    })
+
+    await waitFor(() => expect(screen.queryByText('1 selected')).toBeNull())
+  })
+
+  it('drops a selection when a filter change replaces the rows', async () => {
+    searchCharts.mockResolvedValue({
+      found: 2,
+      out_of: 2,
+      page: 1,
+      data: [chart(93, null, 'MoveCharterA'), chart(94, null, 'MoveCharterB')]
+    })
+    await show('selection-filter')
+
+    await fireEvent.click(within(difficultyDots()).getByRole('button', { name: 'Expert' }))
+
+    await waitFor(() => expect(screen.queryByText('1 selected')).toBeNull())
   })
 })

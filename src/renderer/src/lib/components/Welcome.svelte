@@ -102,9 +102,11 @@
 
 <div class="welcome">
   <div class="card">
-    <h1>Encore</h1>
+    <p class="wordmark">ENCORE</p>
+    <h1>Point it at your songs.</h1>
     <p class="lede selectable">
-      A library manager for Clone Hero: the charts you already have, and the ones you do not yet.
+      Encore reads the charts you already have, finds the ones you do not, and fills in the art,
+      video and lyrics they are missing.
     </p>
 
     {#if detected !== null}
@@ -129,10 +131,14 @@
             {busy ? 'Scanning…' : 'Use this folder'}
           </button>
         {:else}
-          <h2 id="welcome-offer">NO CLONE HERO FOLDER FOUND</h2>
+          <!-- Named for the step the user takes next, not for what the probe failed to find.
+               Nothing has gone wrong here: the folder is somewhere this machine does not keep
+               it, which is ordinary, and a heading reading NO CLONE HERO FOLDER FOUND made the
+               one screen a new user cannot avoid open on a failure. -->
+          <h2 id="welcome-offer">CHOOSE YOUR SONGS FOLDER</h2>
           <p class="warn">
-            Encore looked where Clone Hero keeps its songs by default. If yours is somewhere else,
-            point it there — that starts a one-time scan of every chart in it. {SCAN_WARNING}
+            Encore looked where Clone Hero keeps its songs by default and it is not there. Point it
+            at yours, which starts a one-time scan of every chart in it. {SCAN_WARNING}
           </p>
           <button class="btn-primary" disabled={busy} onclick={() => void chooseFolder()}>
             {busy ? 'Scanning…' : 'Choose a folder'}
@@ -175,9 +181,22 @@
     flex-direction: column;
     gap: 14px;
   }
+  /* The name, set as the app's own micro-caps rather than as a heading: the heading is the thing
+     the screen is asking for, and a wordmark competing with it at the same size would make the
+     first screen say "Encore" louder than it says what to do. */
+  .wordmark {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    font-weight: 500;
+    letter-spacing: var(--ls-caps);
+    line-height: var(--lh-tight);
+    color: var(--accent-text);
+    margin-bottom: -8px;
+  }
   h1 {
-    font-size: var(--fs-heading);
+    font-size: var(--fs-display);
     font-weight: 700;
+    line-height: var(--lh-display);
     letter-spacing: var(--ls-tight);
   }
   .lede {
@@ -194,10 +213,14 @@
     color: var(--text-3);
     margin-bottom: 10px;
   }
+  /* A card on the elevation scale's card step, which is what it is: the one block on this screen
+     that is lifted off the window rather than printed on it. The ground scale alone does not
+     separate two planes this close together. */
   .offer {
     background: var(--surface-1);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
+    box-shadow: var(--elev-2);
     padding: 14px 16px 16px;
   }
   .path {
@@ -226,7 +249,7 @@
   .btn-primary {
     margin-top: 12px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--accent-grad);
     color: #fff;
     font-weight: 600;
@@ -252,7 +275,7 @@
   .ghost {
     background: var(--surface-2);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-family: var(--font-ui);
     font-size: var(--fs-secondary);

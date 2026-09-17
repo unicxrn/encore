@@ -15,6 +15,7 @@ import type {
   PlayDataStatus
 } from '../../../../shared/play'
 import type { ChartVerdict } from '../../../../shared/updates'
+import type { ChartIssueRow } from '../../../../main/catalog/issues'
 import { scanProgress } from '../stores/scan'
 import { EMPTY_LIBRARY_FILTER, libraryFilter } from '../stores/library-filter'
 import { settings } from '../stores/settings'
@@ -64,7 +65,7 @@ function renderLibrary(
     updatesCheck,
     updatesLast
   })
-  render(Library, { onOpenChart: () => {} })
+  render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
   return { updatesCheck, updatesLast }
 }
 
@@ -106,24 +107,25 @@ async function rowTitled(title: string): Promise<HTMLElement> {
 }
 
 /**
- * The rendered text of a row's difficulty cells, in order.
+ * What a row's three difficulty groups claim, in order.
  *
- * These are bare `<span>`s with no role, label or otherwise unique text, so a selector is the
- * only way to get hold of them; what is asserted is still their text, and the whole list of it,
- * so an instrument that renders when it should not fails the comparison.
+ * `DiffPips` draws bars, and jsdom applies no CSS, so the drawing is unreadable here and the
+ * accessible name is the whole assertable fact. That name is also the only thing a screen reader
+ * gets, so pinning it pins what the column says rather than how it looks. Always three, one per
+ * instrument the row draws: the component says "not charted" rather than rendering nothing, and
+ * the pips are a column the eye runs down, which a row with a missing group would break.
  */
-function diffCells(row: HTMLElement): string[] {
-  return [...row.querySelectorAll('.diffs .d')].map((cell) => cell.textContent ?? '')
+function diffParts(row: HTMLElement): string[] {
+  return [...row.querySelectorAll('.diffs .part')].map((part) =>
+    (part.getAttribute('aria-label') ?? '').trim()
+  )
 }
-
-// U+2013. diffDisplay() renders it for "charted, but the charter left no rating".
-const DASH = '–'
 
 describe('Library: the difficulty column', () => {
   // Charters copy song.ini between projects, so a bass rating on a chart with no bass track is
-  // ordinary rather than exotic. The note data has to win: a "B3" here tells the user to expect
-  // a bass part that does not exist.
-  it('renders no cell for an instrument the note data says is not charted', async () => {
+  // ordinary rather than exotic. The note data has to win: three lit pips here would tell the
+  // user to expect a bass part that does not exist.
+  it('says an instrument the note data does not have is not charted', async () => {
     renderLibrary([
       chart({
         path: '/library/Rush - YYZ',
@@ -135,7 +137,11 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('YYZ'))).toEqual(['G4'])
+    expect(diffParts(await rowTitled('YYZ'))).toEqual([
+      'Guitar: difficulty 4 of 6',
+      'Bass: not charted',
+      'Drums: not charted'
+    ])
   })
 
   // An empty `instruments` means "this row predates the note-count columns", not "this chart is
@@ -153,12 +159,16 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('Limelight'))).toEqual(['G4', 'B3', `D${DASH}`])
+    expect(diffParts(await rowTitled('Limelight'))).toEqual([
+      'Guitar: difficulty 4 of 6',
+      'Bass: difficulty 3 of 6',
+      'Drums: charted, no difficulty rating'
+    ])
   })
 
-  // The third state, and the reason a dash and an absent cell must not look alike: this chart
+  // The third state, and the reason "unrated" and "not charted" must not look alike: this chart
   // does have a guitar track, the charter just never rated it.
-  it('shows a dash for a charted instrument with no rating', async () => {
+  it('tells a charted instrument with no rating from one that is not charted', async () => {
     renderLibrary([
       chart({
         path: '/library/Rush - Subdivisions',
@@ -170,7 +180,60 @@ describe('Library: the difficulty column', () => {
       })
     ])
 
-    expect(diffCells(await rowTitled('Subdivisions'))).toEqual([`G${DASH}`, 'D5'])
+    expect(diffParts(await rowTitled('Subdivisions'))).toEqual([
+      'Guitar: charted, no difficulty rating',
+      'Bass: not charted',
+      'Drums: difficulty 5 of 6'
+    ])
+  })
+
+  // Real song.ini data: ratings run past the six Clone Hero's own scale stops at. The pips fill
+  // and the label keeps the number, which is the component's rule and has to survive the trip
+  // through a catalog row.
+  it('keeps a rating past the top of the scale in the label', async () => {
+    renderLibrary([
+      chart({
+        path: '/library/Rush - La Villa',
+        name: 'La Villa',
+        instruments: ['guitar'],
+        diffGuitar: 20
+      })
+    ])
+
+    expect(diffParts(await rowTitled('La Villa'))[0]).toBe(
+      'Guitar: difficulty 20, past the top of the scale'
+    )
+  })
+
+  /**
+   * Which of the component's two drawings the row asks for.
+   *
+   * jsdom applies no CSS, so nothing here can see a ring. What it can see is which form was
+   * rendered, and that is the whole of what changed: `.ring` exists only in the icon form and
+   * `.letter` only in the other, so either one being present names the form. What the column
+   * SAYS is pinned by the four tests above, which are untouched by this and stayed green
+   * through it.
+   */
+  it('draws each part as a glyph in a ring rather than as a letter', async () => {
+    renderLibrary([
+      chart({
+        path: '/library/Rush - Tom Sawyer',
+        name: 'Tom Sawyer',
+        instruments: ['guitar', 'bass', 'drums'],
+        diffGuitar: 4,
+        diffBass: 3,
+        diffDrums: 5
+      })
+    ])
+    const row = await rowTitled('Tom Sawyer')
+
+    expect(row.querySelectorAll('.diffs .part')).toHaveLength(3)
+    expect(row.querySelectorAll('.diffs .ring')).toHaveLength(3)
+    expect(row.querySelectorAll('.diffs .letter')).toHaveLength(0)
+    // A ring with no path is a ring with no instrument in it.
+    for (const ring of row.querySelectorAll('.diffs .ring')) {
+      expect(ring.querySelector('svg path')?.getAttribute('d')).toBeTruthy()
+    }
   })
 })
 
@@ -204,17 +267,20 @@ describe('Library: the chart title', () => {
  * fail when either half moves, which is the point, since the two are edited independently and
  * a mismatch is invisible to typecheck, lint and build.
  *
- * Throws rather than guesses if the declaration is not a plain space-separated track list, so a
- * rewrite to `repeat()` surfaces as "update this parser" instead of a silent pass.
+ * Counts a bracketed function such as `minmax(0, 1fr)` as the one track it is, since the row
+ * needs those on its text columns to keep a long title from scrolling the list sideways. Throws
+ * rather than guesses on anything else with brackets in it, so a rewrite to `repeat()` surfaces
+ * as "update this parser" instead of a silent pass.
  */
 function declaredRowTracks(): number {
   const rule = /^\s*\.row\s*\{([^}]*)\}/m.exec(librarySource)
   if (!rule) throw new Error('no `.row {…}` rule in Library.svelte')
   const declaration = /grid-template-columns:\s*([^;]+);/.exec(rule[1])
   if (!declaration) throw new Error('`.row` declares no grid-template-columns')
-  const tracks = declaration[1].trim()
-  if (/[(),]/.test(tracks)) throw new Error(`cannot count tracks in \`${tracks}\` by splitting`)
-  return tracks.split(/\s+/).length
+  const tracks = declaration[1].trim().replace(/\s+/g, ' ')
+  const collapsed = tracks.replace(/minmax\([^()]*\)/g, 'minmax')
+  if (/[(),]/.test(collapsed)) throw new Error(`cannot count tracks in \`${tracks}\` by splitting`)
+  return collapsed.split(' ').length
 }
 
 /**
@@ -228,7 +294,7 @@ function renderCatalog(rows: ChartRecord[]): void {
       Promise.resolve(f.search ? [] : rows),
     catalogCount: (f: CatalogFilter): Promise<number> => Promise.resolve(f.search ? 0 : rows.length)
   })
-  render(Library, { onOpenChart: () => {} })
+  render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 }
 
 /**
@@ -330,7 +396,7 @@ describe('Library: cancelling a scan', () => {
       catalogCount: (): Promise<number> => Promise.resolve(0),
       catalogScanCancel: cancel
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     scanProgress.set(running(40))
 
     await fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
@@ -358,7 +424,7 @@ describe('Library: cancelling a scan', () => {
       catalogQuery: query,
       catalogCount: () => Promise.resolve(rows.length)
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     await waitFor(() => expect(query).toHaveBeenCalled())
 
     rows = [chart({ path: '/library/Rush - YYZ', name: 'YYZ' })]
@@ -409,8 +475,154 @@ describe('Library: the row grid', () => {
     expect((await rowTitled('YYZ')).children).toHaveLength(tracks)
     expect((await rowTitled('Limelight')).children).toHaveLength(tracks)
     const badged = await rowTitled('Xanadu')
-    expect(badged.querySelector('.badge')).not.toBeNull()
+    expect(badged.querySelector('.badge.version')).not.toBeNull()
     expect(badged.children).toHaveLength(tracks)
+  })
+
+  /**
+   * Where each chip lives, which is the whole of what this row's rewrite changed.
+   *
+   * The length and the charter were tracks at the far end of the row and the two flags were on
+   * the title's line; all four are chips in one band under the subtitle now, and the title has
+   * its line to itself. jsdom applies no CSS, so this says nothing about how any of it looks. It
+   * says the title is alone and the band holds the four, which is what would drift back.
+   */
+  it('puts every chip in the band under the subtitle, and leaves the title its line', async () => {
+    renderLibrary(
+      [chart({ path: '/library/Rush - YYZ', name: 'YYZ' })],
+      [alternate('/library/Rush - YYZ')]
+    )
+    const row = await rowTitled('YYZ')
+
+    const title = row.querySelector('.song > .title')
+    if (title === null) throw new Error('no title directly under the song column')
+    expect(title.querySelector('.badge')).toBeNull()
+
+    const band = row.querySelector('.song > .badges')
+    if (band === null) throw new Error('no band under the subtitle')
+    // Read off the band's own children rather than swept from the row: a chip drawn anywhere
+    // else in the row is exactly the arrangement this replaced, and a sweep would pass on it.
+    expect(
+      [...band.children].map((el) =>
+        el.className
+          .split(' ')
+          .filter((name) => !name.startsWith('svelte-'))
+          .join(' ')
+      )
+    ).toEqual(['badge mono length', 'badge mono version', 'badge mono charter'])
+  })
+})
+
+/**
+ * The health mark, which is Explore's dot drawn from Encore's own issue scan.
+ *
+ * What is pinned here is the claim, not the drawing: whether a mark appears at all, and whether
+ * it says breakage or a charting note. jsdom applies no CSS, so the ring and the disc are the
+ * same element to this test and only the class tells them apart.
+ */
+describe('Library: the health mark', () => {
+  function renderScanned(rows: ChartRecord[], issues: ChartIssueRow[] | null): void {
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(rows),
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(issues)
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+  }
+
+  const dot = (row: HTMLElement): Element | null => row.querySelector('.health .dot')
+
+  it('marks a chart the scan found breakage in, and leaves a clean one bare', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'no chart file'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    expect(dot(await rowTitled('YYZ'))?.classList.contains('broken')).toBe(true)
+    expect(dot(await rowTitled('Limelight'))).toBeNull()
+  })
+
+  // The distinction the severity model exists for: this chart plays, and a filled dot would say
+  // it does not.
+  it('draws a charting note as the quieter mark, not as breakage', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'albumArtSize',
+        description: 'cover is 2000px'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    expect(dot(await rowTitled('YYZ'))?.classList.contains('broken')).toBe(false)
+  })
+
+  // The hover has to name who looked. These rows came off this disk from a scan the user ran,
+  // and Explore's wording would tell them a remote service had read their files.
+  it('says Encore found it, never Chorus', async () => {
+    renderScanned(LIBRARY, [
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'no chart file'
+      }
+    ])
+
+    await waitFor(async () => expect(dot(await rowTitled('YYZ'))).not.toBeNull())
+    const title = dot(await rowTitled('YYZ'))?.getAttribute('title') ?? ''
+    expect(title).toContain("Encore's last issue scan found")
+    expect(title).not.toContain('Chorus')
+  })
+
+  // A library nobody has run the issue scan over. Every row is bare, which is the same thing a
+  // clean library looks like, and the Issues view is where the difference is stated.
+  it('draws nothing at all when no scan has ever run', async () => {
+    renderScanned(LIBRARY, null)
+
+    expect(await rowTitled('YYZ')).toBeTruthy()
+    expect(document.querySelector('.health .dot')).toBeNull()
+  })
+
+  // Best effort, like the facets and the play counts. A bridge with no issue channel at all is
+  // the realistic case: this view must not be the thing that breaks on it.
+  it('keeps the list when the report cannot be read', async () => {
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(LIBRARY),
+      catalogCount: (): Promise<number> => Promise.resolve(LIBRARY.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast: (): Promise<ChartIssueRow[]> => Promise.reject(new Error('no channel'))
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    expect(screen.getByText('Limelight')).toBeTruthy()
+  })
+
+  // It costs one call for the whole visit, not one per row and not one per page: the report is
+  // keyed by path and main hands back the whole of it.
+  it('asks main once, however many rows are on screen', async () => {
+    const issuesLast = vi.fn(() => Promise.resolve([]))
+    vi.stubGlobal('encore', {
+      platform: 'linux',
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(LIBRARY),
+      catalogCount: (): Promise<number> => Promise.resolve(LIBRARY.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([]),
+      issuesLast
+    })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
+
+    expect(await screen.findByText('YYZ')).toBeTruthy()
+    await waitFor(() => expect(issuesLast).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -420,9 +632,15 @@ describe('Library: the row grid', () => {
  * every verdict of the session, and `updatesLast` hands them back without a Chorus request.
  */
 describe('Library: the version badge', () => {
-  /** The badge is a bare `<span>` inside the song column; the class is the only handle. */
+  /**
+   * The badge is a bare `<span>` in the band under the subtitle; the class is the only handle.
+   *
+   * `.badge.version` and not `.badge`: every row carries a length chip and a charter chip in
+   * that band now, so the first `.badge` in a row is the length on a chart with no verdict at
+   * all, and this helper would report "4:33" where it means "nothing".
+   */
   function badgeOf(row: HTMLElement): string | null {
-    return row.querySelector('.badge')?.textContent?.replace(/\s+/g, ' ').trim() ?? null
+    return row.querySelector('.badge.version')?.textContent?.replace(/\s+/g, ' ').trim() ?? null
   }
 
   it('marks a chart with a cached alternate, and nothing else', async () => {
@@ -470,16 +688,38 @@ describe('Library: the version badge', () => {
     expect(text).not.toMatch(/newer|out of date|outdated|update/i)
   })
 
-  it('keeps its accent colour against the .mono rule it shares the element with', () => {
-    // Found on screen, not in jsdom: `.badge` and `.mono` sit on the same span, and the `.mono`
-    // rule, declared later, set --text-3 over the badge's --accent-text at equal specificity.
-    // The badge rendered grey while its own comment promised the accent. Pinned on the raw
-    // stylesheet, the only place a test can see a rule jsdom never applies: the colour has to
-    // come from a selector that outranks a lone class.
-    const rule = /^\s*\.badge\.mono\s*\{([^}]*)\}/m.exec(librarySource)
-    if (!rule) throw new Error('no `.badge.mono {…}` rule in Library.svelte')
+  it('keeps its accent colour against the two rules it shares the element with', () => {
+    // Found on screen, not in jsdom: `.badge`, `.mono` and this flag's own class sit on one
+    // span, and the `.mono` rule, declared later, set --text-3 over the badge's --accent-text at
+    // equal specificity. The badge rendered grey while its own comment promised the accent.
+    // Pinned on the raw stylesheet, the only place a test can see a rule jsdom never applies:
+    // the colour has to come from a selector that outranks both of the others.
+    //
+    // `.badge.mono` sets --text-3 for the band's other three chips now, so the accent has to
+    // come from a third class and not from the chip rule, and neither a lone `.badge` nor a
+    // lone `.mono` may set it back.
+    const rule = /^\s*\.badge\.mono\.version\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!rule) throw new Error('no `.badge.mono.version {…}` rule in Library.svelte')
     expect(rule[1]).toMatch(/color:\s*var\(--accent-text\)/)
     expect(/^\s*\.badge\s*\{/m.test(librarySource)).toBe(false)
+    const chip = /^\s*\.badge\.mono\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!chip) throw new Error('no `.badge.mono {…}` rule in Library.svelte')
+    expect(chip[1]).toMatch(/color:\s*var\(--text-3\)/)
+  })
+
+  it('lets the charter chip shrink, against the rule that holds every other chip open', () => {
+    // jsdom applies no CSS, so this is the stylesheet again, and the number behind it came off
+    // `VIEW=installed scripts/measure-explore-row.mjs` with a 68-character charter in the stub:
+    // at a two-class selector the charter took its natural width and the band ran past its cell
+    // with 0 of 30 rows ellipsised, clipped by `overflow: hidden` and no mark to say so; at
+    // three it shrinks and 30 of 30 ellipsise inside a band that stays one line.
+    //
+    // The cause is order, not shape: `.badge.mono` sets `flex-shrink: 0` and is declared after
+    // this rule, so a two-class selector ties with it and loses.
+    const rule = /^\s*\.badges \.badge\.charter\s*\{([^}]*)\}/m.exec(librarySource)
+    if (!rule) throw new Error('no `.badges .badge.charter {…}` rule in Library.svelte')
+    expect(rule[1]).toMatch(/flex:\s*0 1 auto/)
+    expect(rule[1]).toMatch(/text-overflow:\s*ellipsis/)
   })
 
   it('shows no badge when the replay itself fails, rather than failing the list', async () => {
@@ -489,7 +729,7 @@ describe('Library: the version badge', () => {
       catalogCount: (): Promise<number> => Promise.resolve(1),
       updatesLast: () => Promise.reject(new Error('ipc gone'))
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 
     const row = await rowTitled('YYZ')
     expect(badgeOf(row)).toBeNull()
@@ -537,7 +777,7 @@ describe('Library: the filter bar', () => {
         facets ? Promise.resolve(facets) : Promise.reject(new Error('ipc gone')),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { filters, lastFilter: () => filters[filters.length - 1] }
   }
 
@@ -694,7 +934,7 @@ describe('Library: the filter bar', () => {
       catalogFacets: () => Promise.resolve(FACETS),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     // Unfiltered, a ratio of the library to itself says nothing.
     expect(await screen.findByText(/^222 CHARTS$/)).toBeTruthy()
 
@@ -721,6 +961,37 @@ describe('Library: the filter bar', () => {
       return found
     })
     expect(caveat.textContent).toMatch(/score files/i)
+  })
+
+  /**
+   * The favourites toggle, which has to be the catalog's answer rather than the view's.
+   *
+   * The list is paged, so picking the hearted rows out of the hundred on screen is not picking
+   * them out of the library. What jsdom can pin is that the filter leaves for main; that it is
+   * one filter over the whole library is pinned in SQL, in catalog/favourites.test.ts.
+   */
+  it('asks the catalog for favourites only while the toggle is pressed', async () => {
+    const { filters } = renderWithFilters()
+    const toggle = screen.getByRole('button', { name: 'Favourites' })
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.favouritesOnly === true)
+    await fireEvent.click(toggle)
+    await sentFilter(filters, (f) => f.favouritesOnly === undefined)
+  })
+
+  // A favourite is kept for the chart, not for the copy of it on disk, so this list is the
+  // favourites the library HOLDS. Said out loud, for the reason the play caveat beside it is:
+  // a list named after something that quietly omits part of it is the misleading half.
+  it('says that a favourite it cannot list is still a favourite', async () => {
+    renderWithFilters()
+    expect(document.querySelector('.caveat')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Favourites' }))
+    const caveat = await waitFor(() => {
+      const found = document.querySelector('.caveat')
+      if (!found) throw new Error('no caveat shown')
+      return found
+    })
+    expect(caveat.textContent).toMatch(/hearted on Chorus/i)
   })
 
   it('asks for neverPlayed only while the toggle is pressed', async () => {
@@ -797,8 +1068,10 @@ describe('Library: the filterable fields on a row', () => {
 
     const row = await rowTitled('YYZ')
     const text = (row.textContent ?? '').replace(/\s+/g, ' ')
-    expect(text).toContain('Rush · Moving Pictures · Rock')
-    expect(text).toContain('1981')
+    // The year sits in this line rather than in a column, which is where Explore's row puts it
+    // and what took a fixed track off the end of this one. It is still on screen, which is all
+    // the sort needs: ordering a list by something invisible is the failure being avoided.
+    expect(text).toContain('Rush · Moving Pictures · 1981 · Rock')
     expect(text).toContain('Skyline')
     // 265 seconds. Length was already on the row before the sort existed; this pins it there.
     expect(text).toContain('4:25')
@@ -813,11 +1086,15 @@ describe('Library: the filterable fields on a row', () => {
     expect(meta?.textContent?.trim()).toBe('Rush')
   })
 
-  // The length cell beside it already spends a placeholder glyph; two in a row reads as an error.
-  it('leaves the year cell empty for a chart with no year', async () => {
-    renderLibrary([chart({ path: '/library/y', name: 'Undated', year: null })])
+  // The year is one of the four fields on that line and goes the same way the other three do.
+  // A chart with no year must not leave a stray separator behind it.
+  it('drops the year and its separator for a chart with no year', async () => {
+    renderLibrary([
+      chart({ path: '/library/y', name: 'Undated', artist: 'Rush', genre: 'Rock', year: null })
+    ])
 
-    expect((await rowTitled('Undated')).querySelector('.year')?.textContent?.trim()).toBe('')
+    const meta = (await rowTitled('Undated')).querySelector('.meta')
+    expect(meta?.textContent?.trim()).toBe('Rush · Rock')
   })
 })
 
@@ -893,7 +1170,7 @@ describe('Library: play counts', () => {
       playSummaries,
       ...(lifetimeCharts === null ? {} : { playLifetime })
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { playSummaries, playStatus, playLifetime }
   }
 
@@ -944,8 +1221,15 @@ describe('Library: play counts', () => {
     charts: rows.filter((r) => checksums.includes(r.checksum))
   })
 
+  /**
+   * The play chips in a row, and only those.
+   *
+   * `.badge.plays` and not `.badge`: the band under the subtitle holds a length chip and a
+   * charter chip on every row, so a bare `.badge` sweep reports those two on a chart with no
+   * play record and this file's "leaves an unplayed one bare" would never fail.
+   */
   function badgesOf(row: HTMLElement): string[] {
-    return [...row.querySelectorAll('.badge')].map((b) =>
+    return [...row.querySelectorAll('.badge.plays')].map((b) =>
       (b.textContent ?? '').replace(/\s+/g, ' ').trim()
     )
   }
@@ -1107,7 +1391,7 @@ describe('Library: play counts', () => {
       updatesLast: () => Promise.resolve([]),
       playStatus: () => Promise.reject(new Error('no handler'))
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
 
     const row = await rowTitled('One')
     expect(badgesOf(row)).toEqual([])
@@ -1441,7 +1725,7 @@ describe('Library names written in Clone Hero markup', () => {
       catalogFacets: (): Promise<typeof facets> => Promise.resolve(facets),
       updatesLast: () => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { filters }
   }
 })
@@ -1469,7 +1753,7 @@ describe('Library: removing a chart', () => {
       chartRemove,
       updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([])
     })
-    render(Library, { onOpenChart: () => {} })
+    render(Library, { onOpenChart: () => {}, onSelectChart: () => {} })
     return { chartRemove }
   }
 
@@ -1585,5 +1869,69 @@ describe('Library: removing a chart', () => {
     const row = await rowTitled('YYZ')
     expect(row.contains(remove)).toBe(false)
     expect(remove.closest('.row-wrap')).toBe(row.closest('.row-wrap'))
+  })
+})
+
+/**
+ * The second thing a row can do: put its chart in the preview column beside the list.
+ *
+ * Distinct from opening it. Detail replaces the view, which costs the filters, the sort and the
+ * scroll position; this leaves all three where they are. jsdom applies no stylesheet, so nothing
+ * here can see that the button is hidden below the shell's breakpoint along with the column it
+ * feeds. That rule is in App.svelte and is measured, not asserted.
+ */
+describe('Library: previewing a row without leaving the list', () => {
+  function renderSelectable(rows: ChartRecord[]): {
+    onOpenChart: ReturnType<typeof vi.fn>
+    onSelectChart: ReturnType<typeof vi.fn>
+  } {
+    vi.stubGlobal('encore', {
+      catalogQuery: (): Promise<ChartRecord[]> => Promise.resolve(rows),
+      catalogCount: (): Promise<number> => Promise.resolve(rows.length),
+      updatesLast: (): Promise<ChartVerdict[]> => Promise.resolve([])
+    })
+    const onOpenChart = vi.fn()
+    const onSelectChart = vi.fn()
+    render(Library, { onOpenChart, onSelectChart })
+    return { onOpenChart, onSelectChart }
+  }
+
+  it('offers one per row, named after the chart it previews', async () => {
+    renderSelectable(LIBRARY)
+
+    expect(await screen.findByRole('button', { name: 'Preview YYZ' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Preview Limelight' })).toBeTruthy()
+  })
+
+  it('hands the chart over without opening it', async () => {
+    const { onOpenChart, onSelectChart } = renderSelectable(LIBRARY)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Preview YYZ' }))
+
+    expect(onSelectChart).toHaveBeenCalledWith({ kind: 'local', record: LIBRARY[0] })
+    // The whole point: the view underneath does not change.
+    expect(onOpenChart).not.toHaveBeenCalled()
+  })
+
+  // A button inside a button is invalid and the inner one is unreachable, which is why the row
+  // and its two actions are siblings under the wrapper rather than nested.
+  it('sits beside the row rather than inside it', async () => {
+    renderSelectable(LIBRARY)
+
+    const preview = await screen.findByRole('button', { name: 'Preview YYZ' })
+    const row = await rowTitled('YYZ')
+    expect(row.contains(preview)).toBe(false)
+    expect(preview.closest('.row-wrap')).toBe(row.closest('.row-wrap'))
+  })
+
+  // Opening a chart still does what it always did; this is the regression the new button could
+  // realistically cause, by swallowing the row's own click.
+  it('leaves the row itself opening the chart', async () => {
+    const { onOpenChart, onSelectChart } = renderSelectable(LIBRARY)
+
+    await fireEvent.click(await rowTitled('YYZ'))
+
+    expect(onOpenChart).toHaveBeenCalledWith({ kind: 'local', record: LIBRARY[0] })
+    expect(onSelectChart).not.toHaveBeenCalled()
   })
 })

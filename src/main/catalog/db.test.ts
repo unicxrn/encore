@@ -38,6 +38,13 @@ const makeV2Db = (file: string, rowCount: number): void => {
 const columnNames = (db: Database.Database): string[] =>
   (db.pragma('table_info(charts)') as { name: string }[]).map((c) => c.name)
 
+const indexNames = (db: Database.Database): string[] =>
+  (
+    db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'charts'`)
+      .all() as { name: string }[]
+  ).map((row) => row.name)
+
 describe('openCatalog', () => {
   it('creates the charts table and FTS index', () => {
     const db = openCatalog(tmpDb())
@@ -77,6 +84,125 @@ describe('openCatalog', () => {
     expect(() => db.prepare('SELECT count(*) FROM score_charts').get()).not.toThrow()
     expect(() => db.prepare('SELECT count(*) FROM score_bests').get()).not.toThrow()
     expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    db.close()
+  })
+  it('creates the favourites table', () => {
+    const db = openCatalog(tmpDb())
+    const names = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+    expect(names).toContain('favourites')
+    db.close()
+  })
+  it('keys favourites case-insensitively, so one chart cannot be hearted twice', () => {
+    // The COLLATE NOCASE on the three key columns, read back off the PRIMARY KEY itself rather
+    // than off the DDL: an index that compares case-sensitively is a table where the same chart
+    // met on Chorus and in the library is two rows, and one press un-hearts only one of them.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO favourites (name, artist, charter, addedAt) VALUES (?, ?, ?, ?)`
+    )
+    insert.run('Everlong', 'Foo Fighters', 'Neversoft', 'now')
+    insert.run('EVERLONG', 'foo fighters', 'NEVERSOFT', 'later')
+    expect(db.prepare('SELECT count(*) AS n FROM favourites').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('adds the favourites table to a database that predates it, keeping its rows', () => {
+    // Created outside `migrate` by the CREATE block that runs on every open, exactly as the score
+    // tables are: a new table needs no ALTER, and the version bump is what records the shape.
+    const file = tmpDb()
+    makeV1Db(file)
+    const db = openCatalog(file)
+    expect(() => db.prepare('SELECT count(*) FROM favourites').get()).not.toThrow()
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    expect(db.prepare('SELECT count(*) AS n FROM charts').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('keeps favourites across a close and a re-open', () => {
+    const file = tmpDb()
+    const first = openCatalog(file)
+    first
+      .prepare(`INSERT INTO favourites (name, artist, charter, addedAt) VALUES (?, ?, ?, ?)`)
+      .run('Everlong', 'Foo Fighters', 'Neversoft', 'now')
+    first.close()
+    const db = openCatalog(file)
+    expect(db.prepare('SELECT count(*) AS n FROM favourites').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('creates the setlist tables', () => {
+    const db = openCatalog(tmpDb())
+    const names = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+    expect(names).toContain('setlists')
+    expect(names).toContain('setlist_entries')
+    db.close()
+  })
+  it('refuses two setlists by one name, whatever their capitals', () => {
+    // The UNIQUE COLLATE NOCASE on `setlists.name`, read off the constraint rather than off the
+    // DDL. catalog/setlists.ts checks first so the user gets a sentence, but this is what holds
+    // if a second writer ever appears, and a sidebar listing one name twice is unreadable.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(`INSERT INTO setlists (id, name, createdAt) VALUES (?, ?, ?)`)
+    insert.run('a', 'Friday night', 'now')
+    expect(() => insert.run('b', 'FRIDAY NIGHT', 'now')).toThrow()
+    db.close()
+  })
+  it('keys a setlist entry case-insensitively, so one chart cannot be added twice', () => {
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO setlist_entries
+			 (setlistId, name, artist, charter, position, addedAt) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    insert.run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    insert.run('a', 'EVERLONG', 'foo fighters', 'NEVERSOFT', 1, 'later')
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('lets two setlists hold the same chart, which the favourites key alone could not', () => {
+    // The setlistId in the PRIMARY KEY, proved at the table rather than above it: without it the
+    // second of these two INSERTs is the one the first already wrote.
+    const db = openCatalog(tmpDb())
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO setlist_entries
+			 (setlistId, name, artist, charter, position, addedAt) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    insert.run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    insert.run('b', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 2 })
+    db.close()
+  })
+  it('adds the setlist tables to a database that predates them, keeping its rows', () => {
+    // Created outside `migrate` by the CREATE block that runs on every open, exactly as the score
+    // and favourites tables are. The version bump is what records the shape.
+    const file = tmpDb()
+    makeV1Db(file)
+    const db = openCatalog(file)
+    expect(() => db.prepare('SELECT count(*) FROM setlists').get()).not.toThrow()
+    expect(() => db.prepare('SELECT count(*) FROM setlist_entries').get()).not.toThrow()
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+    expect(db.prepare('SELECT count(*) AS n FROM charts').get()).toEqual({ n: 1 })
+    db.close()
+  })
+  it('keeps setlists across a close and a re-open', () => {
+    const file = tmpDb()
+    const first = openCatalog(file)
+    first
+      .prepare(`INSERT INTO setlists (id, name, createdAt) VALUES (?, ?, ?)`)
+      .run('a', 'F', 'now')
+    first
+      .prepare(
+        `INSERT INTO setlist_entries (setlistId, name, artist, charter, position, addedAt)
+				 VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run('a', 'Everlong', 'Foo Fighters', 'Neversoft', 0, 'now')
+    first.close()
+    const db = openCatalog(file)
+    expect(db.prepare('SELECT count(*) AS n FROM setlist_entries').get()).toEqual({ n: 1 })
     db.close()
   })
   it('enables WAL mode', () => {
@@ -157,6 +283,36 @@ describe('full chart data migration', () => {
     expect(columnNames(migrated).sort()).toEqual(columnNames(fresh).sort())
     migrated.close()
     fresh.close()
+  })
+
+  /**
+   * The identity index, on both of the shapes a user can arrive with.
+   *
+   * It is an expression index over the four stripped columns, which a database written before
+   * schema 6 does not have at all until the ALTERs have run, so it cannot be created in
+   * openCatalog's CREATE block the way an ordinary index could. That is the same trap
+   * charts_checksum is in, and the reason both are created in migrate().
+   */
+  it('creates the identity index on a fresh database and on a v1 one', () => {
+    const fresh = openCatalog(tmpDb())
+    expect(indexNames(fresh)).toContain('charts_meta')
+    fresh.close()
+
+    const file = tmpDb()
+    makeV1Db(file)
+    const migrated = openCatalog(file)
+    expect(indexNames(migrated)).toContain('charts_meta')
+    // The row a v1 database arrives with is in the index, not merely alongside it: CREATE INDEX
+    // fills it completely, which is the whole reason this needs no SCAN_VERSION bump.
+    expect(
+      migrated
+        .prepare(
+          `SELECT path FROM charts
+					 WHERE COALESCE(COALESCE(nameStripped, name), '') = '' COLLATE NOCASE`
+        )
+        .all()
+    ).toEqual([{ path: '/lib/legacy.sng' }])
+    migrated.close()
   })
 
   it('leaves a database written by a newer build at its own version', () => {

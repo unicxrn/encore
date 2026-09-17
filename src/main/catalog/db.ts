@@ -66,8 +66,24 @@ export const SCAN_VERSION = 7
  *    SCAN_VERSION bump goes with this one, and that is not an oversight: nothing in either table
  *    comes from reading a chart, so a rescan could not fill them and asking every user for one
  *    would re-read their whole library to learn nothing. The import fills them instead.
+ *
+ * 8: `favourites`. No SCAN_VERSION bump either, for a stronger version of the same reason: a
+ *    favourite is something the user did, not something a chart says, so there is no chart on disk
+ *    a rescan could read one out of. Bumping would re-read every user's whole library to recompute
+ *    values that were already correct and learn nothing new about a single chart.
+ *
+ * 9: `setlists` and `setlist_entries`. No SCAN_VERSION bump, and this one is not even a close
+ *    call. Clone Hero has no setlist format (shared/setlists.ts lays out what was checked), so
+ *    there is not only no chart on disk a rescan could read one out of, there is no file in the
+ *    format that could ever hold one. A bump would re-read every user's whole library to learn
+ *    nothing at all.
+ *
+ * 10: `charts_meta`, the index over the identity expression. No SCAN_VERSION bump, and this one is
+ *     the clearest of the four: an index is not a column, it holds nothing a chart's files say, and
+ *     every value in it is derived by SQLite from columns the rows already carry. `CREATE INDEX`
+ *     fills it completely the moment it runs, so there is nothing left for a rescan to do.
  */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 10
 
 /**
  * The text columns stored twice: once as the chart says it, once as a reader sees it.
@@ -102,6 +118,48 @@ export type StrippedSource = keyof typeof STRIPPED_COLUMN
 export function readableColumn(column: StrippedSource, prefix = ''): string {
   return `COALESCE(${prefix}${STRIPPED_COLUMN[column]}, ${prefix}${column})`
 }
+
+/**
+ * The expression a chart's identity is compared through: its readable text, with null as ''.
+ *
+ * One definition, because three features compare these three columns and they were three spellings
+ * in one release. `catalog:exists-by-meta` compared `LOWER(name)` against the RAW column while a
+ * favourite and a setlist entry compared the readable one, so a chart whose Chorus copy carries
+ * colour markup in its title and whose local copy has had it edited out was one chart to a heart
+ * and two to Hide owned. shared/chart-key.ts is the rule; this is how SQL says it.
+ *
+ * The '' is the other half of what the writer does. A favourite stores '' for a chart that credits
+ * nobody, and a NULL column in SQL compares equal to nothing at all, itself included, so without it
+ * every chart missing one of the three would be unmatchable in practice.
+ *
+ * Callers state `COLLATE NOCASE` on the comparison rather than inheriting it, because neither side
+ * is a column declared with it. That collation folds A-Z and nothing else, which is exactly what
+ * `chartKeyId` folds, and it is what `charts_meta` below is built with.
+ */
+export function identityColumn(column: StrippedSource, prefix = ''): string {
+  return `COALESCE(${readableColumn(column, prefix)}, '')`
+}
+
+/**
+ * The index every "is this chart in my library" lookup reads, over the identity expression itself.
+ *
+ * An expression index rather than one over the four raw columns, because the comparison is over
+ * `COALESCE(COALESCE(nameStripped, name), '') COLLATE NOCASE` and a plain column index cannot
+ * answer that. Built from `identityColumn` so it cannot drift from the queries that use it: change
+ * the expression there and this follows, and a mismatch would not be an error, it would be a silent
+ * return to scanning.
+ *
+ * Worth its cost, measured over a generated 20,000 row catalog. A batch of 100 keys, which is what
+ * one Explore page and the Surprise picker each send, took 76 ms scanning through the old
+ * `LOWER(col) = LOWER(?)`, 40 ms scanning through this expression, and 1.1 ms through this index.
+ * Against that: 868 KB on disk, 6 ms added to a 20,000 row scan's inserts (56 ms to 62 ms), and
+ * 13 ms once in the migration that creates it.
+ */
+const IDENTITY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS charts_meta ON charts(
+			${identityColumn('name')} COLLATE NOCASE,
+			${identityColumn('artist')} COLLATE NOCASE,
+			${identityColumn('charter')} COLLATE NOCASE
+		)`
 
 /**
  * The view the FTS index is built from, and the only definition of what gets indexed.
@@ -285,6 +343,9 @@ function migrate(db: CatalogDb): void {
     // column does not exist yet when that block runs, and CREATE INDEX would throw rather than
     // being skipped by its IF NOT EXISTS. This is the lookup every play join makes.
     db.exec('CREATE INDEX IF NOT EXISTS charts_checksum ON charts(cloneHeroChecksum)')
+    // Here for the same reason, and more sharply: this one is over the four stripped columns, which
+    // a database written before schema 6 does not have at all until the ALTERs above have run.
+    db.exec(IDENTITY_INDEX_SQL)
     // A database opened by a build that predates the view has none: openCatalog's IF NOT EXISTS
     // created it a moment ago only if this is a fresh file.
     db.exec(SEARCH_VIEW_SQL)
@@ -423,6 +484,74 @@ export function openCatalog(filePath: string): CatalogDb {
 			scoreWithoutCleanPlayBonus INTEGER NOT NULL,
 			PRIMARY KEY (checksum, variant)
 		);
+		-- One row per chart the user hearted, keyed by what the chart IS rather than by where a
+		-- copy of it sits. See shared/favourites.ts for the three keys that were weighed and why
+		-- name/artist/charter is the one that survives a move, a re-download and a rebuilt catalog.
+		--
+		-- DELIBERATELY NOT A FOREIGN KEY TO charts, and this is the whole design rather than a
+		-- detail. Encore's rail draws the heart over Chorus results as well as over the library, so
+		-- a favourite of a chart the user has not downloaded yet has to be storable; and a chart
+		-- moved to the Trash, or a catalog deleted and scanned again from nothing, must not take
+		-- the user's own list with it. The join happens at read time, in favouritesClause, and a
+		-- favourite that matches no row today matches again the moment the chart arrives.
+		--
+		-- COLLATE NOCASE on all three key columns is what makes the PRIMARY KEY the rule "one
+		-- favourite per chart": the same chart met once on Chorus and once in the library differs
+		-- in case often enough that without it a user could heart one chart twice and un-heart it
+		-- once. It is the same case rule catalog:exists-by-meta and catalog:facets compare these
+		-- fields by. The stored text is the readable form (shared/chart-key.ts strips the markup),
+		-- so it compares against the stripped columns rather than against the raw ones, which is
+		-- what exists-by-meta was fixed to do rather than the other way round.
+		CREATE TABLE IF NOT EXISTS favourites (
+			name TEXT NOT NULL COLLATE NOCASE,
+			artist TEXT NOT NULL COLLATE NOCASE,
+			charter TEXT NOT NULL COLLATE NOCASE,
+			addedAt TEXT NOT NULL,
+			PRIMARY KEY (name, artist, charter)
+		);
+		-- The setlists the user built. Encore's own: Clone Hero has no setlist format to write to,
+		-- and shared/setlists.ts records what was checked before that was believed.
+		--
+		-- The id is opaque and generated in main rather than being the name, because renaming a
+		-- setlist must not detach its entries and two setlists are two setlists while both are still
+		-- called "Untitled". The name is UNIQUE COLLATE NOCASE all the same: the id is the identity,
+		-- but a sidebar listing "Friday night" twice is a list the user cannot tell apart, and
+		-- refusing the second is cheaper than a screen that explains it.
+		CREATE TABLE IF NOT EXISTS setlists (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			createdAt TEXT NOT NULL
+		);
+		-- One row per chart in a setlist, keyed by the chart the same way a favourite is, through
+		-- the same functions. See shared/setlists.ts.
+		--
+		-- The PRIMARY KEY carries setlistId, and that is the difference from favourites rather
+		-- than a detail of it. Favourites are one list, so the three names alone are its key; a
+		-- chart has to be able to sit in two setlists at once, and the same key without the id
+		-- would make the second add collide with the first. Inside ONE setlist the three names
+		-- are the key again, so a chart cannot be added to the same setlist twice, and the same
+		-- song by two charters is two rows because the charter differs.
+		--
+		-- NOT a foreign key in either direction, and both halves are deliberate. Against charts,
+		-- for every reason favourites gives: a setlist may hold a chart from Chorus the user has
+		-- not downloaded, and a chart moved to the Trash must not take the user's own list with it.
+		-- Against setlists, because SQLite leaves PRAGMA foreign_keys off unless a connection
+		-- turns it on and this one does not; a declared ON DELETE CASCADE would read as a promise
+		-- nothing keeps. Deleting a setlist deletes its entries explicitly, in one transaction, in
+		-- catalog/setlists.ts.
+		--
+		-- position is dense and zero-based within a setlist, renumbered by every write, so the
+		-- order is the rows themselves rather than a claim about them that can drift.
+		CREATE TABLE IF NOT EXISTS setlist_entries (
+			setlistId TEXT NOT NULL,
+			name TEXT NOT NULL COLLATE NOCASE,
+			artist TEXT NOT NULL COLLATE NOCASE,
+			charter TEXT NOT NULL COLLATE NOCASE,
+			position INTEGER NOT NULL,
+			addedAt TEXT NOT NULL,
+			PRIMARY KEY (setlistId, name, artist, charter)
+		);
+		CREATE INDEX IF NOT EXISTS setlist_entries_list ON setlist_entries(setlistId, position);
 		${SEARCH_VIEW_SQL}
 		${FTS_SQL}
 		${FTS_TRIGGERS_SQL}

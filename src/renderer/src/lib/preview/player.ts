@@ -1,4 +1,5 @@
 import type { ChartPreviewPlayer, Difficulty, Instrument } from 'chart-preview'
+import { skinLaneTextures } from './lane-skin'
 
 export interface PreviewSource {
   kind: 'url' | 'files'
@@ -156,7 +157,8 @@ export function buildChartMap(
  * import itself registers the custom element (double-registration guarded).
  */
 export async function createPreview(): Promise<PreviewHandle> {
-  const { fetchSngFile, extractSngFile, prepareChartData } = await import('chart-preview')
+  const { fetchSngFile, extractSngFile, prepareChartData, getInstrumentType } =
+    await import('chart-preview')
   const element = document.createElement('chart-preview-player') as ChartPreviewPlayer
   hideEmbeddedControls(element)
   let disposed = false
@@ -230,6 +232,11 @@ export async function createPreview(): Promise<PreviewHandle> {
         seekPercent ?? 0,
         animations === undefined ? {} : { animationsEnabled: animations }
       )
+      // Encore's own lane, over the package's, in the one gap where the textures are neither the
+      // package's to build nor its to draw with yet. Best effort: a preview that opens on the
+      // package's highway is still a preview, so a failure here is not one the user hears about.
+      // See `lane-skin.ts`, which is where everything about this lives.
+      skinLaneTextures(prepared.textures, getInstrumentType(instrument), document)
       await element.loadChart(prepared)
       element.setVolume(volume)
 

@@ -8,18 +8,39 @@ import icon from '../../resources/icon.png?asset'
 import { ENCORE_TMP_DIR, ENCHOR_FILES_URL } from '../shared/constants'
 import { IPC } from '../shared/ipc-contract'
 import { resolveChartFolderName } from '../shared/naming'
+import { chartKey } from '../shared/chart-key'
+import { favouriteKey, isFavouritable } from '../shared/favourites'
+import {
+  canJoinASetlist,
+  isValidSetlistName,
+  setlistEntryKey,
+  setlistName,
+  SETLIST_NAME_MAX
+} from '../shared/setlists'
 import type { ChartRecord } from '../shared/schemas'
 import { isUnderLibrary } from './assets/library-guard'
 import { sweepOrphanArt } from './catalog/art-cache'
 import { readChartFiles } from './catalog/chart-files'
 import { readLyricLines } from './catalog/lyric-lines'
+import { readChartMetadata, writeChartMetadata } from './metadata/edit'
 import { detectChartLibraries } from './catalog/detect-library'
 import { openCatalog, type CatalogDb } from './catalog/db'
 import { findDuplicates } from './catalog/duplicates'
 import { withCopySizes } from './catalog/chart-size'
 import { removeChart } from './catalog/remove-chart'
+import { listFavourites, setFavourite } from './catalog/favourites'
+import { rekeyChartLists } from './catalog/rekey'
+import {
+  createSetlist,
+  deleteSetlist,
+  listSetlists,
+  moveSetlistEntry,
+  renameSetlist,
+  setSetlistEntry
+} from './catalog/setlists'
 import {
   chartFacets,
+  chartsByMeta,
   chartsExistByMeta,
   countCharts,
   getChartByPath,
@@ -51,6 +72,9 @@ import { sweepTmpDir } from './downloads/sweep'
 import { ART_CACHE_VERSION, encodeAlbumArt, encodeSquareAlbumArt } from './art-encode'
 import { registerArtProtocol, registerArtScheme } from './art-protocol'
 import { convertToWebm } from './ffmpeg/convert'
+import { describeGameExecutable } from '../shared/game-launch'
+import { inspectGameExecutable } from './game/executable'
+import { launchGame as startGame } from './game/launch'
 import { locateFfmpeg, type FfmpegLocation } from './ffmpeg/locate'
 import { backupStoreBytes, clearBackups, listBackups } from './issues/backup-store'
 import { cancelFix, fixableCodes, runFix, type VideoConverter } from './issues/fix'
@@ -132,7 +156,11 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     frame: false,
-    backgroundColor: '#0a0a0e',
+    // The one copy of --ground-1 that lives outside tokens.css, and it has to be a literal: this
+    // is what Chromium paints before the renderer's first frame, so it is decided in main before
+    // any stylesheet exists. Kept equal to --ground-1 so the window does not flash a second
+    // near-black on the way up. If the ground scale moves, this moves with it.
+    backgroundColor: '#0a0914',
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -218,6 +246,46 @@ function sweepArtCache(db: CatalogDb, artDir: string, summary: ScanSummary): voi
   } catch (err) {
     console.error('Album art sweep failed:', err)
   }
+}
+
+/**
+ * A setlist name as it will be stored, or a refusal the user can read.
+ *
+ * Collapsing before measuring is the whole of it: a name pasted with a trailing run of spaces is
+ * a name the user meant, and refusing it for a length it does not have once written down would be
+ * the app arguing with its own display. The boundary schema caps the raw string at twice this so
+ * nothing unbounded reaches here; this is the rule a person is actually held to.
+ */
+function requireSetlistName(raw: string): string {
+  const name = setlistName(raw)
+  if (!isValidSetlistName(name)) {
+    throw new Error(
+      name.length === 0
+        ? 'A setlist needs a name.'
+        : `A setlist name can be at most ${SETLIST_NAME_MAX} characters.`
+    )
+  }
+  return name
+}
+
+/**
+ * The three fields an entry names a chart by, normalised, or a refusal.
+ *
+ * Refused for exactly the case the heart refuses and with the same way out, because it is the same
+ * problem: a chart with no name of its own is drawn from its folder name, which is a display
+ * fallback rather than an identity, and an entry holding onto one would move when the folder was
+ * renamed. See shared/setlists.ts.
+ */
+function requireSetlistEntry(req: {
+  name?: string | null
+  artist?: string | null
+  charter?: string | null
+}): ReturnType<typeof setlistEntryKey> {
+  const key = setlistEntryKey(req)
+  if (!canJoinASetlist(key)) {
+    throw new Error('A chart with no name of its own cannot go in a setlist.')
+  }
+  return key
 }
 
 function wireIpc(): {
@@ -307,7 +375,7 @@ function wireIpc(): {
    * and nowhere else, the same arrangement detectChartLibraries uses, so the resolver stays
    * testable across platforms this machine is not.
    *
-   * Nothing about this can fail loudly. A machine with no Clone Hero — which is most of them —
+   * Nothing about this can fail loudly. A machine with no Clone Hero, which is most of them,
    * resolves a path that does not exist, watches nothing, and reports `available: false`. That
    * is a state the UI draws, not an error anyone has to see.
    */
@@ -527,6 +595,38 @@ function wireIpc(): {
     countCharts: (f) => countCharts(db, f),
     chartsExistByMeta: (keys) => chartsExistByMeta(db, keys),
     chartFacets: () => chartFacets(db),
+    listFavourites: () => listFavourites(db),
+    // Normalised here rather than in the renderer, so the row stored is the same row whichever
+    // screen the heart was pressed on: Explore hands over the raw `song.ini` text a chart from
+    // Chorus carries, Installed hands over the catalog's copy of it, and `favouriteKey` is the one
+    // place that decides what those two have in common. A key that names no chart is refused
+    // rather than stored: see `isFavouritable`.
+    setFavourite: (req) => {
+      const key = favouriteKey(req)
+      if (!isFavouritable(key)) {
+        throw new Error('A chart with no name of its own cannot be favourited.')
+      }
+      return setFavourite(db, key, req.favourite)
+    },
+    listSetlists: () => listSetlists(db),
+    // Normalised and checked here, for the same reason the heart's key is: this is the one place
+    // that decides what gets stored, so a name typed with a stray double space and the same name
+    // typed cleanly cannot become two setlists. The length is checked AFTER collapsing, which is
+    // why the boundary schema's cap is looser than this one.
+    createSetlist: (req) => createSetlist(db, requireSetlistName(req.name)),
+    renameSetlist: (req) => renameSetlist(db, req.id, requireSetlistName(req.name)),
+    deleteSetlist: (req) => deleteSetlist(db, req.id),
+    // The entry key goes through the same function a favourite's does, so a chart put in a setlist
+    // from Explore and the same chart put in one from Installed are one row. A chart that names
+    // nothing is refused rather than stored, exactly as the heart refuses it.
+    setSetlistEntry: (req) => setSetlistEntry(db, req.id, requireSetlistEntry(req), req.member),
+    moveSetlistEntry: (req) => moveSetlistEntry(db, req.id, requireSetlistEntry(req), req.delta),
+    // The join happens here rather than in the renderer because it is a query over the catalog,
+    // and because the setlist's own order is what the answer has to be aligned to.
+    setlistCharts: (req) => {
+      const list = listSetlists(db).find((l) => l.id === req.id)
+      return list === undefined ? [] : chartsByMeta(db, list.entries)
+    },
     // Sizes are added on top of the query rather than inside it, and only for the tier that
     // offers a removal: the report itself never touches the filesystem. See chart-size.ts.
     duplicateCharts: () => withCopySizes(findDuplicates(db)),
@@ -597,6 +697,57 @@ function wireIpc(): {
     clearFinishedDownloads: () => manager.clearFinished(),
     readChartFiles: (path, chartType) => readChartFiles(path, chartType),
     readLyricLines: (path, chartType) => readLyricLines(path, chartType),
+    readChartMetadata: (path, chartType) => readChartMetadata(path, chartType),
+    // The metadata editor's save. libraryFolders are read at call time, matching every other
+    // writer, so a folder removed in Settings stops being writable without a restart.
+    //
+    // The re-index is here rather than in the writer because it is the catalog's business and the
+    // writer has never heard of the database. It goes through `scanChart`, the same path
+    // `rescanCharts` uses, so one definition of what a row means survives: a hand-patched row
+    // would be Encore's second opinion about a file it has just been told to re-read.
+    // A chart with no row is not an error. The library scan has simply not reached it, and the
+    // edit really did happen; `record: null` says so rather than inventing a row.
+    writeChartMetadata: async (req) => {
+      const written = await writeChartMetadata(
+        req.path,
+        req.fields,
+        loadSettings(settingsPath).libraryFolders
+      )
+      const existing = getChartByPath(db, req.path)
+      // No row means the library scan has not reached this chart, so there is no before and after
+      // for `rekeyChartLists` to compare and nothing in the catalog a list could be matched
+      // against either. The edit really did happen; `record: null` says so rather than inventing
+      // a row, and the next scan brings both into step.
+      if (existing === undefined || existing === null) {
+        return { ...written, record: null, listMove: null }
+      }
+      const before = chartKey(existing)
+      let reindexed = true
+      try {
+        await scanChart(
+          db,
+          { path: req.path, type: existing.chartType },
+          {
+            dir: artDir,
+            encode: encodeAlbumArt
+          }
+        )
+      } catch (err) {
+        // The write succeeded and was verified; only the re-index failed. Reporting an error here
+        // would tell the user their edit did not happen, which is the one thing that is not true.
+        // The row is stale until the next scan, and the watcher will get to it.
+        reindexed = false
+        console.error(`Re-index of ${req.path} after a metadata edit failed:`, err)
+      }
+      const record = getChartByPath(db, req.path) ?? existing
+      // Only against a row that was actually rewritten. `rekeyChartLists` asks the catalog whether
+      // anything still answers to the old details, and against a stale row the edited chart would
+      // answer that about itself: every rename would read as a second copy and the heart would be
+      // copied instead of moved. A stale row still says the old names, so the favourite and the
+      // entries still match it, and the next scan is where this gets picked up.
+      const listMove = reindexed ? rekeyChartLists(db, before, chartKey(record)) : null
+      return { ...written, record, listMove }
+    },
     pickFolder: async (sender) => {
       const win =
         BrowserWindow.fromWebContents(sender as Electron.WebContents) ??
@@ -605,6 +756,44 @@ function wireIpc(): {
         ? await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
         : await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    // A file dialog rather than a directory one, with the filter the platform calls for. Windows
+    // starts a program by its `.exe`, so that is the only thing worth offering; on Linux the game
+    // is an AppImage or a binary with no extension at all, and a filter there would hide the file
+    // the user came to pick. The dialog attaches to the calling window, as pickFolder's does.
+    pickExecutable: async (sender) => {
+      const win =
+        BrowserWindow.fromWebContents(sender as Electron.WebContents) ??
+        BrowserWindow.getFocusedWindow()
+      const options: Electron.OpenDialogOptions = {
+        properties: ['openFile'],
+        ...(process.platform === 'win32'
+          ? { filters: [{ name: 'Programs', extensions: ['exe'] }] }
+          : {})
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    // The one place `process.platform` reaches the game rules, in the same arrangement
+    // detectChartLibraries and the score-file locator use: the module takes the platform as a
+    // parameter so its tests can cover the ones this machine is not. An empty path means "the
+    // stored one", which is what the Settings row asks on mount.
+    gameExecutableReport: ({ path }) =>
+      inspectGameExecutable(
+        path.trim() === '' ? loadSettings(settingsPath).gamePath : path,
+        process.platform
+      ),
+    // Settings are re-read per call, and the path is re-inspected, for the reason revealChart
+    // re-reads its folders: a program that was checked when it was chosen can have been
+    // uninstalled since, and reporting the refusal is the whole difference between a button that
+    // explains itself and one that does nothing.
+    launchGame: async () => {
+      const configured = loadSettings(settingsPath).gamePath
+      const report = inspectGameExecutable(configured, process.platform)
+      if (!report.usable) throw new Error(describeGameExecutable(report))
+      await startGame(configured)
     },
     windowControl: (action, sender) => {
       const win =

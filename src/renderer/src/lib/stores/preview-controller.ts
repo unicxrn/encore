@@ -12,6 +12,16 @@ export interface NowPlaying {
   title: string
   artist: string
   artUrl: string | null
+  /**
+   * The track the open preview loaded, in the words a reader uses: "Expert Guitar".
+   *
+   * Carried rather than derived from `instrument` and `difficulty` below, because those are the
+   * keys the chart format uses ('guitarghl', 'expert') and turning them into words means owning
+   * the label list a second time. The surface that opened the preview already has that list, and
+   * both of them build this string from it, so the player bar names the track in the same words
+   * the rail's badge and the pane's selects do.
+   */
+  track: string
 }
 
 export interface PreviewRequest extends NowPlaying {
@@ -51,6 +61,29 @@ export const playerVolume: Writable<number | null> = writable(null)
  * the bar's transport could have driven anything at all; everywhere else it is idle.
  */
 export const viewportMounted: Writable<boolean> = writable(false)
+/**
+ * The element previews are currently appended into, or null when none is registered.
+ *
+ * `viewportMounted` cannot answer the question this one exists for. The app has two places a
+ * highway can live now, the rail and the chart page's preview pane, and when the pane registers
+ * over the rail's viewport the flag above stays true through the whole hand-over: nothing in it
+ * distinguishes "still mine" from "someone else took it". A viewport that needs to know whether
+ * it is still the live one compares this against its own element.
+ */
+export const viewportOwner: Writable<HTMLElement | null> = writable(null)
+/**
+ * Whether a preview that reaches its end starts again.
+ *
+ * Repeat one, and there is no other kind to offer: the controller holds a single handle and
+ * nothing in the app hands it a list of charts, so "repeat all" would need a sequence that does
+ * not exist. See PlayerBar for the same reason spelled out against shuffle.
+ *
+ * A mode rather than track state, so `closePreview` leaves it alone: it says how the transport
+ * should behave, and the chart under it changes every time the rail is pointed somewhere new.
+ * Not in settings either. `previewVolume` is stored because the volume you left is the volume
+ * you want back next week; looping is a decision about the chart in front of you this minute.
+ */
+export const playerRepeat: Writable<boolean> = writable(false)
 
 let handle: PreviewHandle | null = null
 let unsubs: (() => void)[] = []
@@ -77,6 +110,7 @@ export function registerViewport(el: HTMLElement): () => void {
   closePreview()
   container = el
   viewportMounted.set(true)
+  viewportOwner.set(el)
   return () => {
     // The guard covers the flag too: when the replacement pane registered first, its viewport
     // is the live one, and reporting it gone would hand the bar's transport back under it.
@@ -84,6 +118,7 @@ export function registerViewport(el: HTMLElement): () => void {
     closePreview()
     container = null
     viewportMounted.set(false)
+    viewportOwner.set(null)
   }
 }
 
@@ -94,7 +129,12 @@ export async function openPreview(req: PreviewRequest): Promise<void> {
   const token = ++openToken
   const target = container
 
-  nowPlaying.set({ title: req.title, artist: req.artist, artUrl: req.artUrl })
+  nowPlaying.set({
+    title: req.title,
+    artist: req.artist,
+    artUrl: req.artUrl,
+    track: req.track
+  })
   playerState.set('loading')
 
   const h = await createPreview()
@@ -108,6 +148,11 @@ export async function openPreview(req: PreviewRequest): Promise<void> {
     h.onState((state) => {
       playerState.set(state)
       if (state !== 'error') playerError.set(null)
+      // Repeat lives on the handle, not in a component: the bar is not the only surface with a
+      // transport, and a chart must loop whether the bar, the rail's or the pane's is the one on
+      // screen. `unsubs` is torn down by `closePreview`, so a preview handed back when the rail
+      // hides cannot keep looping behind a column that is gone.
+      if (state === 'ended' && get(playerRepeat)) play(h)
     }),
     h.onError((message) => {
       playerError.set(message)
@@ -140,6 +185,14 @@ export async function openPreview(req: PreviewRequest): Promise<void> {
   }
 }
 
+/** Plays `h`, reporting a refusal the way every other transport call here does. */
+function play(h: PreviewHandle): void {
+  void h.play().catch((err: unknown) => {
+    playerError.set(err instanceof Error ? err.message : String(err))
+    playerState.set('error')
+  })
+}
+
 export function togglePlay(): void {
   const h = handle
   if (!h) return
@@ -163,6 +216,19 @@ export function seekTo(percent: number): void {
   void h.seek(clamped).catch(() => {})
 }
 
+/**
+ * Turns repeat on or off.
+ *
+ * Turning it on after a chart has already ended starts it again at once. The alternative is a
+ * control that lights up and does nothing until the next chart, which is the state the button
+ * was pressed to leave.
+ */
+export function toggleRepeat(): void {
+  const on = !get(playerRepeat)
+  playerRepeat.set(on)
+  if (on && handle && get(playerState) === 'ended') play(handle)
+}
+
 /** Toggles the preview's fullscreen mode; no-op when nothing is playing. */
 export function toggleFullscreen(): void {
   handle?.toggleFullscreen()
@@ -180,7 +246,12 @@ export function setPlayerVolume(volume: number, opts: { persist?: boolean } = {}
   void patchSettings({ previewVolume: volume })
 }
 
-/** Disposes the active preview and resets every store to the idle state. */
+/**
+ * Disposes the active preview and resets every store to the idle state.
+ *
+ * `playerRepeat` is deliberately not among them: it is a transport mode, not a fact about the
+ * chart that just went away, and every navigation runs through here.
+ */
 export function closePreview(): void {
   openToken++
   for (const unsub of unsubs) unsub()

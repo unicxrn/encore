@@ -26,6 +26,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { evalIn, exitOnFailure, openExplore, sleep } from './harness-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -50,6 +51,8 @@ const answers = {
   catalogCount: () => 0,
   existsByMeta: (keys) => (Array.isArray(keys) ? keys.map(() => false) : []),
   downloadList: () => [],
+  favouritesList: () => [],
+  setlistsList: () => [],
   // The real PlayDataStatus shape. Home's play panel asks this before it draws anything, and
   // an unavailable answer is the branch that costs nothing: no aggregate is fetched behind it.
   playStatus: () => ({ available: false, reason: 'noFile', path: null, playCount: 0 }),
@@ -60,6 +63,9 @@ window.encore = new Proxy(
   {
     get(_target, key) {
       if (typeof key !== 'string') return undefined
+      // A value rather than a call: Explore's rows read this one synchronously, to decide
+      // whether scan-chart's badVideo is a fault here or a note about somewhere else.
+      if (key === 'platform') return process.platform
       if (key.startsWith('on')) return () => () => {}
       return (...args) => Promise.resolve(answers[key] ? answers[key](...args) : undefined)
     }
@@ -70,21 +76,7 @@ window.encore = new Proxy(
 app.setPath('userData', path.join(scratch, 'userdata'))
 app.commandLine.appendSwitch('disable-gpu')
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const evalIn = (win, code) => win.webContents.executeJavaScript(code, true)
-
-async function waitFor(win, expression, timeoutMs = 40000) {
-  const started = Date.now()
-  for (;;) {
-    const ok = await evalIn(
-      win,
-      `(() => { try { return !!(${expression}) } catch (e) { return false } })()`
-    )
-    if (ok) return true
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${expression}`)
-    await sleep(200)
-  }
-}
+exitOnFailure('measure-explore-append')
 
 /** What the list is, as layout has it. The sentinel is the button at the end. */
 const SHAPE = `(() => {
@@ -121,15 +113,13 @@ app.whenReady().then(async () => {
   win.webContents.setFrameRate(30)
   await win.loadFile(path.join(here, '..', 'out', 'renderer', 'index.html'))
 
-  const explore = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Explore')`
-  await waitFor(win, explore)
-  await evalIn(win, `${explore}.click(), 1`)
-  await waitFor(win, `document.querySelectorAll('.card, .row').length > 0`)
+  await openExplore(win)
   // Long enough for the pages that fill the first screen to land.
   await sleep(4000)
 
   console.log(`window ${width}x${height}`)
-  console.log('first screen  ', JSON.stringify(await evalIn(win, SHAPE)))
+  const first = await evalIn(win, SHAPE)
+  console.log('first screen  ', JSON.stringify(first))
 
   // A user's scroll rather than a jump to the end: 120px a frame, which is about a wheel notch.
   await evalIn(
@@ -143,7 +133,18 @@ app.whenReady().then(async () => {
   )
   for (let i = 0; i < 60; i++) await evalIn(win, `window.__step()`)
   await sleep(4000)
-  console.log('after scrolling', JSON.stringify(await evalIn(win, SHAPE)))
+  const after = await evalIn(win, SHAPE)
+  console.log('after scrolling', JSON.stringify(after))
+  console.log(
+    !first.canScroll
+      ? '  verdict       the first page filled the box exactly, so nothing could scroll and no' +
+          ' append could be asked for. That is the finding this harness exists for.'
+      : after.items > first.items
+        ? `  verdict       appended, ${first.items} items became ${after.items}`
+        : '  verdict       the list scrolled and no item was added. An appended page lands in the' +
+          ' `results` store, which does not re-render a mounted component in this build (see' +
+          ' `remount` in harness-lib.mjs), so this cannot tell a missed observer from that.'
+  )
 
   app.exit(0)
 })

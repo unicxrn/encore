@@ -13,6 +13,14 @@ import {
   SettingsSchema
 } from '../shared/schemas'
 import type { ChartRemoval } from '../shared/chart-removal'
+import type { Favourite } from '../shared/favourites'
+import { SETLIST_NAME_MAX, type Setlist } from '../shared/setlists'
+import { EDITABLE_INI_KEYS } from '../shared/metadata-fields'
+import type {
+  ChartMetadataRead,
+  ChartMetadataSaved,
+  ChartMetadataWriteRequest
+} from './metadata/edit'
 import type { DuplicateReport } from '../shared/duplicates'
 import type { AlbumArtResult } from './assets/art'
 import type { LyricsSearchResult } from './assets/lyrics'
@@ -35,6 +43,7 @@ import {
   type ScoreFolderRequest
 } from '../shared/play'
 import type { ScoreFolderReport } from '../shared/score-folder'
+import type { GameExecutableReport } from '../shared/game-launch'
 import type { ChartVerdict, UpdateCheckSummary } from '../shared/updates'
 import { UpdateCheckRequestSchema } from '../shared/updates'
 import type { SidecarName, SidecarStatus } from './sidecars/manager'
@@ -46,6 +55,45 @@ export interface IpcDeps {
   queryCharts: (f: CatalogFilter) => ChartRecord[]
   countCharts: (f: CatalogFilter) => number
   chartsExistByMeta: (keys: { name: string; artist: string; charter: string }[]) => boolean[]
+  /** Every chart the user hearted, newest first. See shared/favourites.ts on what that keys on. */
+  listFavourites: () => Favourite[]
+  /**
+   * Heart a chart or un-heart it, answering with the list as it now stands.
+   *
+   * The key arrives as the three fields a chart names itself by and is normalised in main, so a
+   * renderer that sent the raw `song.ini` text and one that stripped it first store the same row.
+   * Idempotent both ways: the row is a PRIMARY KEY, and un-hearting what was never hearted is not
+   * an error to report to anybody.
+   */
+  setFavourite: (req: FavouriteWriteRequest) => Favourite[]
+  /** Every setlist, entries included, oldest first. See shared/setlists.ts on what they key on. */
+  listSetlists: () => Setlist[]
+  /**
+   * The six writes, each answering with the list as it now stands.
+   *
+   * Six channels rather than one verb-and-payload, because each does one thing and a single
+   * channel taking an action name is a switch the zod boundary cannot narrow. Names arrive as the
+   * user typed them and are normalised in main (`setlistName`), so a setlist called "Friday  night"
+   * and one called "Friday night" cannot both exist; entry keys arrive as the chart's own three
+   * fields and are normalised the same way a heart's are.
+   *
+   * All of them refuse a setlist that no longer exists rather than writing rows nothing names,
+   * except `deleteSetlist`, where deleting what is already gone is the outcome the caller wanted.
+   */
+  createSetlist: (req: SetlistNameRequest) => Setlist[]
+  renameSetlist: (req: SetlistRenameRequest) => Setlist[]
+  deleteSetlist: (req: SetlistIdRequest) => Setlist[]
+  setSetlistEntry: (req: SetlistEntryWriteRequest) => Setlist[]
+  moveSetlistEntry: (req: SetlistMoveRequest) => Setlist[]
+  /**
+   * The library's row for each of one setlist's entries, in that setlist's order.
+   *
+   * Null where nothing on disk matches, which is an ordinary state rather than an error: a setlist
+   * may hold a chart from Chorus the user has not downloaded, or one they have since removed. The
+   * answer is aligned to the entries by index, so a setlist that changed under the request draws
+   * as many rows as it has and no more.
+   */
+  setlistCharts: (req: SetlistIdRequest) => (ChartRecord | null)[]
   /** Distinct values for the Installed view's filter pickers. Takes no arguments by design:
    * the lists describe the whole catalog, so narrowing them by the filter currently applied
    * would take options away as soon as they were used. */
@@ -110,6 +158,32 @@ export interface IpcDeps {
   clearFinishedDownloads: () => void
   windowControl: (action: 'minimize' | 'maximize' | 'close', sender: unknown) => void
   pickFolder: (sender: unknown) => Promise<string | null>
+  /**
+   * The file picker behind the Clone Hero setting. Separate from `pickFolder` because it opens
+   * on a file, and because the filter it offers is per platform: a `.exe` on Windows, anything on
+   * Linux, where the game arrives as an AppImage or as an extension-less binary. `sender` is
+   * passed for the reason `pickFolder` takes it, so the dialog attaches to the right window.
+   */
+  pickExecutable: (sender: unknown) => Promise<string | null>
+  /**
+   * What one path is, in the terms the setting needs before it stores anything.
+   *
+   * The Clone Hero half of what `scoreFolderReport` does for the score files, and it exists for
+   * the same reason: a path stored without being checked fails silently, and the failure looks
+   * exactly like the bug the setting was added to fix. An empty path asks about whatever is
+   * stored, which is how the Settings row describes itself on mount.
+   */
+  gameExecutableReport: (req: { path: string }) => GameExecutableReport
+  /**
+   * Start Clone Hero, detached, and let go of it.
+   *
+   * Takes nothing: the path is the stored setting rather than something the renderer names, so
+   * there is no payload to trust. It is re-inspected here before anything is spawned, because a
+   * program that was checked when it was chosen can have been uninstalled since, and rejects with
+   * the same sentence Settings would have shown rather than resolving on a launch that did not
+   * happen.
+   */
+  launchGame: () => Promise<void>
   readChartFiles: (
     path: string,
     chartType: 'folder' | 'sng'
@@ -120,6 +194,26 @@ export interface IpcDeps {
    * copies across, so a .sng is read selectively and the renderer never parses a chart file.
    */
   readLyricLines: (path: string, chartType: 'folder' | 'sng') => Promise<LyricLinesResult>
+  /**
+   * The six editable `song.ini` fields as the file or the archive header actually holds them,
+   * plus the seven gameplay keys the editor shows and refuses to touch.
+   *
+   * `chartType` is the renderer echoing the catalog row's own value back, exactly as
+   * `readChartFiles` and the asset writers take it, so the read and the write that follows it
+   * agree about the chart's shape without sniffing the path twice.
+   */
+  readChartMetadata: (path: string, chartType: 'folder' | 'sng') => Promise<ChartMetadataRead>
+  /**
+   * Write what the user typed into one chart, then re-index it.
+   *
+   * The field names are parsed against `EDITABLE_INI_KEYS` at this boundary and refused again in
+   * `writeChartMetadata`, which also refuses any of the seven keys Clone Hero matches charts by
+   * and re-scans the chart afterwards to prove neither identity moved. Resolves with what
+   * changed and the chart's fresh catalog row; rejects, with a sentence the UI can show, on a
+   * chart that has moved, a `.sng` that packs its own `song.ini`, a failed write, and a write
+   * that landed as something other than what was asked for.
+   */
+  writeChartMetadata: (req: ChartMetadataWriteRequest) => Promise<ChartMetadataSaved>
   sidecarStatus: (name: SidecarName) => Promise<SidecarStatus>
   // Deps are pre-wired with a send callback so progress flows to the renderer.
   sidecarInstall: (name: SidecarName) => Promise<void>
@@ -226,7 +320,7 @@ export interface IpcDeps {
    * false` is an ordinary state for most users rather than an error (see shared/play.ts). A
    * consumer that skips it and calls the others on a machine with no Clone Hero gets an empty
    * array and a zeroed stats object, which is correct but indistinguishable from "installed and
-   * never played" — hence the gate.
+   * never played", hence the gate.
    *
    * `playSummaries` takes checksums rather than chart paths: the checksum is what the play table
    * is keyed by, it is on every ChartRecord already, and taking paths would make this a second
@@ -270,10 +364,91 @@ const WindowActionSchema = z.enum(['minimize', 'maximize', 'close'])
 const ExistsByMetaSchema = z
   .array(z.object({ name: z.string(), artist: z.string(), charter: z.string() }))
   .max(250)
+/**
+ * A heart, as the renderer is allowed to name it.
+ *
+ * The same 400-character cap the metadata write uses, and here for the same reason: this is the
+ * one channel that writes text of the renderer's choosing into the catalog, and a chart's three
+ * names are nowhere near that long (96 characters is the longest `name` in the reference library).
+ * The fields are nullish because a chart record carries null for a field its `song.ini` does not
+ * set, and a chart with no artist and no charter is ordinary and still favouritable. What is not
+ * optional is a name, and `isFavouritable` is where that is refused, after normalisation, because
+ * a name of nothing but markup strips to '' and is the same case.
+ */
+const FavouriteWriteSchema = z.object({
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  favourite: z.boolean()
+})
+export type FavouriteWriteRequest = z.infer<typeof FavouriteWriteSchema>
+/**
+ * A setlist, as the renderer is allowed to name it.
+ *
+ * `name` is capped at twice `SETLIST_NAME_MAX` rather than at it. The cap here is the boundary
+ * refusing text no interface could have produced; the length the user is actually held to is
+ * `isValidSetlistName`, applied in main/index.ts AFTER `setlistName` has collapsed the whitespace,
+ * because a name pasted with trailing spaces is a name the user meant and not an attack. An id is
+ * a string main generated, and nothing here reads it as anything else, so it is capped and left
+ * alone rather than parsed as a UUID: a stricter shape would only mean a future id format could
+ * not be stored.
+ */
+const SETLIST_ID = z.string().min(1).max(64)
+const SETLIST_TEXT = z.string().max(SETLIST_NAME_MAX * 2)
+const SetlistNameSchema = z.object({ name: SETLIST_TEXT })
+export type SetlistNameRequest = z.infer<typeof SetlistNameSchema>
+const SetlistIdSchema = z.object({ id: SETLIST_ID })
+export type SetlistIdRequest = z.infer<typeof SetlistIdSchema>
+const SetlistRenameSchema = z.object({ id: SETLIST_ID, name: SETLIST_TEXT })
+export type SetlistRenameRequest = z.infer<typeof SetlistRenameSchema>
+/**
+ * A chart going into a setlist or coming out of one.
+ *
+ * The three fields and their 400-character cap are `FavouriteWriteSchema`'s, for the same reason:
+ * this is a channel that writes text of the renderer's choosing into the catalog, and a chart's
+ * three names are nowhere near that long. `member` is the direction, and is required for the same
+ * reason `favourite` is: a write that does not say which way is a bug on the calling side, and
+ * guessing it would be the boundary inventing an intention.
+ */
+const SetlistEntryWriteSchema = z.object({
+  id: SETLIST_ID,
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  member: z.boolean()
+})
+export type SetlistEntryWriteRequest = z.infer<typeof SetlistEntryWriteSchema>
+/** A move of one place. The literal union is the whole validation: there is no move by three. */
+const SetlistMoveSchema = z.object({
+  id: SETLIST_ID,
+  name: z.string().max(400).nullish(),
+  artist: z.string().max(400).nullish(),
+  charter: z.string().max(400).nullish(),
+  delta: z.union([z.literal(-1), z.literal(1)])
+})
+export type SetlistMoveRequest = z.infer<typeof SetlistMoveSchema>
 const ChartTypeSchema = z.enum(['folder', 'sng'])
 const ChartReadFilesSchema = z.object({
   path: z.string(),
   chartType: ChartTypeSchema
+})
+/**
+ * A metadata save, as the renderer is allowed to name it.
+ *
+ * `fields` is a closed record: a key outside `EDITABLE_INI_KEYS` does not reach main at all, so
+ * the seven keys `getChartHash` mixes in cannot be smuggled through this channel even before
+ * `assertKeyIsNotHashed` refuses them at the writer. A partial object is the point rather than a
+ * convenience: the form sends only what the user changed, and a key that is absent here is a
+ * line the ini editor never looks at.
+ *
+ * The 400-character cap is well past anything real (the longest `name` in the reference library
+ * is 96 characters) and is here so one channel cannot be used to grow a chart's ini without
+ * bound. `min(1)` on the path catches a caller naming no chart at all.
+ */
+const ChartMetadataWriteSchema = z.object({
+  path: z.string().min(1),
+  chartType: ChartTypeSchema,
+  fields: z.partialRecord(z.enum(EDITABLE_INI_KEYS), z.string().max(400))
 })
 // Both sidecars accept all three operations. install/update used to be narrowed to 'ytdlp'
 // because ffmpeg ships as an archive and nothing could extract it; unzip.ts closed that hole.
@@ -346,6 +521,17 @@ const IssueRowSchema: z.ZodType<ChartIssueRow> = z.object({
 // defaultName must not contain path separators or ".." to prevent path-traversal
 // confusion (the user's chosen path is always used, so this is belt-and-suspenders).
 // content is capped at 10 MB (generous for any CSV we'd ever produce).
+/**
+ * The path Settings asks about before storing it.
+ *
+ * Capped at a length no filesystem accepts anyway (Linux caps a path at 4096 bytes, Windows at
+ * 32,767 with the extended prefix), so a hostile caller cannot turn one `stat` into a megabyte of
+ * string. Empty is allowed and means "the stored one", the same shape `ScoreFolderRequestSchema`
+ * uses. There is no containment check and there cannot be one: the whole point of the setting is
+ * that Clone Hero lives outside every folder Encore knows about. Nothing is opened, nothing is
+ * written, and the answer is metadata about a path the user picked themselves.
+ */
+const GameExecutableSchema = z.object({ path: z.string().max(32_767) })
 const SaveTextFileSchema = z.object({
   defaultName: z
     .string()
@@ -375,6 +561,23 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     deps.chartsExistByMeta(ExistsByMetaSchema.parse(raw))
   )
   ipcMain.handle(IPC.catalogFacets, () => deps.chartFacets())
+  // No payload: the list describes the whole table, and a renderer holding it as a set has
+  // nothing to narrow it by.
+  ipcMain.handle(IPC.favouritesList, () => deps.listFavourites())
+  ipcMain.handle(IPC.favouritesSet, (_e, raw) => deps.setFavourite(FavouriteWriteSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsList, () => deps.listSetlists())
+  ipcMain.handle(IPC.setlistsCreate, (_e, raw) => deps.createSetlist(SetlistNameSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsRename, (_e, raw) =>
+    deps.renameSetlist(SetlistRenameSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsDelete, (_e, raw) => deps.deleteSetlist(SetlistIdSchema.parse(raw)))
+  ipcMain.handle(IPC.setlistsSetEntry, (_e, raw) =>
+    deps.setSetlistEntry(SetlistEntryWriteSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsMoveEntry, (_e, raw) =>
+    deps.moveSetlistEntry(SetlistMoveSchema.parse(raw))
+  )
+  ipcMain.handle(IPC.setlistsCharts, (_e, raw) => deps.setlistCharts(SetlistIdSchema.parse(raw)))
   // No payload: the report describes the whole catalog. There is nothing here for the renderer
   // to name and so nothing to validate.
   ipcMain.handle(IPC.catalogDuplicates, () => deps.duplicateCharts())
@@ -395,6 +598,18 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     deps.windowControl(WindowActionSchema.parse(raw), e.sender)
   )
   ipcMain.handle(IPC.dialogPickFolder, (e) => deps.pickFolder(e.sender))
+  // No payload, exactly as the folder picker has none: which filters a file dialog offers is
+  // decided in main from the platform, so there is nothing here for the renderer to name.
+  ipcMain.handle(IPC.dialogPickExecutable, (e) => deps.pickExecutable(e.sender))
+  // An absent payload is the ordinary "tell me about the stored one" call, so undefined is parsed
+  // as an empty path rather than rejected. Same shape, and same reason, as play:score-folder.
+  ipcMain.handle(IPC.gameExecutable, (_e, raw) =>
+    deps.gameExecutableReport(GameExecutableSchema.parse(raw ?? { path: '' }))
+  )
+  // No payload: the path this runs is the stored setting, not the renderer's to supply. A channel
+  // that took one would be a channel for running an arbitrary program, which is the one thing
+  // this feature must not become.
+  ipcMain.handle(IPC.gameLaunch, () => deps.launchGame())
   ipcMain.handle(IPC.chartReadFiles, (_e, raw) => {
     const { path, chartType } = ChartReadFilesSchema.parse(raw)
     return deps.readChartFiles(path, chartType)
@@ -404,6 +619,19 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     const { path, chartType } = ChartReadFilesSchema.parse(raw)
     return deps.readLyricLines(path, chartType)
   })
+  // And again for the metadata read, which names a chart with the same two values. Reading is
+  // safe on any path the user can open, so the containment check lives on the write below, where
+  // it protects something.
+  ipcMain.handle(IPC.chartReadMetadata, (_e, raw) => {
+    const { path, chartType } = ChartReadFilesSchema.parse(raw)
+    return deps.readChartMetadata(path, chartType)
+  })
+  // The field names are narrowed to `EDITABLE_INI_KEYS` here, so a renderer cannot name one of
+  // the seven keys Clone Hero matches charts by even before the writer refuses it. Containment
+  // is `assertUnderLibrary` at the write site, which both chart shapes go through.
+  ipcMain.handle(IPC.chartWriteMetadata, (_e, raw) =>
+    deps.writeChartMetadata(ChartMetadataWriteSchema.parse(raw))
+  )
   ipcMain.handle(IPC.sidecarStatus, (_e, raw) => deps.sidecarStatus(SidecarNameSchema.parse(raw)))
   ipcMain.handle(IPC.sidecarInstall, (_e, raw) => deps.sidecarInstall(SidecarNameSchema.parse(raw)))
   ipcMain.handle(IPC.sidecarUpdate, (_e, raw) => deps.sidecarUpdate(SidecarNameSchema.parse(raw)))

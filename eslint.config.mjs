@@ -4,10 +4,26 @@ import eslintConfigPrettier from '@electron-toolkit/eslint-config-prettier'
 import eslintPluginSvelte from 'eslint-plugin-svelte'
 
 export default defineConfig(
-  // `.worktrees` is where a nested checkout goes when one is used. Without ignoring it, a
-  // half-written file in a sibling working copy turns the main tree's lint red while the main
-  // tree is clean, which is a confusing way to lose an afternoon.
-  { ignores: ['**/node_modules', '**/dist', '**/out', '.worktrees/**'] },
+  // These mirror .gitignore's directories, because flat config does not read .gitignore: a
+  // scratch or tool directory holding one .js file turns the lint gate red over a file nobody
+  // wrote. `.worktrees` is a nested checkout, so a half-written file in a sibling copy would
+  // fail the main tree while the main tree is clean. `.build-tmp` is the one that actually
+  // bites: CLAUDE.md points TMPDIR at it, and the measure scripts write a generated
+  // preload.cjs into the temp directory they make there.
+  {
+    ignores: [
+      '**/node_modules',
+      '**/dist',
+      '**/out',
+      '.worktrees/**',
+      '.build-tmp/**',
+      '.dev-userdata/**',
+      '.serena/**',
+      '.agents/**',
+      '.claude/skills/**',
+      'notes/**'
+    ]
+  },
   tseslint.configs.recommended,
   eslintPluginSvelte.configs['flat/recommended'],
   {

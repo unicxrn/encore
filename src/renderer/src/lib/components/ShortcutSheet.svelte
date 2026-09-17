@@ -145,7 +145,8 @@
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
     padding: 16px 18px 14px;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    /* A dialog, on the elevation scale's top step with the app's four other dialogs. */
+    box-shadow: var(--elev-4);
   }
   /* The card is focused on open (see the effect above); it is a container, not a
      control, so it gets no ring of its own. */

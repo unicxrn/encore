@@ -13,6 +13,7 @@
   } from '../../../../shared/play'
   import { playedOn, stripRichText } from '../../../../shared/format'
   import { activity, localDay } from '../play-activity'
+  import { instrumentColorVar } from '../matrix'
   import { encore } from '../stores/bridge'
 
   /**
@@ -42,6 +43,20 @@
    * Every name drawn here goes through `stripRichText`. Charters style their own names in the
    * game and song.ini carries the markup verbatim; one charter in a real history is eight colour
    * tags, one per letter.
+   *
+   * ## What is read first, and why the rest is flat
+   *
+   * The page was seven bordered cards of equal weight down one column, which is a dump: nothing
+   * on it was more important than anything else, so a reader had to read all of it to learn
+   * anything. It now opens with one raised block carrying the three figures someone actually
+   * comes here for, and everything under it is a flat band rather than a card.
+   *
+   * Those three are: how much you have played, how well, and how much of the library you have
+   * touched at all. The third is the one a 4,000 chart library makes worth asking and the one
+   * that was buried at the very bottom in a paragraph. The first two are PROMOTED out of the
+   * blocks below rather than copied into the lead: `promoted` below removes them from their own
+   * block, so every figure on this page appears exactly once, under one heading, with one
+   * source tag.
    */
 
   let status = $state<PlayDataStatus | null>(null)
@@ -156,15 +171,23 @@
     note: string
     /** Hover text for a figure whose label cannot carry its whole definition. */
     title?: string
+    /**
+     * Which record the figure came from.
+     *
+     * Read only by the lead block, where figures from both records sit side by side and the
+     * heading above them cannot say which is which. In the blocks below, the heading does.
+     */
+    kind: 'lifetime' | 'observed'
   }
 
-  const tiles = $derived.by((): Tile[] => {
+  const observedTiles = $derived.by((): Tile[] => {
     if (!stats) return []
     return [
       {
         label: 'PLAYS RECORDED',
         value: stats.totalPlays.toLocaleString(),
         note: `across ${stats.chartsPlayed.toLocaleString()} ${stats.chartsPlayed === 1 ? 'chart' : 'charts'}`,
+        kind: 'observed',
         // The one figure on the page a reader is most likely to try to add to another, so the
         // hover says what the block below the tiles says: it is a part of the lifetime count,
         // not a second count beside it.
@@ -179,6 +202,7 @@
           accuracy === null
             ? 'no notes recorded'
             : `${stats.notesHit.toLocaleString()} of ${stats.totalNotes.toLocaleString()} notes`,
+        kind: 'observed',
         title:
           'Every note hit divided by every note played, added up over all recorded plays. This is one ratio of two totals, not the average of what each play scored.'
       },
@@ -186,6 +210,7 @@
         label: 'FULL COMBOS',
         value: stats.fcCount.toLocaleString(),
         note: `${stats.pfcCount.toLocaleString()} of them perfect`,
+        kind: 'observed',
         title:
           'Plays that dropped no note. A perfect full combo hit every note on the front of its window, which Clone Hero records separately.'
       },
@@ -195,12 +220,14 @@
         // there to prevent. The label carries the distinction even when the tile is read alone.
         label: 'BEST SCORE SEEN',
         value: count(stats.bestScore),
-        note: 'highest single play Encore watched'
+        note: 'highest single play Encore watched',
+        kind: 'observed'
       },
       {
         label: 'LONGEST STREAK',
         value: count(stats.longestStreak),
-        note: 'notes without a miss'
+        note: 'notes without a miss',
+        kind: 'observed'
       }
     ]
   })
@@ -212,7 +239,7 @@
    * no accuracy, no streak and no combo count in it to draw. A tile per missing thing showing a
    * dash would imply Clone Hero half-recorded them.
    */
-  const lifetimeTiles = $derived.by((): Tile[] => {
+  const allLifetimeTiles = $derived.by((): Tile[] => {
     const totals = lifetimeTotals
     if (!totals) return []
     return [
@@ -220,6 +247,7 @@
         label: 'LIFETIME PLAYS',
         value: totals.lifetimePlays.toLocaleString(),
         note: `across ${totals.charts.toLocaleString()} ${totals.charts === 1 ? 'chart' : 'charts'}`,
+        kind: 'lifetime',
         title:
           "Clone Hero's own running count for every chart it has a record of, added up. It already includes every play Encore watched, so the two counts on this page are never added together."
       },
@@ -230,6 +258,7 @@
           totals.chartsNotInLibrary === 0
             ? 'all of them still in your library'
             : `${totals.chartsInLibrary.toLocaleString()} still in your library`,
+        kind: 'lifetime',
         title:
           'Charts Clone Hero has ever recorded a play for. A chart you have since deleted, moved or never scanned still has its record here.'
       },
@@ -242,11 +271,52 @@
           totals.chartsWithUnconfirmedRows > 0
             ? 'of the scores Encore can read'
             : 'highest in the table',
+        kind: 'lifetime',
         title:
           'The highest score Clone Hero kept, out of the rows whose scoring Encore has checked against a real play.'
       }
     ]
   })
+
+  /**
+   * The two figures the page opens with, taken from whichever record can answer for them.
+   *
+   * How much you have played comes from Clone Hero's table when there is one, because that is
+   * the older and larger record and the one a reader means by the question. How well you play
+   * can only come from Encore's log: the score files carry no note counts, so with no log the
+   * slot falls back to a best score, which is the only quality figure the other record holds.
+   *
+   * A dash is never promoted. An accuracy with no notes behind it is a real state of this page
+   * (see `accuracy`), and opening on an empty cell would say nothing in the place the page has
+   * decided says the most.
+   */
+  const leadTiles = $derived.by((): Tile[] => {
+    const byLabel = (list: Tile[], label: string): Tile | undefined =>
+      list.find((tile) => tile.label === label)
+    const out: Tile[] = []
+    const plays =
+      byLabel(allLifetimeTiles, 'LIFETIME PLAYS') ?? byLabel(observedTiles, 'PLAYS RECORDED')
+    if (plays) out.push(plays)
+    const quality =
+      (accuracy === null ? undefined : byLabel(observedTiles, 'ACCURACY')) ??
+      byLabel(allLifetimeTiles, 'BEST SCORE') ??
+      byLabel(observedTiles, 'BEST SCORE SEEN')
+    if (quality) out.push(quality)
+    return out
+  })
+
+  /**
+   * Labels the lead has taken, which the blocks below then do not draw.
+   *
+   * By label rather than by identity so the rule is readable at both ends: a figure is on this
+   * page once. The alternative, a lead that copies its figures, puts the same number under two
+   * headings with two source tags, which is exactly the confusion the tags exist to prevent.
+   */
+  const promoted = $derived(new Set(leadTiles.map((tile) => tile.label)))
+
+  const tiles = $derived(observedTiles.filter((tile) => !promoted.has(tile.label)))
+
+  const lifetimeTiles = $derived(allLifetimeTiles.filter((tile) => !promoted.has(tile.label)))
 
   /** Artist and charter under a chart's name, whichever of them was recorded. */
   function chartMeta(chart: TopChart | RecentPlay): string {
@@ -301,6 +371,22 @@
 
   const barWidth = (plays: number, max: number): string =>
     max > 0 ? `${Math.max((plays / max) * 100, 2)}%` : '0%'
+
+  /**
+   * An instrument's colour, for the one breakdown where colour names something.
+   *
+   * Clone Hero writes its own display name beside a play ("Guitar", "Drums"), which is not the
+   * key the catalog and `instrumentColorVar` use, so the name is folded to bare letters first.
+   * A name that does not fold to a key that function knows returns null and the row draws in the
+   * accent, which is that function's own rule: an instrument this app has never heard of is
+   * drawn uncoloured rather than drawn as some other instrument.
+   *
+   * Only the instrument list gets this. A hue names the part and nothing else (see the
+   * instruments block in tokens.css), so the difficulty list beside it stays one colour: Expert
+   * is not a part, and colouring it would say that it was.
+   */
+  const instrumentColor = (key: string): string | null =>
+    instrumentColorVar(key.toLowerCase().replace(/[^a-z]/g, ''))
 
   function charterName(row: CharterPlays): string {
     return named(row.charter, 'Unnamed charter')
@@ -371,6 +457,57 @@
       ? Math.max(insights.coverage.identified - lifetimeTotals.chartsInLibrary, 0)
       : 0
   )
+
+  interface ReachRow {
+    /** Which record the bar is drawn from, or null when only one record is on the page. */
+    label: string | null
+    count: number
+  }
+
+  /**
+   * How much of the library has been played at all, as the third figure the page opens with.
+   *
+   * The numbers were already here, at the very bottom, inside the paragraph that states them
+   * carefully. That paragraph stays: it is the honest sentence and a bar cannot carry it. What
+   * the bar adds is that a reader learns in one glance what the paragraph takes six lines to
+   * say, which for a library of four thousand charts is usually "almost none of it".
+   *
+   * Two bars rather than one inside the other. The counts come from tables nothing joins, and
+   * the paragraph below refuses to state either as a share of the other for that reason; a bar
+   * nested inside another bar would assert exactly the subset claim that sentence declines to
+   * make. They share a denominator and sit one above the other, which claims only what is true.
+   *
+   * Null when nothing in the library can be matched to a play. There is no ratio to draw against
+   * a zero, and a full-width empty track would read as "you have played none of your library",
+   * which is a claim about the user rather than about the scan.
+   */
+  const reach = $derived.by(() => {
+    if (!insights || insights.coverage.identified === 0) return null
+    const rows: ReachRow[] = []
+    if (lifetimeTotals) {
+      rows.push({ label: tagged ? 'Clone Hero' : null, count: lifetimeTotals.chartsInLibrary })
+    }
+    if (observed) rows.push({ label: tagged ? 'Encore' : null, count: insights.coverage.withPlay })
+    if (rows.length === 0) return null
+    return { of: insights.coverage.identified, rows }
+  })
+
+  /** Which record the reach block is drawn from, for the tag above it. */
+  const reachKind = $derived<'lifetime' | 'observed' | 'both'>(
+    tagged ? 'both' : lifetimeTotals ? 'lifetime' : 'observed'
+  )
+
+  /**
+   * A reach bar's width, with no minimum and no clamp.
+   *
+   * `barWidth` above floors a bar at 2%, which is harmless where the denominator is the longest
+   * row of a list of ten. Here the denominator is the whole library: 84 charts of 4,000 is 2.1%,
+   * so the floor would be most of the bar, and one chart of 4,000 would be drawn thirty times
+   * the length it has earned. The count sits beside every bar in text, so a bar too short to see
+   * costs nothing and a bar padded up to be seen would be the page's only dishonest figure.
+   */
+  const reachWidth = (played: number, of: number): string =>
+    of > 0 ? `${(played / of) * 100}%` : '0%'
 </script>
 
 <!--
@@ -379,6 +516,10 @@
   Rendered as a snippet rather than copied into seven headings so the wording cannot drift apart
   between them, which is the failure mode a labelling scheme has: six sections saying the same
   thing six slightly different ways stops being a scheme and goes back to being prose.
+
+  The lead block renders the same tag beside each of its figures rather than on its own heading,
+  because that is the one block on the page whose figures come from different records. Same
+  element and same snippet, so the two places cannot say it differently.
 -->
 {#snippet source(kind: 'lifetime' | 'observed' | 'both')}
   {#if tagged}
@@ -453,20 +594,63 @@
       {/if}
     </p>
 
-    {#if lifetimeTotals}
-      <!-- First on the page, because it is the bigger and the older of the two records and the
-           one a reader means by "how much have I played this". -->
-      <section aria-labelledby="stats-lifetime">
-        <h2 id="stats-lifetime">WHAT CLONE HERO KEPT {@render source('lifetime')}</h2>
-        <div class="tiles">
-          {#each lifetimeTiles as tile (tile.label)}
-            <div class="tile lifetime" title={tile.title}>
-              <span class="t-label">{tile.label}</span>
+    {#if leadTiles.length > 0 || reach}
+      <!-- The one raised surface on the page, so that what is read first is also the only thing
+           lifted off the window. Everything under it is a flat band: eight cards of equal weight
+           is a list of cards, not a hierarchy. -->
+      <section class="standing" aria-labelledby="stats-standing">
+        <h2 id="stats-standing">WHERE YOU STAND {@render source(reachKind)}</h2>
+        <div class="tiles lead">
+          {#each leadTiles as tile (tile.label)}
+            <div class="tile big" class:lifetime={tile.kind === 'lifetime'} title={tile.title}>
+              <span class="t-label">{tile.label} {@render source(tile.kind)}</span>
               <span class="t-value mono">{tile.value}</span>
               <span class="t-note">{tile.note}</span>
             </div>
           {/each}
+          {#if reach}
+            <div class="tile big reach">
+              <span class="t-label">LIBRARY PLAYED {@render source(reachKind)}</span>
+              <div class="bars">
+                {#each reach.rows as row (row.label ?? 'only')}
+                  <div class="r-row">
+                    {#if row.label}<span class="r-key">{row.label}</span>{/if}
+                    <span class="r-track">
+                      <span
+                        class="r-fill"
+                        class:life={row.label === 'Clone Hero'}
+                        style={`width: ${reachWidth(row.count, reach.of)}`}
+                      ></span>
+                    </span>
+                    <span class="r-count mono">{row.count.toLocaleString()}</span>
+                  </div>
+                {/each}
+              </div>
+              <span class="t-note">
+                of {reach.of.toLocaleString()} charts Encore can match a play to
+              </span>
+            </div>
+          {/if}
         </div>
+      </section>
+    {/if}
+
+    {#if lifetimeTotals}
+      <!-- First of the two records, because it is the bigger and the older and the one a reader
+           means by "how much have I played this". -->
+      <section aria-labelledby="stats-lifetime">
+        <h2 id="stats-lifetime">WHAT CLONE HERO KEPT {@render source('lifetime')}</h2>
+        {#if lifetimeTiles.length > 0}
+          <div class="tiles">
+            {#each lifetimeTiles as tile (tile.label)}
+              <div class="tile lifetime" title={tile.title}>
+                <span class="t-label">{tile.label}</span>
+                <span class="t-value mono">{tile.value}</span>
+                <span class="t-note">{tile.note}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
         <p class="sub-note">
           Clone Hero keeps one record per chart: how many times you played it and what you scored.
           It keeps no dates at all, so none of this can appear in the history below.
@@ -490,15 +674,17 @@
     {#if stats && observed}
       <section aria-labelledby="stats-totals">
         <h2 id="stats-totals">WHAT ENCORE HAS WATCHED {@render source('observed')}</h2>
-        <div class="tiles">
-          {#each tiles as tile (tile.label)}
-            <div class="tile" title={tile.title}>
-              <span class="t-label">{tile.label}</span>
-              <span class="t-value mono">{tile.value}</span>
-              <span class="t-note">{tile.note}</span>
-            </div>
-          {/each}
-        </div>
+        {#if tiles.length > 0}
+          <div class="tiles">
+            {#each tiles as tile (tile.label)}
+              <div class="tile" title={tile.title}>
+                <span class="t-label">{tile.label}</span>
+                <span class="t-value mono">{tile.value}</span>
+                <span class="t-note">{tile.note}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if lifetimeTotals}
           <!-- The sentence that stops the two blocks being added. It sits here, between them,
                rather than in the caveat at the top, because the addition is a thing a reader
@@ -519,8 +705,11 @@
     {/if}
 
     {#if stats && chart}
-      <section aria-labelledby="stats-when">
-        <h2 id="stats-when">WHEN YOU PLAY {@render source('observed')}</h2>
+      <!-- When and what, in one band. They were two cards asking one question between them, and
+           the answer to "how do I play" is the shape over time next to the parts and the
+           difficulties it is made of. -->
+      <section class="two-up" aria-labelledby="stats-when">
+        <h2 id="stats-when">HOW YOU PLAY {@render source('observed')}</h2>
         <!-- The axis starts at the first recorded play and not a day earlier: an empty week
              before it would be drawing a silence that is Encore's, not the user's. -->
         <p class="sub-note">
@@ -555,43 +744,45 @@
           You played on {chart.activeDays.toLocaleString()} of the
           {chart.windowDays.toLocaleString()} days since the record started.
         </p>
+
+        {#if stats.byInstrument.length > 0 || stats.byDifficulty.length > 0}
+          <div class="columns">
+            {#each [{ title: 'Instrument', rows: stats.byInstrument, colored: true }, { title: 'Difficulty', rows: stats.byDifficulty, colored: false }] as group (group.title)}
+              {#if group.rows.length > 0}
+                <div class="breakdown">
+                  <h3>{group.title}</h3>
+                  {#each group.rows as row (row.key)}
+                    {@const hue = group.colored ? instrumentColor(row.key) : null}
+                    <div class="bd-row" style={hue ? `--pip: var(${hue})` : undefined}>
+                      <!-- The hover because the track is 90px and these are the game's own
+                           names, not a list this app controls: "Pro Drums (Real)" measured
+                           ellipsised there, and an ellipsised instrument is a bar nobody can
+                           name. -->
+                      <span class="bd-key" title={row.key}>{row.key}</span>
+                      <span class="bd-track">
+                        <span
+                          class="bd-fill"
+                          style={`width: ${barWidth(row.plays, widest(group.rows))}`}
+                        ></span>
+                      </span>
+                      <span class="bd-count mono">{row.plays.toLocaleString()}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {/each}
+          </div>
+          <!-- Clone Hero writes these per play, and a play it wrote neither for is in the totals
+               above but in neither list here. Saying so beats two lists that quietly disagree
+               with the count at the top of the page. -->
+          <p class="sub-note">
+            Counted from the plays where Clone Hero recorded an instrument and a difficulty.
+          </p>
+        {/if}
       </section>
     {/if}
 
-    {#if stats && (stats.byInstrument.length > 0 || stats.byDifficulty.length > 0)}
-      <section class="two-up" aria-labelledby="stats-what">
-        <h2 id="stats-what">WHAT YOU PLAY {@render source('observed')}</h2>
-        <div class="columns">
-          {#each [{ title: 'Instrument', rows: stats.byInstrument }, { title: 'Difficulty', rows: stats.byDifficulty }] as group (group.title)}
-            {#if group.rows.length > 0}
-              <div class="breakdown">
-                <h3>{group.title}</h3>
-                {#each group.rows as row (row.key)}
-                  <div class="bd-row">
-                    <span class="bd-key">{row.key}</span>
-                    <span class="bd-track">
-                      <span
-                        class="bd-fill"
-                        style={`width: ${barWidth(row.plays, widest(group.rows))}`}
-                      ></span>
-                    </span>
-                    <span class="bd-count mono">{row.plays.toLocaleString()}</span>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {/each}
-        </div>
-        <!-- Clone Hero writes these per play, and a play it wrote neither for is in the totals
-             above but in neither list here. Saying so beats two lists that quietly disagree
-             with the count at the top of the page. -->
-        <p class="sub-note">
-          Counted from the plays where Clone Hero recorded an instrument and a difficulty.
-        </p>
-      </section>
-    {/if}
-
-    <div class="columns">
+    <div class="columns lists">
       {#if stats && stats.topCharts.length > 0}
         <section aria-labelledby="stats-most">
           <!-- The heading a reader is most likely to take for a lifetime list, and the one the
@@ -786,23 +977,25 @@
 </div>
 
 <style>
-  /* The page follows Settings' shape rather than Home's: a title, then labelled cards down one
-     column. Unlike Settings it is not capped at 660px, because the chart and the two lists are
-     wide things and a narrow column would make the bars a stripe. */
+  /* One raised block and then flat bands, rather than the run of eight equal cards this page
+     was. The cards gave every block the same weight, which on a page with seven of them is the
+     same as giving none of them any: a reader had to read the whole column to find out what was
+     on it. The lead block is the only surface lifted off the window, so what is worth reading
+     first is also the only thing that looks it. */
   .stats {
-    padding: 22px 24px 30px;
+    padding: 22px 24px 34px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    /* What the two-column rule below asks about. Queried on the page rather than on `.columns`,
-       which is the element that rule sizes: an element cannot be sized by a query it feeds. */
+    gap: 0;
+    /* What the two-column rules below ask about. Queried on the page rather than on `.columns`,
+       which is the element those rules size: an element cannot be sized by a query it feeds. */
     container-type: inline-size;
   }
   h1 {
     font-size: var(--fs-heading);
     font-weight: 700;
     letter-spacing: var(--ls-tight);
-    margin-bottom: 2px;
+    margin-bottom: 4px;
   }
   /* Card head: mono uppercase micro-caps, the register Settings, Home's rows and Detail's cards
      all use for the same job. */
@@ -823,10 +1016,12 @@
   .src {
     display: inline-block;
     white-space: nowrap;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-1);
     border-radius: 4px;
     padding: 2px 5px;
     margin-left: 8px;
+    font-size: var(--fs-caption);
+    letter-spacing: var(--ls-caps);
     line-height: var(--lh-flat);
     color: var(--text-3);
   }
@@ -849,14 +1044,30 @@
     font-size: var(--fs-secondary);
     font-weight: 600;
     color: var(--text-2);
-    margin: 14px 0 8px;
+    margin: 16px 0 8px;
   }
+  /* A band, not a card. The rule above it is the only chrome a section gets, and the first one
+     after the lead block carries none: a rule directly under a raised card reads as part of the
+     card's own shadow. */
   section {
-    background: var(--surface-1);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    padding: 14px 16px 16px;
+    padding: 20px 0 6px;
+    border-top: 1px solid var(--border-1);
     min-width: 0;
+  }
+  .standing + section,
+  .standing {
+    border-top: 0;
+  }
+  /* The lead. One step up the ground scale and one step of elevation, which is what the rest of
+     the redesign spends on a card, so this reads as the same kind of object the rail's card is
+     rather than as a Stats invention. */
+  .standing {
+    background: var(--ground-3);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-2);
+    padding: 16px 18px 18px;
+    margin-bottom: 4px;
   }
   .mono {
     font-family: var(--font-mono);
@@ -885,7 +1096,7 @@
   /* The caveat is prose, not a chip, and it is not dimmed into decoration either: --text-2 is
      the same weight the app gives a row's artist line, which is text people read. */
   .caveat {
-    margin: 0 0 4px;
+    margin: 0 0 12px;
     max-width: 72ch;
     font-size: var(--fs-secondary);
     line-height: var(--lh-prose);
@@ -906,8 +1117,8 @@
     color: var(--text-2);
   }
 
-  /* auto-fit rather than a fixed count: the pane follows the window, and five tiles wrapping to
-     two rows beats five tiles squeezed under a narrow one. */
+  /* auto-fit rather than a fixed count: the pane follows the window, and four tiles wrapping to
+     two rows beats four tiles squeezed under a narrow one. */
   .tiles {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -917,13 +1128,17 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline);
+    background: var(--ground-2);
+    border: 1px solid var(--border-1);
     border-radius: var(--radius);
     padding: 12px 14px;
     min-width: 0;
   }
   .t-label {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px 0;
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
     letter-spacing: var(--ls-caps);
@@ -941,6 +1156,94 @@
     color: var(--text-3);
   }
 
+  /* The lead figures, in a counted grid rather than an auto-fit one. auto-fit answers "how many
+     190px tracks fit", which at a 1920 window is six, and six tracks made the two headline
+     figures 193px wide there against 279px at 1280: the page's largest numbers got smaller as
+     the window got bigger. Two across everywhere the shell goes (the narrowest content column
+     is 509px, at the 1121px window where the rail appears), three once there is room for the
+     reach block to sit beside them instead of under them. */
+  .tiles.lead {
+    grid-template-columns: 1fr;
+  }
+  @container (min-width: 400px) {
+    .tiles.lead {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  @container (min-width: 900px) {
+    .tiles.lead {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+  }
+  .tile.big {
+    background: var(--ground-4);
+    border-color: var(--border-2);
+    gap: 5px;
+    padding: 13px 15px 14px;
+  }
+  .tile.big .t-value {
+    font-size: var(--fs-display);
+    font-weight: 600;
+  }
+  /* The reach block is the only figure in the lead that is not a single number, and the widest,
+     so under two columns it takes the whole row rather than half of one. Once there are three
+     it sits in the third, beside the other two rather than under them. */
+  .tile.big.reach {
+    grid-column: 1 / -1;
+  }
+  @container (min-width: 900px) {
+    .tile.big.reach {
+      grid-column: auto;
+    }
+  }
+  .bars {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 2px;
+  }
+  .r-row {
+    display: grid;
+    grid-template-columns: minmax(0, 74px) minmax(0, 1fr) minmax(0, 56px);
+    gap: 8px;
+    align-items: center;
+  }
+  /* One record on the page means no row label, and the track takes the space back rather than
+     leaving a 74px hole where a name is not. */
+  .r-row:not(:has(.r-key)) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 56px);
+  }
+  .r-key {
+    font-size: var(--fs-caption);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .r-track {
+    display: block;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--ground-0);
+    border: 1px solid var(--border-1);
+    overflow: hidden;
+  }
+  .r-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent-hi);
+  }
+  /* The lifetime bar takes the accent the ALL TIME tag takes, so the two rows are told apart by
+     the same colour that tells the two records apart everywhere else on the page. */
+  .r-fill.life {
+    background: var(--accent);
+  }
+  .r-count {
+    font-size: var(--fs-caption);
+    color: var(--text-2);
+    text-align: right;
+  }
+
   /* The activity chart. Plain boxes rather than an SVG: the bars have to follow the pane's
      width, which flex does for free and a viewBox does by stretching the bars' own geometry. */
   .chart {
@@ -949,7 +1252,7 @@
     gap: 2px;
     height: 110px;
     padding-bottom: 1px;
-    border-bottom: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--border-1);
   }
   .col {
     flex: 1 1 0;
@@ -977,8 +1280,8 @@
   }
 
   /* Two panes side by side while there is room for both, one column under that. The breakpoint
-     is a container query because the pane's width is the window minus a 240px sidebar, and a
-     media query would be answering about the wrong box. */
+     is a container query because the pane's width is the window minus a 238px sidebar and, above
+     1120px, a 374px rail, and a media query would be answering about the wrong box. */
   .columns {
     display: grid;
     grid-template-columns: 1fr;
@@ -991,7 +1294,20 @@
     }
   }
   .two-up .columns {
-    gap: 10px 26px;
+    gap: 4px 26px;
+  }
+  /* The two play lists need far more room than the two breakdowns do, so they get their own
+     threshold rather than sharing 760px. A `.top-row` spends 254px on its rank, its count and
+     its score before the title has anything, and at 760 the pane is 410: the title measured
+     141px there, and 114px at a 1440 window. Side by side is the wrong answer until a pane can
+     hold a song title, which is what this number is. */
+  .columns.lists {
+    grid-template-columns: 1fr;
+  }
+  @container (min-width: 1040px) {
+    .columns.lists {
+      grid-template-columns: 1fr 1fr;
+    }
   }
 
   .breakdown {
@@ -999,7 +1315,7 @@
   }
   .bd-row {
     display: grid;
-    grid-template-columns: 90px 1fr 56px;
+    grid-template-columns: minmax(0, 90px) minmax(0, 1fr) minmax(0, 56px);
     gap: 10px;
     align-items: center;
     padding: 4px 0;
@@ -1015,44 +1331,47 @@
     display: block;
     height: 8px;
     border-radius: 4px;
-    background: var(--surface-2);
+    background: var(--ground-0);
     overflow: hidden;
   }
+  /* --pip is the instrument's own colour, set inline by the row that has one. The same name
+     DiffPips sets, because it is the same thing: the one-element handle that points at whichever
+     instrument step `instrumentColorVar` named. One name for one idea, and the property is
+     already on tokens.test.ts's list of per-element handles for that reason.
+
+     The fallback is the accent, which is what every other bar on this page is and what a row
+     whose key names no instrument this app knows gets. */
   .bd-fill {
     display: block;
     height: 100%;
-    background: var(--accent);
+    background: var(--pip, var(--accent));
     border-radius: 4px;
-  }
-  .bd-count {
-    font-size: var(--fs-caption);
-    color: var(--text-3);
-    text-align: right;
   }
 
   .top {
     list-style: none;
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--hairline);
+    border-top: 1px solid var(--border-1);
   }
   /* The same column discipline the Installed list uses: rank, the song, its count and its best
-     score. */
+     score. Every fixed track is a minmax from zero, so a narrow pane takes width off all of
+     them instead of pushing the one flexible track under its own content. */
   .top-row {
     display: grid;
-    grid-template-columns: 24px 1fr 90px 110px;
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, 90px) minmax(0, 110px);
     gap: 10px;
     align-items: center;
     padding: 7px 4px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+    border-bottom: 1px solid var(--border-1);
   }
   .recent-row {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 10px;
     align-items: center;
     padding: 7px 4px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+    border-bottom: 1px solid var(--border-1);
   }
   .rank {
     font-size: var(--fs-caption);
@@ -1129,15 +1448,27 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--hairline);
+    border-top: 1px solid var(--border-1);
   }
   .ch-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 120px 90px 130px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 120px) minmax(0, 90px) minmax(0, 130px);
     gap: 10px;
     align-items: center;
     padding: 6px 4px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+    border-bottom: 1px solid var(--border-1);
+  }
+  /* Below this the four columns leave the name nothing. Measured at the 1121px window, where
+     the rail appears and the content column drops to 509px: the name box was 34px, which is a
+     row of ellipses where the charter's name should be. The meter is what goes, because it is
+     the only one of the four columns whose job the number beside it already does. */
+  @container (max-width: 640px) {
+    .ch-row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+    .ch-row .bd-track {
+      display: none;
+    }
   }
   .ch-row .name {
     font-weight: 500;

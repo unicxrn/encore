@@ -18,8 +18,8 @@ import { createHash } from 'node:crypto'
  *
  * - `chartHash` is scan-chart's `getChartHash`, which appends seven song.ini gameplay keys to the
  *   chart file's bytes and returns base64url BLAKE3. Different algorithm, different input,
- *   different encoding. It is the wider of the two — those keys are covered by it and not by
- *   this — and `issues/fix.ts` asserts both for that reason.
+ *   different encoding. It is the wider of the two (those keys are covered by it and not by
+ *   this), and `issues/fix.ts` asserts both for that reason.
  * - scan-chart's whole-folder `getChartMD5` hashes every file's NAME and DATA, so album art or
  *   audio moves it. That is the value `includeMd5: true` would produce, and it is not this.
  *
@@ -60,7 +60,7 @@ export interface ChartFileEntry {
  *
  * Entries whose `data` is empty are treated as absent. Both scan paths hand back every file
  * NAMED with bytes only for the ones scan-chart parses, and a zero-length read would otherwise
- * hash to d41d8cd9..., the MD5 of nothing, on every chart alike — a value that would collide
+ * hash to d41d8cd9..., the MD5 of nothing, on every chart alike, a value that would collide
  * every such chart onto one play.
  */
 export function cloneHeroChecksum(entries: readonly ChartFileEntry[]): string | null {

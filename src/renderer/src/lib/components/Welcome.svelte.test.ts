@@ -5,6 +5,7 @@ import { defaultSettings } from '../../../../shared/settings-defaults'
 import { settings, settingsLoaded } from '../stores/settings'
 import { scanProgress } from '../stores/scan'
 import Welcome from './Welcome.svelte'
+import welcomeSource from './Welcome.svelte?raw'
 
 const SONGS = '/home/u/.clonehero/Songs'
 const CANDIDATE = { path: SONGS, chartCount: 207, countCapped: false }
@@ -105,6 +106,24 @@ describe('Welcome', () => {
     // Nothing was configured on their behalf, and no folder picker stood in the way.
     expect(api.settingsSet).not.toHaveBeenCalled()
     expect(api.pickFolder).not.toHaveBeenCalled()
+  })
+
+  it('names the next step rather than the miss when nothing is detected', async () => {
+    stubEncore({ libraryDetect: vi.fn().mockResolvedValue([]) })
+    render(Welcome, { onNavigate: () => {} })
+
+    // This is the one screen a new user cannot avoid, and nothing has gone wrong on it: the
+    // folder is somewhere this machine does not keep it. The heading used to read NO CLONE HERO
+    // FOLDER FOUND, which opened the app on a failure.
+    expect(await screen.findByRole('heading', { name: /choose your songs folder/i })).toBeTruthy()
+    expect(screen.queryByText(/not found/i)).toBeNull()
+    // The explanation still says where it looked, so the answer is not a mystery either.
+    expect(screen.getByText(/looked where clone hero keeps its songs by default/i)).toBeTruthy()
+  })
+
+  it('contains no em or en dash, anywhere in the file', () => {
+    // The file carried one, in the sentence that tells a user with no detected folder what to do.
+    expect(welcomeSource).not.toMatch(/[–—]/)
   })
 
   it('falls back to a folder picker when nothing is detected', async () => {

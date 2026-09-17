@@ -6,7 +6,14 @@ import {
   type ChartRecord
 } from '../../shared/schemas'
 import { stripRichText } from '../../shared/format'
-import { readableColumn, STRIPPED_COLUMN, type CatalogDb, type StrippedSource } from './db'
+import { chartKey, namesAChart } from '../../shared/chart-key'
+import {
+  identityColumn,
+  readableColumn,
+  STRIPPED_COLUMN,
+  type CatalogDb,
+  type StrippedSource
+} from './db'
 
 /** The names of every boolean field on ChartRecord, so BOOL_COLUMNS cannot drift from the schema. */
 type BoolKeys = {
@@ -286,6 +293,35 @@ function neverPlayedClause(filter: CatalogFilter, prefix = ''): Clause {
 }
 
 /**
+ * `AND` this chart is one the user hearted (empty when the filter does not ask).
+ *
+ * The join is on `identityColumn`, the one expression this app compares a chart's three names
+ * through: see shared/favourites.ts for why a favourite is attached to the chart rather than to a
+ * path or to either chart hash, and shared/chart-key.ts for why the comparison is over the readable
+ * text. Its `COALESCE(..., '')` is the other half of the rule the writer applies, where a chart
+ * with no charter is favourited as a chart whose charter is ''.
+ *
+ * The comparison's case rule comes from the favourites columns, which are declared COLLATE NOCASE:
+ * in SQLite a binary comparison takes the collation of its left operand's column, so putting the
+ * favourite on the left is what makes this case-insensitive, and it is the same rule the PRIMARY
+ * KEY dedupes by. Written as EXISTS rather than a join so it composes onto both query shapes
+ * without touching either one's column list, exactly as `neverPlayedClause` does.
+ *
+ * One favourite can match several rows, and that is the definition working rather than a leak: two
+ * copies of one charter's chart of one song are one chart hearted twice over, which is what
+ * `catalog:duplicates` already calls an exact duplicate.
+ */
+function favouritesClause(filter: CatalogFilter, prefix = ''): Clause {
+  if (!filter.favouritesOnly) return NO_CLAUSE
+  const field = (column: StrippedSource): string => identityColumn(column, prefix)
+  return {
+    sql: ` AND EXISTS (SELECT 1 FROM favourites WHERE favourites.name = ${field('name')}
+		AND favourites.artist = ${field('artist')} AND favourites.charter = ${field('charter')})`,
+    params: []
+  }
+}
+
+/**
  * `AND LOWER(col) = LOWER(?)`, or nothing for an absent or blank value.
  *
  * Blank counts as absent so a picker reset to its "any" option (which posts an empty string)
@@ -354,6 +390,7 @@ function constraintClause(filter: CatalogFilter, prefix = ''): Clause {
   return joinClauses([
     missingClause(filter, prefix),
     neverPlayedClause(filter, prefix),
+    favouritesClause(filter, prefix),
     exactTextClause(readableColumn('artist', prefix), filter.artist),
     exactTextClause(`${prefix}genre`, filter.genre),
     exactTextClause(readableColumn('charter', prefix), filter.charter),
@@ -571,21 +608,86 @@ export function deleteChartByPath(db: CatalogDb, path: string): void {
   db.prepare(`DELETE FROM charts WHERE path = ?`).run(path)
 }
 
-// Hoisted like UPSERT_SQL: built once at module load. NULL catalog columns
-// never match: LOWER(NULL) IS NULL, and NULL = anything is not true in SQL.
-const EXISTS_BY_META_SQL = `SELECT 1 FROM charts
-	 WHERE LOWER(name) = LOWER(?) AND LOWER(artist) = LOWER(?) AND LOWER(charter) = LOWER(?)
-	 LIMIT 1`
+/**
+ * The one WHERE that answers "is this chart in my library", shared by the two queries that ask.
+ *
+ * Written once and interpolated twice, because these two used to be two spellings of the same
+ * question: this clause compared `LOWER(name)` against the RAW `song.ini` text while
+ * `CHART_BY_META_SQL` below and `favouritesClause` above compared the readable form, so a chart
+ * whose Chorus copy carries colour markup in its title and whose local copy has had it edited out
+ * was one chart to a heart and two to Hide owned. shared/chart-key.ts argues why the readable form
+ * is the right one of the two; `identityColumn` in db.ts is the expression, and `charts_meta` is
+ * the index built from that same expression so this is a lookup rather than a scan.
+ *
+ * A NULL column still never matches a key that names something: `identityColumn` reads it as '',
+ * and a key of '' is refused by `namesAChart` before it reaches here.
+ */
+const IDENTITY_WHERE = `${identityColumn('name')} = ? COLLATE NOCASE
+		 AND ${identityColumn('artist')} = ? COLLATE NOCASE
+		 AND ${identityColumn('charter')} = ? COLLATE NOCASE`
+
+// Hoisted like UPSERT_SQL: built once at module load.
+const EXISTS_BY_META_SQL = `SELECT 1 FROM charts WHERE ${IDENTITY_WHERE} LIMIT 1`
 
 /**
- * For each key (in input order), returns true if any catalog row matches
- * name + artist + charter case-insensitively. A metadata match means "this
- * song by this charter is in your library", not this exact chart version.
+ * For each key (in input order), returns true if any catalog row is that chart.
+ *
+ * What Explore's Hide owned and the chart page's IN LIBRARY badge are: a Chorus result held up
+ * against the catalog. A metadata match means "this song by this charter is in your library", not
+ * this exact chart version, and it is the same match a favourite and a setlist entry make.
+ *
+ * Keys are normalised here rather than at the call sites. Chorus hands over whatever the charter
+ * typed, markup included, and the columns this compares against hold the readable form, so a raw
+ * key would compare a colour tag against a name and find nothing. `chartKey` is idempotent, so a
+ * caller that already normalised loses nothing by passing through it again.
+ *
+ * A key that names no chart is false without asking the database. "Do I have this" is not
+ * answerable about a chart with no title, for the reason `namesAChart` gives: the name such a chart
+ * would be matched under is its folder's, which is a display fallback and not an identity.
  */
 export function chartsExistByMeta(
   db: CatalogDb,
   keys: { name: string; artist: string; charter: string }[]
 ): boolean[] {
   const stmt = db.prepare(EXISTS_BY_META_SQL)
-  return keys.map((k) => stmt.get(k.name, k.artist, k.charter) !== undefined)
+  return keys.map((raw) => {
+    const key = chartKey(raw)
+    if (!namesAChart(key)) return false
+    return stmt.get(key.name, key.artist, key.charter) !== undefined
+  })
+}
+
+/**
+ * The library's row for each of these charts, in the order asked, or null where it holds none.
+ *
+ * What a setlist is drawn from. A setlist entry is three names and no path (shared/setlists.ts says
+ * why), so the screen that lists one has to ask the catalog what it currently has under those
+ * names: which entries the user can actually play, how long each runs, and what art to draw.
+ *
+ * `IDENTITY_WHERE`, which is the same test `chartsExistByMeta` makes and the same one
+ * `favouritesClause` makes. An entry is stored as the words on screen, so it has to be matched by
+ * them, or a setlist would lose a chart the user can see in their own library; that used to be true
+ * of this query and not of `chartsExistByMeta`, and the two are now one clause.
+ *
+ * One row even when several match. Two copies of one charter's chart of one song are one chart,
+ * which is what `catalog:duplicates` calls an exact duplicate, and a setlist naming it twice would
+ * be the list reporting on the filesystem instead of on the music. `ORDER BY path` makes which
+ * copy comes back the same answer twice running rather than whatever the query planner reached
+ * first.
+ */
+const CHART_BY_META_SQL = `SELECT * FROM charts
+	 WHERE ${IDENTITY_WHERE}
+	 ORDER BY path LIMIT 1`
+
+export function chartsByMeta(
+  db: CatalogDb,
+  keys: { name: string; artist: string; charter: string }[]
+): (ChartRecord | null)[] {
+  const stmt = db.prepare(CHART_BY_META_SQL)
+  return keys.map((raw) => {
+    const key = chartKey(raw)
+    if (!namesAChart(key)) return null
+    const row = stmt.get(key.name, key.artist, key.charter)
+    return row ? fromRow(row as Record<string, unknown>) : null
+  })
 }

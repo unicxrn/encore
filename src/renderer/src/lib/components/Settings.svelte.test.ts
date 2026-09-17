@@ -3,6 +3,7 @@ import { get } from 'svelte/store'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppUpdateStatus } from '../../../../shared/app-update'
 import type { ScoreFolderReport } from '../../../../shared/score-folder'
+import type { GameExecutableReport } from '../../../../shared/game-launch'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import { appUpdate } from '../stores/app-update'
 import { closeWhatsNew, whatsNew } from '../stores/whats-new'
@@ -40,6 +41,16 @@ const SCORE_FOLDER_FOUND: ScoreFolderReport = {
   usable: true
 }
 
+/** No Clone Hero chosen: the state every user starts in, and what the row describes on mount. */
+const GAME_UNSET: GameExecutableReport = {
+  path: '',
+  platform: 'linux',
+  supported: true,
+  kind: 'missing',
+  executable: false,
+  usable: false
+}
+
 const APPIMAGE_STATUS: AppUpdateStatus = {
   currentVersion: '0.1.0',
   target: 'appimage',
@@ -52,6 +63,8 @@ function stubEncore(over: Record<string, unknown> = {}): void {
   vi.stubGlobal('encore', {
     settingsGet: () => Promise.resolve({ libraryFolders: [], scoreFolder: '' }),
     scoreFolderReport: () => Promise.resolve(SCORE_FOLDER_FOUND),
+    gameExecutable: () => Promise.resolve(GAME_UNSET),
+    pickExecutable: () => Promise.resolve(null),
     sidecarStatus: () => Promise.resolve(SIDECAR),
     backupsList: (): Promise<{ backups: FixBackup[]; totalBytes: number }> =>
       Promise.resolve({ backups: [], totalBytes: 0 }),
@@ -243,11 +256,12 @@ describe('Settings: updating Encore', () => {
   })
 
   it('shows a placeholder rather than a verdict before main has answered', async () => {
-    // Not the same as up to date. A panel opened in the first moment of a session is genuinely in
-    // this state, and the sidecar rows above it draw the same placeholder for the same reason.
+    // Not the same as up to date. A view opened in the first moment of a session is genuinely in
+    // this state, and the two tool rows in the Downloads group draw the same placeholder for the
+    // same reason.
     stubEncore({ appUpdateStatus: () => new Promise<never>(() => {}) })
     render(Settings)
-    // Three rows in this panel show a status; the two sidecars are unknown at this point too.
+    // Three rows in this view show a status; the two tools are unknown at this point too.
     await waitFor(() => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0)
     })
@@ -526,5 +540,213 @@ describe('Settings: Clone Hero score folder', () => {
     })
     render(Settings)
     expect(await screen.findByText(/Choose the folder yourself/)).toBeTruthy()
+  })
+})
+
+/**
+ * The four groups.
+ *
+ * jsdom applies no CSS, so nothing here says the page looks grouped; what it pins is that the
+ * four regions exist and are named, which is what a screen reader navigates by and what the
+ * previous seven-section version was rearranged into. The names are the claim: each one is a
+ * thing somebody came here to do, not a subsystem that owns a value.
+ */
+describe('Settings: the groups', () => {
+  it('names four regions, in the order a visit tends to want them', async () => {
+    stubEncore()
+    render(Settings)
+    await screen.findByText('NOTHING TO UNDO')
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Library',
+      'Downloads',
+      'Encore',
+      'Undo history'
+    ])
+  })
+
+  it('keeps the two tools with the downloading they serve', async () => {
+    // They used to sit beside Encore's own update row. yt-dlp fetches video backgrounds and
+    // ffmpeg converts them, so the question they answer is "why has nothing downloaded", which is
+    // not the question the Encore group answers.
+    stubEncore()
+    render(Settings)
+
+    const downloads = screen.getByRole('region', { name: 'Downloads' })
+    expect(downloads.contains(await screen.findByLabelText('Install yt-dlp'))).toBe(true)
+    expect(downloads.contains(screen.getByLabelText('Install ffmpeg'))).toBe(true)
+  })
+})
+
+/**
+ * The folder a download lands in.
+ *
+ * The template is the one control here written in a syntax, and what it produces is a name on
+ * disk nobody sees until a download has finished. The example line is that name. The second test
+ * is the one that matters: the example follows the field as it is typed, and the SETTING still
+ * does not, because a write on every keystroke would store the half-typed template of anyone who
+ * walked away mid-edit.
+ */
+describe('Settings: folder name template', () => {
+  it('shows what the stored template produces, with the extension the format adds', async () => {
+    stubEncore({ settingsSet: () => Promise.resolve() })
+    render(Settings)
+
+    expect(await screen.findByText('Rush - YYZ (Harmonix).sng')).toBeTruthy()
+  })
+
+  it('names a folder rather than an archive when that is the download format', async () => {
+    stubEncore({ settingsSet: () => Promise.resolve() })
+    render(Settings)
+    settings.set({ ...defaultSettings(), downloadFormat: 'folder' })
+
+    expect(await screen.findByText('Rush - YYZ (Harmonix)')).toBeTruthy()
+  })
+
+  it('follows the field as it is typed, and still stores only on change', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({ settingsSet })
+    render(Settings)
+
+    const field = screen.getByLabelText('Folder name template') as HTMLInputElement
+    await fireEvent.input(field, { target: { value: '{name} by {artist}' } })
+
+    expect(await screen.findByText('YYZ by Rush.sng')).toBeTruthy()
+    // Nothing written yet: this is a field mid-edit, not a decision.
+    expect(settingsSet).not.toHaveBeenCalled()
+
+    await fireEvent.change(field, { target: { value: '{name} by {artist}' } })
+    await waitFor(() => {
+      expect(settingsSet).toHaveBeenCalledWith(
+        expect.objectContaining({ chartFolderName: '{name} by {artist}' })
+      )
+    })
+  })
+})
+
+/**
+ * The program the Launch button starts.
+ *
+ * The one path in this view with no probe behind it: Encore knows where the songs are because
+ * somebody named a folder it scans, and where the score files are because Clone Hero writes them
+ * to a fixed place, but the game itself is wherever its owner installed it. So the tests that
+ * matter are about the refusal. A path that cannot run must not be stored, because storing it
+ * turns Launch into a button that never works and never says why, which is the same silent
+ * failure the score-folder override exists to have fixed.
+ *
+ * jsdom applies no CSS, so nothing here is about where the block sits; it pins which sentence is
+ * shown, what is written, and what is not.
+ */
+describe('Settings: Clone Hero itself', () => {
+  const GAME = '/opt/clonehero/Clone Hero'
+
+  const reportFor = (over: Partial<GameExecutableReport>): GameExecutableReport => ({
+    ...GAME_UNSET,
+    ...over
+  })
+
+  it('describes what Encore makes of the stored path, asking about the stored one', async () => {
+    const gameExecutable = vi
+      .fn()
+      .mockResolvedValue(reportFor({ path: GAME, kind: 'file', executable: true, usable: true }))
+    stubEncore({ gameExecutable })
+    render(Settings)
+
+    expect(await screen.findByText(`Encore starts Clone Hero with ${GAME}.`)).toBeTruthy()
+    // The empty path is the "whatever is stored" call, so the row says where Encore would really
+    // look rather than what was true when the path was chosen.
+    expect(gameExecutable).toHaveBeenCalledWith('')
+  })
+
+  it('says nothing is chosen, which is where everybody starts', async () => {
+    stubEncore()
+    render(Settings)
+
+    expect(await screen.findByText(/No Clone Hero chosen yet/)).toBeTruthy()
+  })
+
+  it('refuses an AppImage nothing can start, and stores nothing', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({
+      settingsSet,
+      pickExecutable: () => Promise.resolve('/home/u/CloneHero.AppImage'),
+      gameExecutable: (path: string) =>
+        Promise.resolve(
+          path === ''
+            ? GAME_UNSET
+            : reportFor({ path, kind: 'file', executable: false, usable: false })
+        )
+    })
+    render(Settings)
+    await screen.findByText(/No Clone Hero chosen yet/)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose Clone Hero' }))
+
+    const refusal = await screen.findByRole('alert')
+    expect(refusal.textContent).toContain('chmod +x')
+    expect(settingsSet).not.toHaveBeenCalled()
+  })
+
+  it('stores a path this platform could actually run', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({
+      settingsSet,
+      pickExecutable: () => Promise.resolve(GAME),
+      gameExecutable: (path: string) =>
+        Promise.resolve(
+          path === ''
+            ? GAME_UNSET
+            : reportFor({ path, kind: 'file', executable: true, usable: true })
+        )
+    })
+    render(Settings)
+    await screen.findByText(/No Clone Hero chosen yet/)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose Clone Hero' }))
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(expect.objectContaining({ gamePath: GAME }))
+    )
+  })
+
+  it('writes nothing when the picker is cancelled', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({ settingsSet, pickExecutable: () => Promise.resolve(null) })
+    render(Settings)
+    await screen.findByText(/No Clone Hero chosen yet/)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose Clone Hero' }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(settingsSet).not.toHaveBeenCalled()
+  })
+
+  it('offers to forget a stored path, and only then', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    stubEncore({ settingsSet })
+    render(Settings)
+    await screen.findByText(/No Clone Hero chosen yet/)
+    expect(screen.queryByRole('button', { name: 'Forget it' })).toBeNull()
+
+    settings.set({ ...defaultSettings(), gamePath: GAME })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Forget it' }))
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(expect.objectContaining({ gamePath: '' }))
+    )
+  })
+
+  /**
+   * macOS is out on purpose (main/game/executable.ts). The row says so and offers no control:
+   * a Choose button that refused every file anybody picked would be worse than no button.
+   */
+  it('says so on a platform Encore does not launch the game on, and offers nothing to press', async () => {
+    stubEncore({
+      gameExecutable: () => Promise.resolve(reportFor({ platform: 'darwin', supported: false }))
+    })
+    render(Settings)
+
+    expect(await screen.findByText(/does not launch Clone Hero on macOS/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Choose Clone Hero' })).toBeNull()
   })
 })

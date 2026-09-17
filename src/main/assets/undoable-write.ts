@@ -35,7 +35,7 @@ import { withChartLock } from './write'
  * writers never touch hashed content, and the third, lyrics, rewrites the chart file on purpose, so
  * the hash moving is the feature rather than a failure. What is asserted instead is the restore's
  * rule (`assertRestoreHash` and `assertRestoreChecksum`): an undo lands on the identity the chart
- * had a moment ago or on the one recorded here, and for lyrics only the second is possible — for
+ * had a moment ago or on the one recorded here, and for lyrics only the second is possible, for
  * both numbers, since injecting lyrics rewrites the chart file and so moves Clone Hero's checksum
  * too.
  */

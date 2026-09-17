@@ -41,7 +41,17 @@ export const SETTINGS_DEFAULTS = {
    * checked and found to hold at least one score file, so an empty string is the one and only
    * "no override" value and a stored path is one that was useful when it was chosen.
    */
-  scoreFolder: ''
+  scoreFolder: '',
+  /**
+   * The program the Launch button starts, when the user has pointed Encore at one.
+   *
+   * Empty is the default and is the honest state for everybody until they answer: unlike the
+   * songs folder and the score files, Clone Hero's own executable is wherever its owner put it,
+   * so there is nothing to probe and Encore does not guess. It is stored only after
+   * `inspectGameExecutable` has said the path is something this platform could actually run, so
+   * an empty string is the one and only "not set" value.
+   */
+  gamePath: ''
 } as const
 
 /** A fresh Settings object; `libraryFolders` is a new array on every call. */

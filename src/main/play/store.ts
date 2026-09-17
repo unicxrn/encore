@@ -45,7 +45,7 @@ const TOP_CHARTS_LIMIT = 10
  * second writer would also be bound by it instead of in a caller that could forget.
  *
  * Note what this does NOT dedupe: the same chart played twice. Clone Hero's timestamp carries
- * seven fractional digits, so two genuine plays differ, and they must — a user grinding one song
+ * seven fractional digits, so two genuine plays differ, and they must. A user grinding one song
  * is exactly the history this feature exists to show.
  */
 export function recordPlay(db: CatalogDb, play: PlayRecord): boolean {

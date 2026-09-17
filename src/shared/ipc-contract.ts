@@ -20,6 +20,33 @@ export const IPC = {
   // including what each copy holds around the notes, which is what a user needs before removing
   // one of two charts the checksum calls identical.
   catalogDuplicates: 'catalog:duplicates',
+  // The charts the user hearted, and the one write that changes that. Keyed by what the chart is
+  // rather than by a path (see shared/favourites.ts), which is what lets one favourite cover a
+  // chart on Chorus and the same chart once it has been downloaded. Both answer with the whole
+  // list: it is a few short strings per chart, the renderer holds it as a set so the rail can draw
+  // the heart without a round trip per chart, and handing the list back from the write is what
+  // stops the renderer having to guess what main stored.
+  favouritesList: 'favourites:list',
+  favouritesSet: 'favourites:set',
+  // The setlists the user built, and the five writes that change them. Encore's own thing: Clone
+  // Hero has no setlist format to write to, and shared/setlists.ts records what was checked before
+  // that was believed. Entries are keyed by the chart through the same functions a favourite is,
+  // so a setlist and a heart can never disagree about which chart they mean.
+  //
+  // Every one of the six answers with the whole list, entries included, for the reason the
+  // favourites pair does: it is a name and a few short strings per chart on a list a person is
+  // meant to read, and handing it back is what stops the renderer guessing what main stored.
+  setlistsList: 'setlists:list',
+  setlistsCreate: 'setlists:create',
+  setlistsRename: 'setlists:rename',
+  setlistsDelete: 'setlists:delete',
+  setlistsSetEntry: 'setlists:set-entry',
+  setlistsMoveEntry: 'setlists:move-entry',
+  // The catalog rows behind one setlist's entries, in the setlist's own order, null where the
+  // library holds nothing under those names. Separate from the list above because it is the only
+  // part that depends on what is currently on disk: the list is the user's, this is the library's
+  // answer about it, and it is asked once when a setlist is opened rather than per launch.
+  setlistsCharts: 'setlists:charts',
   downloadAdd: 'download:add',
   downloadCancel: 'download:cancel',
   downloadRetry: 'download:retry',
@@ -36,8 +63,38 @@ export const IPC = {
   // unlinks: a trash that fails leaves the chart and its row untouched and says so.
   chartRemove: 'chart:remove',
   chartLyricLines: 'chart:lyric-lines',
+  // The six song.ini fields the metadata editor offers, read raw rather than through scan-chart:
+  // an unset album reads as `Unknown Album` once scan-chart has been over it, and writing that
+  // back would put those words in the user's file. The answer also carries the seven gameplay
+  // keys the chart sets, which the editor SHOWS and refuses to edit, and a sentence when the
+  // chart cannot be edited at all.
+  chartReadMetadata: 'chart:read-metadata',
+  // The one channel in Encore that writes what a user typed into a chart they own. Refused for a
+  // path outside the configured library folders, for a key outside `EDITABLE_INI_KEYS`, and for
+  // any of the seven `getChartHash` mixes in. The write goes through the same per-chart lock,
+  // temp file and verification every asset write does, and main re-scans the chart afterwards and
+  // rejects unless both multiplayer identities are byte-identical and every field reads back as
+  // asked. Resolves with what changed and the chart's re-indexed catalog row.
+  chartWriteMetadata: 'chart:write-metadata',
   windowControl: 'window:control',
   dialogPickFolder: 'dialog:pick-folder',
+  // Picking the program Clone Hero is started by. A separate dialog from dialog:pick-folder
+  // because it opens on a file rather than a directory, and because the filter it offers depends
+  // on the platform, which is main's to decide and not the renderer's to name.
+  dialogPickExecutable: 'dialog:pick-executable',
+  // What Encore makes of one path: is there anything there, is it a file, and is it a file this
+  // platform could start. The check Settings makes BEFORE storing a path, on the same terms as
+  // play:score-folder: a stored path that cannot run would fail silently for as long as the user
+  // left it there. An empty path in the request means "report on whatever is stored", which is
+  // how the setting's own row describes itself without a second channel. Reads metadata, never
+  // contents, and writes nothing.
+  gameExecutable: 'game:executable',
+  // Start Clone Hero. Takes no payload: the path is the stored setting, not something the
+  // renderer names, so there is nothing here to trust or to validate. It is re-checked in main
+  // before anything is spawned, because a program can be uninstalled after it was chosen.
+  // Resolves once the operating system has accepted the process, and rejects with a sentence the
+  // UI can show when it has not.
+  gameLaunch: 'game:launch',
   sidecarStatus: 'sidecar:status',
   sidecarInstall: 'sidecar:install',
   sidecarUpdate: 'sidecar:update',

@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { artUrl } from '../../../../shared/art'
 
 // The player wrapper lazily imports 'chart-preview' (extends HTMLElement at
-// import time and crashes in node). Mock the three loader helpers it pulls out
-// of the module. The wrapper drives the package's "pre-processed data" path so
-// it can keep the parsed chart, rather than the one-call loadFromUrl.
+// import time and crashes in node). Mock the four helpers it pulls out of the
+// module. The wrapper drives the package's "pre-processed data" path so it can
+// keep the parsed chart, rather than the one-call loadFromUrl, and asks the
+// package which kind of highway it is about to draw so it can paint Encore's
+// lane over it. `textures: null` below is what makes that a no-op here: the
+// skin is best effort and there is nothing to skin. See preview/lane-skin.ts.
 const fetchSngFile = vi.fn(async () => new Uint8Array([1, 2, 3]))
 const extractSngFile = vi.fn(async () => [{ fileName: 'notes.chart', data: new Uint8Array() }])
 const prepareChartData = vi.fn(async () => preparedChart)
 vi.mock('chart-preview', () => ({
   fetchSngFile: (...args: unknown[]) => fetchSngFile(...(args as [])),
   extractSngFile: (...args: unknown[]) => extractSngFile(...(args as [])),
-  prepareChartData: (...args: unknown[]) => prepareChartData(...(args as []))
+  prepareChartData: (...args: unknown[]) => prepareChartData(...(args as [])),
+  getInstrumentType: (instrument: string) => (instrument === 'drums' ? 2 : 1)
 }))
 
 /** Stands in for `prepareChartData`'s result: two sections, four notes, 100 s long. */
@@ -130,6 +134,9 @@ const request = {
   title: 'Song',
   artist: 'Artist',
   artUrl: 'https://art.example/x.jpg',
+  // The words, not the keys below: the surface that opens a preview owns the label list, and
+  // this is what the player bar's second line prints.
+  track: 'Expert Guitar',
   source: { kind: 'url' as const, url: 'https://files.enchor.us/abc.sng' },
   instrument: 'guitar',
   difficulty: 'expert'
@@ -212,7 +219,8 @@ describe('preview controller', () => {
     expect(get(ctl.nowPlaying)).toEqual({
       title: 'Song',
       artist: 'Artist',
-      artUrl: 'https://art.example/x.jpg'
+      artUrl: 'https://art.example/x.jpg',
+      track: 'Expert Guitar'
     })
 
     el.fire('player-statechange', { state: 'playing', previousState: 'ready' })
@@ -357,7 +365,8 @@ describe('preview controller', () => {
     expect(get(ctl.nowPlaying)).toEqual({
       title: 'Chart B',
       artist: 'Other',
-      artUrl: request.artUrl
+      artUrl: request.artUrl,
+      track: request.track
     })
     expect(b.appendChild).toHaveBeenCalledWith(elements[1])
   })
@@ -468,6 +477,129 @@ describe('preview controller', () => {
     await ctl.openPreview(request)
     ctl.toggleFullscreen()
     expect(elements[0].toggleFullscreen).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * Repeat and restart, which is all of a transport that means anything against one chart.
+   *
+   * Encore previews whatever the rail or the chart page is pointed at, and nothing hands the
+   * controller a list, so the edges worth testing are not "the last item" and "an empty queue"
+   * but the ones a single preview actually has: the end of the chart, no chart at all, and the
+   * mode being flipped at each of those.
+   */
+  describe('repeat', () => {
+    it('lets a chart stop at its end while it is off', async () => {
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      expect(el.play).toHaveBeenCalledTimes(1)
+      expect(get(ctl.playerRepeat)).toBe(false)
+
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+
+      expect(el.play).toHaveBeenCalledTimes(1)
+      expect(get(ctl.playerState)).toBe('ended')
+    })
+
+    it('starts the chart again at its end while it is on', async () => {
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      ctl.toggleRepeat()
+      expect(get(ctl.playerRepeat)).toBe(true)
+
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+      expect(el.play).toHaveBeenCalledTimes(2)
+
+      // And again on the next lap: one press of repeat is not one extra play.
+      el.fire('player-statechange', { state: 'playing', previousState: 'ended' })
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+      expect(el.play).toHaveBeenCalledTimes(3)
+    })
+
+    it('starts a chart that has already ended the moment it is turned on', async () => {
+      // Otherwise the control lights up and nothing happens until the next chart, which is the
+      // state it was pressed to leave.
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+      expect(el.play).toHaveBeenCalledTimes(1)
+
+      ctl.toggleRepeat()
+      expect(el.play).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not start a chart that is still playing when it is turned on', async () => {
+      // The counterpart of the test above: only `ended` is the state where arming repeat has
+      // something to do right now.
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      el.fire('player-statechange', { state: 'playing', previousState: 'ready' })
+
+      ctl.toggleRepeat()
+      expect(el.play).toHaveBeenCalledTimes(1)
+      expect(get(ctl.playerState)).toBe('playing')
+    })
+
+    it('lets the chart run out once it is turned off again', async () => {
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      ctl.toggleRepeat()
+      ctl.toggleRepeat()
+      expect(get(ctl.playerRepeat)).toBe(false)
+
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+      expect(el.play).toHaveBeenCalledTimes(1)
+    })
+
+    it('toggles with nothing playing, and arms the next preview rather than throwing', async () => {
+      const ctl = await importController()
+      ctl.toggleRepeat()
+      expect(get(ctl.playerRepeat)).toBe(true)
+
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+      expect(el.play).toHaveBeenCalledTimes(2)
+    })
+
+    it('cannot keep a preview looping after it has been handed back', async () => {
+      // The rail gives the viewport back when the window narrows past the shell's breakpoint,
+      // and that closes the preview. A repeat that outlived the close would be a chart playing
+      // on behind a column that is no longer on screen, with nothing left to stop it.
+      const ctl = await importController()
+      const unregister = ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      const el = elements[0]
+      ctl.toggleRepeat()
+
+      unregister()
+      el.fire('player-statechange', { state: 'ended', previousState: 'playing' })
+
+      expect(el.play).toHaveBeenCalledTimes(1)
+      expect(get(ctl.playerState)).toBe('idle')
+    })
+
+    it('survives the close, because it is a mode and not a fact about the chart', async () => {
+      // Every navigation runs through closePreview. A repeat reset there would be a control the
+      // user has to re-arm for each chart, which is not what a transport mode is.
+      const ctl = await importController()
+      ctl.registerViewport(makeViewport().el)
+      await ctl.openPreview(request)
+      ctl.toggleRepeat()
+
+      ctl.closePreview()
+      expect(get(ctl.playerRepeat)).toBe(true)
+    })
   })
 
   it('closePreview disposes and resets the stores to idle', async () => {

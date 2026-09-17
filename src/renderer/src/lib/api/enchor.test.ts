@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { searchCharts } from './enchor'
+import { searchCharts, SORT_FIELDS, SORT_OPTIONS, sortFor } from './enchor'
 import { emptyAdvanced } from './advanced'
 
 const ok = (body: unknown): Promise<Response> =>
@@ -193,5 +193,41 @@ describe('searchCharts and the advanced endpoint', () => {
       'https://api.enchor.us/search/advanced',
       'https://api.enchor.us/search/advanced'
     ])
+  })
+})
+
+describe('the orders Explore offers', () => {
+  it('names only fields the endpoint takes', () => {
+    // Measured 2026-09-15: sending `downloads` answers 400 and names the enum back as
+    // ["name","artist","album","genre","year","charter","length","modifiedTime"]. An option
+    // outside it is not a sort, it is a failed search.
+    for (const option of SORT_OPTIONS) {
+      if (!option.sort) continue
+      expect(SORT_FIELDS).toContain(option.sort.type)
+    }
+  })
+
+  it('reaches every field the endpoint takes', () => {
+    const offered = new Set(SORT_OPTIONS.map((o) => o.sort?.type).filter(Boolean))
+    expect([...offered].sort()).toEqual([...SORT_FIELDS].sort())
+  })
+
+  it('leads with the order the service picks for itself, and sends nothing for it', () => {
+    expect(SORT_OPTIONS[0].value).toBe('')
+    expect(SORT_OPTIONS[0].sort).toBeNull()
+    expect(sortFor('')).toBeNull()
+  })
+
+  it('falls back to that order for a key it does not know', () => {
+    // The key is what is stored, so a build that dropped an option would otherwise send a sort
+    // the endpoint answers 400 to rather than the order it already had.
+    expect(sortFor('downloads:desc')).toBeNull()
+  })
+
+  it('keys each order by the field and direction it stands for', () => {
+    for (const option of SORT_OPTIONS) {
+      if (!option.sort) continue
+      expect(option.value).toBe(`${option.sort.type}:${option.sort.direction}`)
+    }
   })
 })

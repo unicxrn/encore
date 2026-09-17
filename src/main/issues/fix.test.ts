@@ -381,7 +381,7 @@ describe('the multiplayer hash invariant', () => {
    *
    * `catalog/scanner.ts` computes the column from the entries a library scan produced;
    * `scanChartIssues` computes it from the entries a repair's re-scan produced. Two readers, two
-   * code paths, one value — including across the folder/`.sng` divide, where the `.sng` side has
+   * code paths, one value, including across the folder/`.sng` divide, where the `.sng` side has
    * to decode an XOR-masked archive entry to get there.
    */
   it('computes the same checksum a library scan stores, for both chart shapes', async () => {

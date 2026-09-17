@@ -8,6 +8,10 @@ import { nowPlaying, progress } from '../stores/preview-controller'
 import type { ChartTarget } from './Home.svelte'
 import { TAGGED_CHARTER, TAGGED_CHARTER_TEXT } from '../../../../../test/helpers/marked-up-names'
 import PreviewPane from './PreviewPane.svelte'
+// Vite's ?raw hands back the component's own bytes, untransformed. jsdom applies no CSS and
+// computes no layout, so reading the stylesheet as text is the only way a test here can see
+// the two-column rules at all; the widths themselves are measured by scripts/measure-detail.mjs.
+import paneSource from './PreviewPane.svelte?raw'
 
 /** Through the real schema, so the fields the pane reads are the catalog's own. */
 function localRecord(overrides: Partial<ChartRecord> = {}): ChartTarget {
@@ -59,7 +63,7 @@ const lyricsToggle = (): HTMLButtonElement =>
 
 /** What the player does on every frame, minus the player: the controller's progress store. */
 function playingAt(currentMs: number): void {
-  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null })
+  nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
   progress.set({ percent: (currentMs / 10_000) * 100, currentMs, totalMs: 10_000 })
 }
 
@@ -200,5 +204,111 @@ describe('PreviewPane hands the player bar a name it can read', () => {
       if (get(nowPlaying) === null) throw new Error('nothing playing yet')
     })
     expect(get(nowPlaying)).toMatchObject({ title: 'YYZ', artist: TAGGED_CHARTER_TEXT })
+  })
+
+  /**
+   * The track, in the words the selects above the stage use rather than the keys the chart format
+   * uses. The bar prints this verbatim, so composing it here is what keeps the pane and the bar
+   * from naming one preview two ways.
+   */
+  it('names the track it opened in the words its own selects offer', async () => {
+    vi.stubGlobal('encore', {
+      chartLyricLines: () => Promise.resolve(LINES),
+      chartReadFiles: () => Promise.resolve([])
+    })
+    // Drums and nothing else, so the pick the pane lands on is not the guitar default: the
+    // string has to follow the select rather than name whatever loaded first.
+    render(PreviewPane, { props: { target: localRecord({ diffDrums: 5 }), instruments: [] } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Play preview' }))
+    await waitFor(() => {
+      if (get(nowPlaying) === null) throw new Error('nothing playing yet')
+    })
+    expect(get(nowPlaying)?.track).toBe('Expert Drums')
+  })
+})
+
+/**
+ * The still lane, which the pane draws for the same reason the rail does: with nothing playing
+ * the viewport is a dark rectangle, and this is the surface a chart page is opened to look at.
+ *
+ * jsdom applies no CSS and computes no layout, so the drawing itself is checked in
+ * `highway.test.ts` and `Highway.svelte.test.ts`. What is pinnable here is that the pane asks
+ * for it, over the element the controller writes into rather than inside it, and gets out of the
+ * way once there is a preview to see.
+ */
+describe('PreviewPane draws the still highway with nothing playing', () => {
+  it('draws a lane over the viewport rather than leaving it empty', () => {
+    renderPane(localRecord())
+    const screenBox = document.querySelector('.stage .screen') as HTMLElement
+    const rest = screenBox.querySelector('.rest') as HTMLElement
+
+    expect(rest.classList.contains('gone')).toBe(false)
+    expect(rest.querySelector('svg.highway .strike')).toBeTruthy()
+    const kids = [...screenBox.children].map((el) => el.className.split(' ')[0])
+    expect(kids.indexOf('rest')).toBeGreaterThan(kids.indexOf('viewport'))
+    expect(document.querySelector('.stage .viewport')?.children).toHaveLength(0)
+  })
+
+  it('gets out of the way once something is playing', async () => {
+    renderPane(localRecord())
+    nowPlaying.set({ title: 'YYZ', artist: 'Rush', artUrl: null, track: 'Expert Guitar' })
+    await tick()
+
+    expect(document.querySelector('.stage .rest')?.classList.contains('gone')).toBe(true)
+  })
+})
+
+/**
+ * The pane shares the chart page's column with the preview rail, and the rail takes 374px of it
+ * above the shell's breakpoint. A window at 1121px leaves the page 469px, so the fixed 260px
+ * options column this replaced left the highway 191px: a 16:9 video 107px tall.
+ *
+ * jsdom applies no CSS and computes no layout, so none of that is visible here. What this can
+ * check is that the rules that fix it are still declared, and still declared somewhere they can
+ * match. `scripts/measure-detail.mjs` is where the pixels are read.
+ */
+describe('PreviewPane lays itself out against its own column, not the window', () => {
+  const WIDE_PANE = '700px'
+
+  /** The body of the `@container` block that puts the options beside the stage. */
+  function wideLayoutBlock(): string {
+    const open = paneSource.indexOf(`@container (min-width: ${WIDE_PANE}) {`)
+    if (open === -1) {
+      throw new Error(`no \`@container (min-width: ${WIDE_PANE})\` block in PreviewPane.svelte`)
+    }
+    let depth = 0
+    for (let i = paneSource.indexOf('{', open); i < paneSource.length; i++) {
+      if (paneSource[i] === '{') depth++
+      else if (paneSource[i] === '}' && --depth === 0) {
+        return paneSource.slice(paneSource.indexOf('{', open) + 1, i)
+      }
+    }
+    throw new Error('unbalanced braces in the @container block')
+  }
+
+  // The block is inert without this: `@container` only matches inside a declared container, so
+  // dropping this one line would silently restore the 191px highway at every width.
+  it('declares the container the layout is measured against', () => {
+    const rule = /^\s*\.pane-box\s*\{([^}]*)\}/m.exec(paneSource)
+    if (!rule) throw new Error('no `.pane-box {…}` rule in PreviewPane.svelte')
+    expect(rule[1]).toMatch(/container-type:\s*inline-size\s*;/)
+  })
+
+  // A container cannot be queried by its own rules, only by its descendants', so the pane that
+  // changes shape has to be inside the box that is measured.
+  it('renders the pane inside that container', () => {
+    vi.stubGlobal('encore', { chartLyricLines: () => Promise.resolve(LINES) })
+    const { container } = render(PreviewPane, {
+      props: { target: localRecord(), instruments: [] }
+    })
+    expect(container.querySelector('.pane-box > .pane')).toBeTruthy()
+  })
+
+  it('starts as one column and takes the second only inside the block', () => {
+    const base = /^\s*\.pane\s*\{([^}]*)\}/m.exec(paneSource)
+    if (!base) throw new Error('no `.pane {…}` rule in PreviewPane.svelte')
+    expect(base[1]).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/)
+    expect(wideLayoutBlock()).toMatch(/grid-template-columns:\s*260px\s+minmax\(0,\s*1fr\)\s*;/)
   })
 })

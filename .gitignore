@@ -23,3 +23,9 @@ notes
 # Local guidance for coding agents. Kept out of the public repo on purpose.
 CLAUDE.md
 .serena/
+
+# Locally installed agent skills. Tooling for whoever is working on the repo, not part of it,
+# and the same call as CLAUDE.md above: it would otherwise fail `prettier --check .`.
+.agents/
+.claude/skills/
+skills-lock.json

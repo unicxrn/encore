@@ -718,7 +718,7 @@ describe("the backup's lifecycle around a fix", () => {
    *
    * This is the case the manifest's `cloneHeroChecksum` exists for. The repair is caught and
    * refused, the backup survives it, and the undo then has to move a number `applyFix` would
-   * never have let it move — which `assertRestoreChecksum` permits only because the manifest
+   * never have let it move, which `assertRestoreChecksum` permits only because the manifest
    * says this is the value the chart had before.
    */
   it('lets a repair that rewrote the chart file be undone, checksum and all', async () => {

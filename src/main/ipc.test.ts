@@ -26,12 +26,46 @@ const APP_UPDATE_STATUS: AppUpdateStatus = {
   state: { kind: 'idle' }
 }
 
+const FAVOURITES = [
+  {
+    name: 'Everlong',
+    artist: 'Foo Fighters',
+    charter: 'GuitarHero',
+    addedAt: '2026-09-16T00:00:00.000Z'
+  }
+]
+
+const SETLISTS = [
+  {
+    id: 'sl-1',
+    name: 'Friday night',
+    createdAt: '2026-09-16T00:00:00.000Z',
+    entries: [
+      {
+        name: 'Everlong',
+        artist: 'Foo Fighters',
+        charter: 'GuitarHero',
+        addedAt: '2026-09-16T00:00:00.000Z'
+      }
+    ]
+  }
+]
+
 const deps = (): IpcDeps => ({
   getSettings: vi.fn().mockReturnValue({ downloadFormat: 'sng' }),
   setSettings: vi.fn(),
   queryCharts: vi.fn().mockReturnValue([]),
   countCharts: vi.fn().mockReturnValue(0),
   chartsExistByMeta: vi.fn().mockReturnValue([true]),
+  listFavourites: vi.fn().mockReturnValue(FAVOURITES),
+  setFavourite: vi.fn().mockReturnValue(FAVOURITES),
+  listSetlists: vi.fn().mockReturnValue(SETLISTS),
+  createSetlist: vi.fn().mockReturnValue(SETLISTS),
+  renameSetlist: vi.fn().mockReturnValue(SETLISTS),
+  deleteSetlist: vi.fn().mockReturnValue(SETLISTS),
+  setSetlistEntry: vi.fn().mockReturnValue(SETLISTS),
+  moveSetlistEntry: vi.fn().mockReturnValue(SETLISTS),
+  setlistCharts: vi.fn().mockReturnValue([null]),
   chartFacets: vi.fn().mockReturnValue({ artists: [], genres: [], charters: [], years: [] }),
   duplicateCharts: vi.fn().mockReturnValue({
     identical: [],
@@ -55,8 +89,35 @@ const deps = (): IpcDeps => ({
   clearFinishedDownloads: vi.fn(),
   windowControl: vi.fn(),
   pickFolder: vi.fn().mockResolvedValue('/picked'),
+  pickExecutable: vi.fn().mockResolvedValue('/opt/clonehero/Clone Hero'),
+  gameExecutableReport: vi.fn().mockReturnValue({
+    path: '/opt/clonehero/Clone Hero',
+    platform: 'linux',
+    supported: true,
+    kind: 'file',
+    executable: true,
+    usable: true
+  }),
+  launchGame: vi.fn().mockResolvedValue(undefined),
   readChartFiles: vi.fn().mockResolvedValue([{ fileName: 'song.ini', data: new Uint8Array([1]) }]),
   readLyricLines: vi.fn().mockResolvedValue({ lines: [{ ms: 1000, endMs: 2000, text: 'Hello' }] }),
+  readChartMetadata: vi.fn().mockResolvedValue({
+    chartPath: '/lib/song',
+    chartType: 'folder',
+    iniName: 'song.ini',
+    synthetic: false,
+    fields: { name: 'YYZ', artist: 'Rush', album: '', genre: '', year: '', charter: '' },
+    gameplay: [{ key: 'pro_drums', value: 'True' }],
+    refusal: null
+  }),
+  writeChartMetadata: vi.fn().mockResolvedValue({
+    chartPath: '/lib/song',
+    chartType: 'folder',
+    changed: ['album'],
+    chartHash: 'hash',
+    cloneHeroChecksum: 'checksum',
+    record: null
+  }),
   sidecarStatus: vi.fn().mockResolvedValue({ installed: false, version: null, path: '/s/yt-dlp' }),
   sidecarInstall: vi.fn().mockResolvedValue(undefined),
   sidecarUpdate: vi.fn().mockResolvedValue(undefined),
@@ -365,6 +426,58 @@ describe('registerIpc', () => {
     ).rejects.toThrow()
     expect(d.readLyricLines).not.toHaveBeenCalled()
   })
+  it('routes chart:read-metadata with a valid payload', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const result = (await ipc.invoke(IPC.chartReadMetadata, {
+      path: '/lib/song',
+      chartType: 'folder'
+    })) as { fields: Record<string, string> }
+    expect(d.readChartMetadata).toHaveBeenCalledWith('/lib/song', 'folder')
+    expect(result.fields.artist).toBe('Rush')
+  })
+  it('routes chart:write-metadata with a valid payload', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const result = (await ipc.invoke(IPC.chartWriteMetadata, {
+      path: '/lib/song',
+      chartType: 'folder',
+      fields: { album: 'Moving Pictures' }
+    })) as { changed: string[] }
+    expect(d.writeChartMetadata).toHaveBeenCalledWith({
+      path: '/lib/song',
+      chartType: 'folder',
+      fields: { album: 'Moving Pictures' }
+    })
+    expect(result.changed).toEqual(['album'])
+  })
+  // The boundary is where a key Clone Hero matches charts by has to stop. `assertKeyIsNotHashed`
+  // refuses it again at the writer, but a channel that accepted the name at all would be one
+  // handler's mistake away from the filesystem.
+  it.each([
+    ['a hashed gameplay key', { pro_drums: 'False' }],
+    ['a key the editor does not offer', { loading_phrase: 'go' }],
+    ['a value longer than any real field', { album: 'x'.repeat(401) }]
+  ])('rejects chart:write-metadata carrying %s', async (_label, fields) => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.chartWriteMetadata, { path: '/lib/song', chartType: 'folder', fields })
+    ).rejects.toThrow()
+    expect(d.writeChartMetadata).not.toHaveBeenCalled()
+  })
+  it('rejects a chart:write-metadata payload naming no chart', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.chartWriteMetadata, { path: '', chartType: 'folder', fields: { album: 'a' } })
+    ).rejects.toThrow()
+    expect(d.writeChartMetadata).not.toHaveBeenCalled()
+  })
   it('routes updates:check with an explicit path list', async () => {
     const d = deps()
     const ipc = fakeIpc()
@@ -428,6 +541,105 @@ describe('registerIpc', () => {
       ipc.invoke(IPC.catalogExistsByMeta, [{ name: 'Song', artist: 'Artist' }])
     ).rejects.toThrow()
     expect(d.chartsExistByMeta).not.toHaveBeenCalled()
+  })
+
+  it('routes favourites:list to deps.listFavourites', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.favouritesList)).toEqual(FAVOURITES)
+    expect(d.listFavourites).toHaveBeenCalled()
+  })
+  it('routes favourites:set to deps.setFavourite and answers with the list', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const req = { name: 'Everlong', artist: 'Foo Fighters', charter: null, favourite: true }
+    expect(await ipc.invoke(IPC.favouritesSet, req)).toEqual(FAVOURITES)
+    expect(d.setFavourite).toHaveBeenCalledWith(req)
+  })
+  it('rejects a favourites:set that does not say which way at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.favouritesSet, { name: 'Everlong' })).rejects.toThrow()
+    expect(d.setFavourite).not.toHaveBeenCalled()
+  })
+  it('rejects a favourites:set carrying text no chart could have at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(
+      ipc.invoke(IPC.favouritesSet, { name: 'x'.repeat(401), favourite: true })
+    ).rejects.toThrow()
+    expect(d.setFavourite).not.toHaveBeenCalled()
+  })
+
+  it('routes setlists:list to deps.listSetlists', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.setlistsList)).toEqual(SETLISTS)
+    expect(d.listSetlists).toHaveBeenCalled()
+  })
+  it('routes each setlist write to its own dep and answers with the list', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const chart = { name: 'Everlong', artist: 'Foo Fighters', charter: null }
+    const calls = [
+      [IPC.setlistsCreate, { name: 'Friday night' }, d.createSetlist],
+      [IPC.setlistsRename, { id: 'sl-1', name: 'Saturday' }, d.renameSetlist],
+      [IPC.setlistsDelete, { id: 'sl-1' }, d.deleteSetlist],
+      [IPC.setlistsSetEntry, { id: 'sl-1', ...chart, member: true }, d.setSetlistEntry],
+      [IPC.setlistsMoveEntry, { id: 'sl-1', ...chart, delta: -1 }, d.moveSetlistEntry]
+    ] as const
+    for (const [channel, req, dep] of calls) {
+      expect(await ipc.invoke(channel, req)).toEqual(SETLISTS)
+      expect(dep).toHaveBeenCalledWith(req)
+    }
+  })
+  it('routes setlists:charts to deps.setlistCharts', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.setlistsCharts, { id: 'sl-1' })).toEqual([null])
+    expect(d.setlistCharts).toHaveBeenCalledWith({ id: 'sl-1' })
+  })
+  it('rejects a setlist write that names no setlist at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsDelete, { id: '' })).rejects.toThrow()
+    await expect(ipc.invoke(IPC.setlistsRename, { name: 'x' })).rejects.toThrow()
+    expect(d.deleteSetlist).not.toHaveBeenCalled()
+    expect(d.renameSetlist).not.toHaveBeenCalled()
+  })
+  it('rejects a setlist entry write that does not say which way at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsSetEntry, { id: 'sl-1', name: 'x' })).rejects.toThrow()
+    expect(d.setSetlistEntry).not.toHaveBeenCalled()
+  })
+  it('rejects a move of anything but one place at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    const req = { id: 'sl-1', name: 'Everlong', delta: 3 }
+    await expect(ipc.invoke(IPC.setlistsMoveEntry, req)).rejects.toThrow()
+    expect(d.moveSetlistEntry).not.toHaveBeenCalled()
+  })
+  it('rejects setlist text no interface could have produced at the boundary', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.setlistsCreate, { name: 'x'.repeat(200) })).rejects.toThrow()
+    await expect(
+      ipc.invoke(IPC.setlistsSetEntry, { id: 'sl-1', name: 'x'.repeat(401), member: true })
+    ).rejects.toThrow()
+    expect(d.createSetlist).not.toHaveBeenCalled()
+    expect(d.setSetlistEntry).not.toHaveBeenCalled()
   })
 
   it('routes catalog:rescan-charts to deps and returns the refreshed rows', async () => {
@@ -1090,6 +1302,53 @@ describe('registerIpc', () => {
     // Not a string is not a folder. The payload crosses the boundary from the renderer like any
     // other and is parsed rather than trusted.
     await expect(ipc.invoke(IPC.playScoreFolder, { folder: 42 })).rejects.toThrow()
+  })
+
+  it('routes the file picker behind the Clone Hero setting', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    expect(await ipc.invoke(IPC.dialogPickExecutable)).toBe('/opt/clonehero/Clone Hero')
+    // The sender, so the dialog attaches to the window that asked, exactly as pickFolder does.
+    expect(d.pickExecutable).toHaveBeenCalledWith({ id: 1 })
+  })
+
+  it('routes game:executable, and treats an absent payload as the stored path', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.gameExecutable, { path: '/opt/clonehero/Clone Hero' })
+    expect(d.gameExecutableReport).toHaveBeenCalledWith({ path: '/opt/clonehero/Clone Hero' })
+    // No payload, and an empty path, are the same question: what do you make of what is stored.
+    // The Settings row asks it on mount, before anyone has picked anything.
+    await ipc.invoke(IPC.gameExecutable, undefined)
+    expect(d.gameExecutableReport).toHaveBeenLastCalledWith({ path: '' })
+    // Not a string is not a path. Parsed rather than trusted, like every other payload here.
+    await expect(ipc.invoke(IPC.gameExecutable, { path: 42 })).rejects.toThrow()
+  })
+
+  /**
+   * The launch takes no payload, and that is the security property rather than a convenience.
+   *
+   * A channel that accepted a path would be a channel for running any program on the machine
+   * from the renderer. This one runs the stored setting, which main read from its own file and
+   * checked itself, so there is nothing here a compromised renderer could name.
+   */
+  it('runs the stored game and refuses to carry a path from the renderer', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    registerIpc(ipc as never, d)
+    await ipc.invoke(IPC.gameLaunch, '/bin/sh')
+    expect(d.launchGame).toHaveBeenCalledTimes(1)
+    expect(d.launchGame).toHaveBeenCalledWith()
+  })
+
+  it('lets a refused launch reach the renderer as a rejection', async () => {
+    const ipc = fakeIpc()
+    const d = deps()
+    d.launchGame = vi.fn().mockRejectedValue(new Error('There is nothing at /opt/gone.'))
+    registerIpc(ipc as never, d)
+    await expect(ipc.invoke(IPC.gameLaunch)).rejects.toThrow('There is nothing at /opt/gone.')
   })
 
   it('validates checksums at the play:summaries boundary', async () => {

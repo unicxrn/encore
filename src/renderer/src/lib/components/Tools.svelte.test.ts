@@ -1,19 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartIssueRow } from '../../../../main/catalog/issues'
-import type { DuplicateReport } from '../../../../shared/duplicates'
 import type { FixBackup } from '../../../../main/issues/backup-store'
 import type { FixableCode } from '../../../../main/issues/fix'
 import type { JobProgress } from '../../../../shared/schemas'
 import { assetJobs } from '../stores/assets'
+import type { DuplicateCopy } from '../../../../shared/duplicates'
+import { get } from 'svelte/store'
+import { duplicates } from '../stores/duplicates'
+import { issueTally } from '../stores/issue-tally'
 import Tools from './Tools.svelte'
 
-/**
- * Tools mounts the duplicates panel, which reads the catalogue on mount, so every stub in this
- * file has to answer it. An empty report is the right answer for all of them: these tests are
- * about the issue report, and a panel with findings would put extra buttons and paths on screen
- * for each of them to step around. Duplicates.svelte.test.ts is where the panel itself is tested.
- */
 /**
  * Which machine the view thinks it is on.
  *
@@ -25,16 +22,26 @@ import Tools from './Tools.svelte'
  */
 const ON_LINUX = { platform: 'linux' }
 
-const NO_DUPLICATES = {
-  catalogDuplicates: (): Promise<DuplicateReport> =>
-    Promise.resolve({
-      identical: [],
-      versions: [],
-      alternates: [],
-      totalCharts: 0,
-      unidentifiedCharts: 0
-    })
-}
+/** Where the view sends the user. Only the pointer at Duplicates uses it. */
+const onNavigate = vi.fn()
+
+/** A duplicate copy, in the fields the spare-copy count reads. */
+const copyOf = (path: string): DuplicateCopy => ({
+  path,
+  chartType: 'folder',
+  name: 'YYZ',
+  artist: 'Rush',
+  charter: 'Ann',
+  album: null,
+  songLength: 300_000,
+  modifiedTime: 1,
+  cloneHeroChecksum: 'a'.repeat(32),
+  hasAlbumArt: false,
+  hasVideo: false,
+  hasBackground: false,
+  hasLyrics: false,
+  sizeBytes: null
+})
 
 /**
  * `encore()` reads `window.encore`, and under jsdom `globalThis` *is* `window`, so
@@ -43,7 +50,6 @@ const NO_DUPLICATES = {
  */
 function stubEncore(rows: ChartIssueRow[]): void {
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
     issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
@@ -58,17 +64,34 @@ function stubEncore(rows: ChartIssueRow[]): void {
  */
 async function renderWithRows(rows: ChartIssueRow[]): Promise<void> {
   stubEncore(rows)
-  render(Tools)
+  render(Tools, { onNavigate })
   await screen.findByText('SHOW')
 }
 
 const clickChip = (name: RegExp): Promise<unknown> =>
   fireEvent.click(screen.getByRole('button', { name }))
 
-const QUALITY_TOGGLE = /Charting quality notes/
+/**
+ * The health cards' own controls.
+ *
+ * Each card carries one button, labelled `Show: <card>` until it is showing and `Showing: <card>`
+ * after, so the accessible name says which of the three it belongs to rather than being the word
+ * "Show" three times over. These regexes match either state.
+ *
+ * `broken` is the one that is pressed on arrival, which is the same default the view has always
+ * had: a report is 24,151 rows on a real library and roughly a hundred to one of them are
+ * charting craft.
+ */
+const BROKEN_CARD = /: Broken$/
+const NOTES_CARD = /: Charting notes$/
+const PORTABILITY_CARD = /: Plays here, not everywhere$/
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  onNavigate.mockClear()
+  // Module state, read by the pointer card's label and by the sidebar's warning pill.
+  duplicates.set(null)
+  issueTally.set(null)
 })
 
 /**
@@ -101,7 +124,7 @@ describe('Tools: duplicate findings on one chart', () => {
   // library". Both halves of that contradiction are asserted here.
   it('draws both copies of an identical finding instead of throwing', async () => {
     await renderWithRows(duplicatePair)
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
     expect(await screen.findAllByText('Note too close to the previous sustain')).toHaveLength(2)
     expect(screen.getByText('/library/Rush - YYZ')).toBeTruthy()
@@ -130,21 +153,22 @@ const mixedSeverities: ChartIssueRow[] = [
 ]
 
 describe('Tools: the filter dead end', () => {
-  // Reachable on the real library: with quality notes on, "Damaged or duplicate files" is a chip
-  // only because of quality-grade rows. Turning quality notes back off removes the chip while it
-  // is still filtering, so the list empties with no control left to undo it.
-  it('drops a category filter whose chip disappears with the quality notes', async () => {
+  // Reachable on the real library: with the charting-notes card showing, "Damaged or duplicate
+  // files" is a chip only because of quality-grade rows. Turning that card back off removes the
+  // chip while it is still filtering, so the list empties with no control left to undo it.
+  it('drops a category filter whose chip disappears with the charting notes', async () => {
     await renderWithRows(mixedSeverities)
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
     await clickChip(/Damaged or duplicate files/)
-    // The filter is doing something: only the damaged row is listed. Both chips read as pressed
-    // here, which is also what keeps the zero-pressed assertion below from passing vacuously.
+    // The filter is doing something: only the damaged row is listed. Three controls read as
+    // pressed here (both cards and the chip), which is also what keeps the count below from
+    // passing vacuously.
     expect(await screen.findByText('Album art is the wrong size')).toBeTruthy()
     expect(screen.queryByText('No audio')).toBeNull()
-    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(2)
+    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(3)
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
     // The list must not be left empty, and no filter may outlive its chip. The first of these is
     // the assertion that bites: dropping the prune leaves the damaged filter active with its chip
@@ -153,25 +177,67 @@ describe('Tools: the filter dead end', () => {
       expect(screen.getByText('No audio')).toBeTruthy()
     })
     expect(screen.queryByText('NO ISSUES MATCH THE SELECTED FILTERS')).toBeNull()
-    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(0)
+    // Only the broken card, which is where this started.
+    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(1)
   })
 })
 
-describe('Tools: the severity default', () => {
-  // Quality notes outnumber the actionable findings roughly a hundred to one; hiding them is what
-  // took the default view from 14,236 rows to 104.
-  it('lists blocking findings and hides quality ones until the toggle is pressed', async () => {
+describe('Tools: the health cards', () => {
+  // Quality notes outnumber the actionable findings roughly a hundred to one; keeping their card
+  // off by default is what took the default view from 14,236 rows to 104.
+  it('counts the library by card and lists only the cards that are showing', async () => {
     await renderWithRows(mixedSeverities)
 
+    // One chart under each card, and the two counts are read before any row is.
+    const broken = screen.getByRole('button', { name: BROKEN_CARD })
+    const notes = screen.getByRole('button', { name: NOTES_CARD })
+    expect(broken.getAttribute('aria-pressed')).toBe('true')
+    expect(notes.getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByText('No audio')).toBeTruthy()
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
     expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
 
-    await clickChip(QUALITY_TOGGLE)
+    await clickChip(NOTES_CARD)
 
+    // Additive, not exclusive: exporting the whole report means having all of it on screen, and a
+    // chart that is both broken and full of charting notes is read with both cards on.
     expect(await screen.findByText('Album art is the wrong size')).toBeTruthy()
     expect(screen.getByText('No audio')).toBeTruthy()
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
+  })
+
+  /**
+   * The counts are of the report, not of the list, so pressing one card must not move the number
+   * on the card beside it. A strip that reshuffled as it was read would not be a summary.
+   */
+  it('counts every row of the report whatever is on screen', async () => {
+    await renderWithRows(mixedSeverities)
+
+    const counts = (): string[] =>
+      [...document.querySelectorAll('.s-n')].map((el) => el.textContent ?? '')
+    expect(counts()).toEqual(['1', '1'])
+
+    await clickChip(NOTES_CARD)
+    expect(counts()).toEqual(['1', '1'])
+  })
+
+  it('says a library with nothing broken has nothing broken, rather than saying nothing', async () => {
+    await renderWithRows([mixedSeverities[1]])
+
+    expect(screen.getByText('Nothing in your library is broken.')).toBeTruthy()
+    // No control on an empty card: there is nothing to put on screen.
+    expect(screen.queryByRole('button', { name: BROKEN_CARD })).toBeNull()
+    expect(screen.getByRole('button', { name: NOTES_CARD })).toBeTruthy()
+  })
+
+  it('says which card emptied the list rather than claiming nothing is wrong', async () => {
+    await renderWithRows(mixedSeverities)
+
+    await clickChip(BROKEN_CARD)
+
+    expect(await screen.findByText(/Every card above is turned off/)).toBeTruthy()
+    // The old wording, which would be a lie with a blocking finding in the report.
+    expect(screen.queryByText(/Nothing is broken/)).toBeNull()
   })
 })
 
@@ -260,7 +326,6 @@ function stubFixes(
     install: vi.fn(() => Promise.resolve())
   }
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     platform,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(rows),
@@ -284,7 +349,7 @@ async function renderFixable(
   freshRows?: (row: ChartIssueRow) => ChartIssueRow[]
 ): Promise<FixStub> {
   const stub = stubFixes(rows, fixable, freshRows)
-  render(Tools)
+  render(Tools, { onNavigate })
   // The summary is the last thing to arrive: it needs both the report and issues:fixable.
   await screen.findByText(/Encore can fix/)
   return stub
@@ -292,24 +357,45 @@ async function renderFixable(
 
 const dialog = (): HTMLElement => screen.getByRole('dialog')
 
+/**
+ * Open the repair card, which arrives folded.
+ *
+ * Measured rather than chosen: with every card drawn open the first chart group sat 926px down a
+ * 629px scroller at a default 1280x800 window, so the repair card, the one that can carry four
+ * action rows, folds and its heading keeps the count on screen.
+ * `scripts/measure-issue-cards.mjs` is where that number comes from.
+ */
+const openRepairs = (): Promise<unknown> =>
+  fireEvent.click(screen.getByRole('button', { name: 'Show the repairs' }))
+
+/** The same, for the undo card, which folds for the same reason and is on screen every visit. */
+const openUndo = (): Promise<unknown> =>
+  fireEvent.click(screen.getByRole('button', { name: 'Show what can be put back' }))
+
 describe('Tools: finding the repairs the filters are hiding', () => {
   /**
    * The milestone's central UI problem. `albumArtSize` and `extraValue` are quality-grade, so the
    * default view shows neither, and they are the two largest fixes there are. A summary drawn
    * from the visible rows would say "1 chart"; this one counts every row of the report.
    */
-  it('counts repairable charts the quality toggle is hiding, and says they are hidden', async () => {
+  it('counts repairable charts the charting-notes card is hiding, and says they are hidden', async () => {
     await renderFixable()
 
+    // The count is on the card's own heading, which never folds: it is the whole reason this card
+    // exists, and a user who never opens it still learns that 3 of their charts are repairable.
     expect(screen.getByText(/Encore can fix 3 of these charts/)).toBeTruthy()
-    // Two of those three charts are entirely off screen behind the quality toggle.
-    expect(screen.getByText(/2 of them are hidden by the current filters/)).toBeTruthy()
+    // Two of those three charts are entirely off screen behind the charting-notes card.
+    expect(screen.getByText(/2 of them are hidden by the cards above/)).toBeTruthy()
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
+
+    await openRepairs()
+
     expect(screen.getByText('2 CHARTS')).toBeTruthy()
   })
 
-  it('puts those rows on screen without touching the quality toggle', async () => {
+  it('puts those rows on screen without touching the charting-notes card', async () => {
     await renderFixable()
+    await openRepairs()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Show: Resize the album art/ }))
 
@@ -320,13 +406,13 @@ describe('Tools: finding the repairs the filters are hiding', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Show everything' }))
 
-    // Back to exactly the view the user had. The toggle was never turned on. The focus reached
+    // Back to exactly the view the user had. The card was never turned on. The focus reached
     // past it rather than through it, which is what keeps the other ~24,000 quality rows away.
     await waitFor(() => {
       expect(screen.getByText('No audio')).toBeTruthy()
     })
     expect(screen.queryByText('Album art is the wrong size')).toBeNull()
-    expect(screen.getByRole('button', { name: QUALITY_TOGGLE }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('button', { name: NOTES_CARD }).getAttribute('aria-pressed')).toBe(
       'false'
     )
   })
@@ -344,14 +430,13 @@ describe('Tools: finding the repairs the filters are hiding', () => {
     // issuesFixable rejecting leaves availability unknown, and an unknown availability is not an
     // offer. The report itself still renders.
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       saveTextFile: (): Promise<string | null> => Promise.resolve(null),
       issuesFixable: (): Promise<FixableCode[]> => Promise.reject(new Error('no ipc'))
     })
-    render(Tools)
+    render(Tools, { onNavigate })
 
     expect(await screen.findByText('No audio')).toBeTruthy()
     expect(screen.queryByText(/Encore can fix/)).toBeNull()
@@ -414,7 +499,6 @@ describe('Tools: confirming a repair', () => {
   it('reports a repair that failed instead of quietly dropping it', async () => {
     stubFixes(repairable)
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -423,7 +507,7 @@ describe('Tools: confirming a repair', () => {
       issuesFix: (): Promise<ChartIssueRow[]> =>
         Promise.reject(new Error('no longer has a video Encore can convert'))
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
 
     await fireEvent.click(screen.getByRole('button', { name: /^Fix Video won't play/ }))
@@ -441,6 +525,7 @@ describe('Tools: confirming a repair', () => {
 describe('Tools: repairing a group at once', () => {
   it('lists every chart it will touch and repairs them one after another', async () => {
     const stub = await renderFixable()
+    await openRepairs()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Fix all 2: Resize the album art/ }))
 
@@ -477,6 +562,7 @@ describe('Tools: repairing a group at once', () => {
       }
     ]
     const stub = await renderFixable(strayIniRows)
+    await openRepairs()
 
     await fireEvent.click(
       screen.getByRole('button', { name: /^Fix all 1: Remove the \.ini files/ })
@@ -505,6 +591,7 @@ describe('Tools: when ffmpeg is missing', () => {
 
   it('leaves the repairs that do not need it alone', async () => {
     await renderFixable(repairable, FFMPEG_MISSING)
+    await openRepairs()
 
     // The album-art group is unaffected: one missing tool does not disable the other three fixes.
     expect(screen.getByRole('button', { name: /^Fix all 2: Resize the album art/ })).toBeTruthy()
@@ -525,7 +612,6 @@ describe('Tools: progress and cancel while a conversion runs', () => {
     })
     const cancel = vi.fn(() => Promise.resolve())
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -534,7 +620,7 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       issuesFix: (): Promise<ChartIssueRow[]> => pending,
       issuesFixCancel: cancel
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
 
     await fireEvent.click(screen.getByRole('button', { name: /^Fix Video won't play/ }))
@@ -577,7 +663,6 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       release = resolve
     })
     vi.stubGlobal('encore', {
-      ...NO_DUPLICATES,
       ...ON_LINUX,
       issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
       issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
@@ -586,8 +671,9 @@ describe('Tools: progress and cancel while a conversion runs', () => {
       issuesFix: (): Promise<ChartIssueRow[]> => pending,
       issuesFixCancel: (): Promise<void> => Promise.resolve()
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText(/Encore can fix/)
+    await openRepairs()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Show: Resize the album art/ }))
     await fireEvent.click(
@@ -640,7 +726,6 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
   })
   const cancel = vi.fn(() => Promise.resolve())
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(last),
     issuesScan: (): Promise<ChartIssueRow[]> => pending,
@@ -648,7 +733,7 @@ async function renderScanning(last: ChartIssueRow[] | null = null): Promise<Scan
     issuesFixable: (): Promise<FixableCode[]> => Promise.resolve([]),
     saveTextFile: (): Promise<string | null> => Promise.resolve(null)
   })
-  render(Tools)
+  render(Tools, { onNavigate })
   await fireEvent.click(screen.getByRole('button', { name: 'Scan library for issues' }))
   return { cancel, rejectScan }
 }
@@ -787,7 +872,6 @@ function stubUndo(
     scan: vi.fn(() => Promise.resolve(repairable))
   }
   vi.stubGlobal('encore', {
-    ...NO_DUPLICATES,
     ...ON_LINUX,
     issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(repairable),
     issuesScan: stub.scan,
@@ -818,9 +902,10 @@ describe('Tools: undoing a repair', () => {
 
   it('offers the undo beside the repairs, naming the chart and what it would take back', async () => {
     stubUndo([backupFor()], () => Promise.resolve({ chartPath: '/library/Rush - YYZ', rows: [] }))
-    render(Tools)
+    render(Tools, { onNavigate })
 
     expect(await screen.findByText('1 fix can be undone')).toBeTruthy()
+    await openUndo()
     // The chart by its readable name, and the repair's own sentence, the one the confirmation
     // showed before it ran, so the user recognises what they are taking back.
     expect(screen.getByText('Rush - YYZ')).toBeTruthy()
@@ -843,8 +928,9 @@ describe('Tools: undoing a repair', () => {
         ]
       })
     )
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
+    await openUndo()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Undo:/ }))
 
@@ -869,8 +955,9 @@ describe('Tools: undoing a repair', () => {
       await pending
       return { chartPath: '/library/Rush - YYZ', rows: [] }
     })
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
+    await openUndo()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Undo:/ }))
     assetJobs.set(
@@ -905,8 +992,9 @@ describe('Tools: undoing a repair', () => {
         new Error('video.webm in /library/Rush - YYZ has been rewritten since this fix')
       )
     )
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('1 fix can be undone')
+    await openUndo()
 
     await fireEvent.click(screen.getByRole('button', { name: /^Undo:/ }))
 
@@ -920,8 +1008,9 @@ describe('Tools: undoing a repair', () => {
       backupFor({ id: `kabcd-00112233445566${String(i).padStart(2, '0')}` })
     )
     stubUndo(many, () => Promise.resolve({ chartPath: '/library/Rush - YYZ', rows: [] }))
-    render(Tools)
+    render(Tools, { onNavigate })
     await screen.findByText('9 fixes can be undone')
+    await openUndo()
 
     expect(screen.getAllByRole('button', { name: /^Undo:/ })).toHaveLength(6)
 
@@ -1017,10 +1106,152 @@ const videoAndFault: ChartIssueRow[] = [
 
 async function renderOn(platform: string, rows = videoAndFault): Promise<FixStub> {
   const stub = stubFixes(rows, ALL_FIXABLE, undefined, platform)
-  render(Tools)
+  render(Tools, { onNavigate })
   await screen.findByText('SHOW')
   return stub
 }
+
+/**
+ * The two findings that look repairable, were looked at, and were refused.
+ *
+ * Both are decisions rather than gaps, and the view has to say so where the missing button is.
+ * `multipleChart` would have to delete a notes.mid or a notes.chart, which is the file Clone Hero
+ * matches charts by. `missingValue` in its difficulty-rating flavour cannot be filled from Chorus,
+ * because an exact hash match there means Chorus ingested this same upload and holds the same
+ * blank. Neither reason is scan-chart's; both are Encore's, so both are its to state.
+ */
+const refused: ChartIssueRow[] = [
+  {
+    chartPath: '/library/Rush - YYZ',
+    kind: 'folder',
+    code: 'multipleChart',
+    description: 'This chart has more than one chart file.'
+  },
+  {
+    chartPath: '/library/Rush - Limelight',
+    kind: 'metadata',
+    code: 'missingValue',
+    description: 'Metadata is missing a "diff_guitar" value.'
+  }
+]
+
+describe('Tools: what sits above the rows', () => {
+  /**
+   * The duplicate report left this view for a destination of its own, and what it left behind is
+   * the thing being pinned: a view that simply stopped answering a question it used to answer
+   * would send the user hunting for a card that is not there any more.
+   */
+  it('points at Duplicates where it used to hold the report, and says why', async () => {
+    await renderFixable()
+
+    expect(document.querySelector('.cards .dupes')).toBeNull()
+    expect(screen.getByText('Charts installed more than once')).toBeTruthy()
+    // The reason is the same one that kept duplicates out of the rows: two of the three kinds
+    // are not faults, so a scan for what is wrong was never going to report them.
+    expect(
+      screen.getByText(/a song you own two charts of is not wrong with anything/i)
+    ).toBeTruthy()
+
+    // And still last of the cards, so reading down meets what is wrong, then what Encore can do,
+    // then where the other report went.
+    const cards = [...(document.querySelector('.cards')?.children ?? [])]
+    expect(cards[cards.length - 1]?.className).toContain('fx-refusal')
+    expect(cards[cards.length - 2]?.className).toContain('elsewhere')
+  })
+
+  it('navigates rather than expanding anything in place', async () => {
+    await renderFixable()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Duplicates' }))
+
+    expect(onNavigate).toHaveBeenCalledWith('duplicates')
+  })
+
+  /**
+   * The count on the button is the store's, not a second reading.
+   *
+   * It is drawn only when there is something to do about it: a button offering "0 spare copies"
+   * is a button reporting that this view looked, which it did not. Nothing at all is what the
+   * sidebar draws in that case too.
+   */
+  it('names the spare copies on the button once the report has them', async () => {
+    duplicates.set({
+      identical: [
+        {
+          checksum: 'a'.repeat(32),
+          copies: [copyOf('/library/a'), copyOf('/library/a (1)'), copyOf('/library/a (2)')]
+        }
+      ],
+      versions: [],
+      alternates: [],
+      totalCharts: 3,
+      unidentifiedCharts: 0
+    })
+    await renderFixable()
+
+    expect(screen.getByRole('button', { name: 'Open Duplicates · 2 spare copies' })).toBeTruthy()
+  })
+
+  it('says only Open Duplicates while nothing has been read', async () => {
+    await renderFixable()
+
+    expect(screen.getByRole('button', { name: 'Open Duplicates' })).toBeTruthy()
+  })
+
+  it('leads with the purpose line until there is a report to lead with', async () => {
+    stubEncore([])
+    render(Tools, { onNavigate })
+
+    expect(await screen.findByText(/Checks every chart in your library for problems/)).toBeTruthy()
+  })
+})
+
+describe('Tools: the repairs Encore refuses to make', () => {
+  it('says on the row why a second chart file is not Encore to delete', async () => {
+    // Not renderFixable: nothing in this report is repairable, so the repair card never arrives
+    // and there is nothing for it to wait on.
+    stubFixes(refused)
+    render(Tools, { onNavigate })
+    await screen.findByText('SHOW')
+
+    expect(screen.getByText('More than one chart file')).toBeTruthy()
+    expect(screen.getByText(/will not delete a chart file/)).toBeTruthy()
+    // The cost, which is the reason. Without it the row reads as a feature nobody wrote yet.
+    expect(screen.getByText(/costs it multiplayer/)).toBeTruthy()
+    // And no button, which is the whole point.
+    expect(screen.queryByRole('button', { name: /^Fix More than one chart file/ })).toBeNull()
+  })
+
+  it('says a rating Chorus does not have either cannot be filled in', async () => {
+    stubFixes(refused)
+    render(Tools, { onNavigate })
+    await screen.findByText('SHOW')
+    await clickChip(NOTES_CARD)
+
+    expect(
+      await screen.findByText(/Only the person who charted it can say how hard it is/)
+    ).toBeTruthy()
+    expect(screen.getByText(/this same upload, carrying the same blank/)).toBeTruthy()
+  })
+
+  it('names both refusals under the cards, whether or not the repairs are open', async () => {
+    await renderFixable()
+
+    // Not an apology and not an error: a decision, said once under the cards, with the reason
+    // itself on the row that carries the finding.
+    expect(screen.getByText(/Two findings are left alone on purpose/)).toBeTruthy()
+    expect(screen.getByText(/each of those rows says why/)).toBeTruthy()
+  })
+
+  it('says nothing extra on a row nobody decided anything about', async () => {
+    await renderFixable()
+
+    // noAudio is unrepairable because nothing could repair it from a button, which needs no
+    // sentence. Only the two deliberate refusals get one.
+    expect(screen.getByText('No audio')).toBeTruthy()
+    expect(document.querySelectorAll('.i-decision')).toHaveLength(0)
+  })
+})
 
 describe('Tools: a video that only fails on Linux', () => {
   it('counts it among the faults on Linux, where it is one', async () => {
@@ -1031,9 +1262,11 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
     expect(screen.getByText("Video won't play on Linux")).toBeTruthy()
     expect(await screen.findByText(/Encore can fix 1 of these chart/)).toBeTruthy()
-    // No second panel: converting IS the repair here, and the repair summary already says so.
+    // No second card, and no third card in the strip: converting IS the repair here, and the
+    // repair card already says so.
     expect(screen.queryByText(/cannot play on Linux$/)).toBeNull()
     expect(screen.queryByRole('button', { name: /^Convert all/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: PORTABILITY_CARD })).toBeNull()
   })
 
   it('does not count it among the faults on Windows', async () => {
@@ -1065,11 +1298,13 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(screen.queryByRole('button', { name: /^Fix all/ })).toBeNull()
   })
 
-  it('puts the rows on screen from the conversion panel, worded for this machine', async () => {
+  it('puts the rows on screen from the conversion card, worded for this machine', async () => {
     await renderOn('win32')
     await screen.findByRole('heading', { name: /cannot play on Linux/ })
 
-    await fireEvent.click(screen.getByRole('button', { name: /^Show: Convert the video to WebM/ }))
+    // The card's own control, and the only one these rows have. It used to be two, a chip in the
+    // filter row and a Show on the action row, both about the same three charts.
+    await fireEvent.click(screen.getByRole('button', { name: PORTABILITY_CARD }))
 
     expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
     expect(screen.getByText(/This video plays here/)).toBeTruthy()
@@ -1101,11 +1336,12 @@ describe('Tools: a video that only fails on Linux', () => {
   it('lets a Windows user read the rows without turning the charting notes on', async () => {
     await renderOn('win32')
 
-    // Its own chip, because the charting-quality toggle is about how a chart was made and this
-    // is not that.
-    const chip = screen.getByRole('button', { name: /Plays here, not everywhere/ })
-    expect(chip.getAttribute('aria-pressed')).toBe('false')
-    await fireEvent.click(chip)
+    // Its own card, because the charting-notes card is about how a chart was made and this is
+    // not that. It is also drawn on this platform and not on Linux, where the grade cannot be
+    // reached at all.
+    const card = screen.getByRole('button', { name: PORTABILITY_CARD })
+    expect(card.getAttribute('aria-pressed')).toBe('false')
+    await fireEvent.click(card)
 
     expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
     // Under its own heading. "Other problems" would be a category of one thing that is not one.
@@ -1114,13 +1350,38 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(screen.getByText('2 ISSUES IN 2 CHARTS')).toBeTruthy()
   })
 
+  /**
+   * The rows stay reachable when main cannot say whether ffmpeg is there.
+   *
+   * `issues:fixable` failing leaves availability unknown, and an unknown availability draws no fix
+   * control anywhere. The card itself is not a fix control: it counts charts and shows their rows,
+   * neither of which needs ffmpeg, and it is the only way these rows reach the list now that its
+   * toggle has replaced the filter chip they used to have.
+   */
+  it('still shows the rows when it could not learn whether converting is possible', async () => {
+    vi.stubGlobal('encore', {
+      platform: 'win32',
+      issuesLast: (): Promise<ChartIssueRow[]> => Promise.resolve(videoAndFault),
+      issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve(videoAndFault),
+      saveTextFile: (): Promise<string | null> => Promise.resolve(null),
+      issuesFixable: (): Promise<FixableCode[]> => Promise.reject(new Error('no ipc'))
+    })
+    render(Tools, { onNavigate })
+    await screen.findByText('SHOW')
+
+    await fireEvent.click(screen.getByRole('button', { name: PORTABILITY_CARD }))
+
+    expect(await screen.findByText("Video won't play on Linux")).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Convert all/ })).toBeNull()
+  })
+
   it('does not guess about macOS in either direction', async () => {
     await renderOn('darwin')
 
     // Not counted as a fault, because nobody has checked that it is one.
     expect(screen.getByText('1 ISSUE IN 1 CHART')).toBeTruthy()
 
-    await fireEvent.click(screen.getByRole('button', { name: /Plays here, not everywhere/ }))
+    await fireEvent.click(screen.getByRole('button', { name: PORTABILITY_CARD }))
     const meaning = await screen.findByText(/Nobody has checked what it does on this platform/)
     expect(meaning).toBeTruthy()
     // And not claimed to work either, which is the Windows sentence.
@@ -1128,5 +1389,53 @@ describe('Tools: a video that only fails on Linux', () => {
     expect(
       await screen.findByRole('heading', { name: /1 chart has a video Clone Hero cannot play/ })
     ).toBeTruthy()
+  })
+})
+
+/**
+ * The one number this view hands the sidebar, and why it is handed rather than fetched.
+ *
+ * Main's report is a cache that is null until a scan completes in this launch, and reading it
+ * across the boundary to count its rows copies 24,151 of them for one integer. The rows are
+ * already here, so the count is taken here. stores/issue-tally.ts carries the rest.
+ */
+describe('Tools: what it tells the sidebar', () => {
+  it('publishes the charts that are actually broken, not the size of the report', async () => {
+    // Three rows across two charts: two blocking findings on one chart, and a charting note on
+    // the other. Charts, findings and rows are 1, 2 and 3 here, so only one of the three passes.
+    await renderWithRows([
+      ...mixedSeverities,
+      {
+        chartPath: '/library/Rush - YYZ',
+        kind: 'folder',
+        code: 'noChart',
+        description: 'No chart files were found.'
+      }
+    ])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 1 })
+  })
+
+  it('publishes a zero once a scan has looked and found nothing broken', async () => {
+    await renderWithRows([mixedSeverities[1]])
+
+    expect(get(issueTally)).toEqual({ brokenCharts: 0 })
+  })
+
+  /**
+   * Null and zero are different answers here. Main has no report, so nothing in this launch has
+   * looked, and the sidebar must draw nothing rather than claim a clean library.
+   */
+  it('publishes nothing at all when no scan has ever run', async () => {
+    vi.stubGlobal('encore', {
+      ...ON_LINUX,
+      issuesLast: (): Promise<ChartIssueRow[] | null> => Promise.resolve(null),
+      issuesScan: (): Promise<ChartIssueRow[]> => Promise.resolve([]),
+      saveTextFile: (): Promise<string | null> => Promise.resolve(null)
+    })
+    render(Tools, { onNavigate })
+    await screen.findByText(/Checks every chart in your library for problems/)
+
+    expect(get(issueTally)).toBeNull()
   })
 })

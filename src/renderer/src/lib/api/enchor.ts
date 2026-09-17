@@ -7,9 +7,19 @@ export const ENCHOR_FILES = ENCHOR_FILES_URL
 export interface SearchParams {
   search: string
   page?: number
+  /**
+   * How many charts one page carries. 25 when nothing asks, which is what every paged caller
+   * here wants: a page of Explore.
+   *
+   * `main/updates/client.ts` measured 100 as the largest the endpoint honours ("Asking
+   * Alexandria" returned 58 rows in one response), and that is what the surprise asks for. It
+   * makes one request out of a question that would otherwise take several; see
+   * `SURPRISE_PAGE_SIZE`.
+   */
+  perPage?: number
   instrument?: string | null
   difficulty?: string | null
-  sort?: { type: string; direction: 'asc' | 'desc' }
+  sort?: SortChoice | null
   /**
    * The advanced panel's fields. A query with none of them filled in goes to `/search`, and one
    * with any of them goes to `/search/advanced`; see `searchCharts`.
@@ -35,6 +45,75 @@ export const INSTRUMENTS: readonly FilterOption[] = [
   { value: 'rhythmghl', label: 'Rhythm (GHL)' },
   { value: 'guitarcoopghl', label: 'Co-op (GHL)' }
 ]
+
+/**
+ * What `sort.type` may be, measured rather than copied.
+ *
+ * Sending `downloads` answers 400 and names the whole enum back:
+ * `["name","artist","album","genre","year","charter","length","modifiedTime"]` (2026-09-15).
+ * There is no downloads, popularity or rating sort here, and a header offering one would be
+ * offering a request the service refuses. Chart Manager can sort by downloads because it also
+ * queries RhythmVerse; Encore does not, so it cannot.
+ */
+export const SORT_FIELDS = [
+  'name',
+  'artist',
+  'album',
+  'genre',
+  'year',
+  'charter',
+  'length',
+  'modifiedTime'
+] as const
+
+export type SortField = (typeof SORT_FIELDS)[number]
+
+export interface SortChoice {
+  type: SortField
+  direction: 'asc' | 'desc'
+}
+
+export interface SortOption {
+  /** What the select carries and the store holds. Empty string is the service's own order. */
+  readonly value: string
+  readonly label: string
+  /** Null sends `sort: null`, which is what the endpoint does when nobody asks. */
+  readonly sort: SortChoice | null
+}
+
+/**
+ * The orders Explore offers, one option per question rather than one per field-and-direction.
+ *
+ * Sixteen combinations exist and eleven are here. The five text fields get A to Z only: nobody
+ * browses a catalog backwards through the alphabet, and a list of sixteen is a worse control
+ * than a list of eleven. Year and length get both ends because both ends are real questions,
+ * and `modifiedTime` gets only the recent end because "the charts fixed since I last looked" is
+ * the question and "the ones nobody has touched since 2013" is not.
+ *
+ * Every one of the eight fields the endpoint takes is reachable from this list.
+ */
+export const SORT_OPTIONS: readonly SortOption[] = [
+  { value: '', label: 'Best match', sort: null },
+  {
+    value: 'modifiedTime:desc',
+    label: 'Recently updated',
+    sort: { type: 'modifiedTime', direction: 'desc' }
+  },
+  { value: 'name:asc', label: 'Name A-Z', sort: { type: 'name', direction: 'asc' } },
+  { value: 'artist:asc', label: 'Artist A-Z', sort: { type: 'artist', direction: 'asc' } },
+  { value: 'album:asc', label: 'Album A-Z', sort: { type: 'album', direction: 'asc' } },
+  { value: 'charter:asc', label: 'Charter A-Z', sort: { type: 'charter', direction: 'asc' } },
+  { value: 'genre:asc', label: 'Genre A-Z', sort: { type: 'genre', direction: 'asc' } },
+  { value: 'year:desc', label: 'Year, newest', sort: { type: 'year', direction: 'desc' } },
+  { value: 'year:asc', label: 'Year, oldest', sort: { type: 'year', direction: 'asc' } },
+  { value: 'length:desc', label: 'Longest', sort: { type: 'length', direction: 'desc' } },
+  { value: 'length:asc', label: 'Shortest', sort: { type: 'length', direction: 'asc' } }
+]
+
+/** The option a stored key names, or the service's own order for a key nothing matches. */
+export function sortFor(value: string): SortChoice | null {
+  return SORT_OPTIONS.find((opt) => opt.value === value)?.sort ?? null
+}
 
 export const DIFFICULTIES: readonly FilterOption[] = [
   { value: null, label: 'Any difficulty' },
@@ -62,6 +141,19 @@ export interface MaxNps {
   time: number
 }
 
+/**
+ * One row of scan-chart's note-level linting, as the search response carries it.
+ *
+ * `instrument` and `difficulty` are the track it was found on and can be absent, which is how
+ * scan-chart reports an issue about the chart as a whole rather than about one track.
+ */
+export interface ChartIssue {
+  instrument?: string | null
+  difficulty?: string | null
+  noteIssue: string
+  description: string
+}
+
 export interface NotesData {
   instruments?: string[]
   noteCounts?: NoteCount[]
@@ -73,6 +165,19 @@ export interface NotesData {
   hasTapNotes?: boolean
   hasOpenNotes?: boolean
   has2xKick?: boolean
+  hasFlexLanes?: boolean
+  chartIssues?: ChartIssue[]
+}
+
+/** scan-chart's folder and metadata findings, keyed the way each array names its own code. */
+export interface FolderIssue {
+  folderIssue: string
+  description: string
+}
+
+export interface MetadataIssue {
+  metadataIssue: string
+  description: string
 }
 
 export interface ChartData {
@@ -95,6 +200,22 @@ export interface ChartData {
   diff_vocals: number | null
   modifiedTime?: string
   notesData?: NotesData | null
+  /**
+   * Optional because every existing caller builds a ChartData by hand, and optional here is
+   * what stops a field the row merely decorates with from becoming a required one in forty
+   * test fixtures. The API sends all of them on every search result.
+   *
+   * What it does NOT send, verified by dumping all 66 fields of a result on 2026-09-15: a
+   * download count, a file size and a rating. Chart Manager shows those because it also
+   * queries RhythmVerse. Encore does not, so a column for any of them would be permanently
+   * empty or filled with a number nobody measured.
+   */
+  folderIssues?: FolderIssue[]
+  metadataIssues?: MetadataIssue[]
+  /** True when the chart drives scripted effects rather than only notes. Rare: 0 of that 100. */
+  modchart?: boolean
+  /** The pack a chart came in. Null far more often than not: null on all 100 of that sample. */
+  packName?: string | null
 }
 
 export interface SearchResult {
@@ -130,7 +251,7 @@ export async function searchCharts(
     // honour. The panel's Name field is where a title goes once advanced filters are on, and
     // Explore says so beside the box it disables.
     search: useAdvanced ? '*' : params.search,
-    per_page: 25,
+    per_page: params.perPage ?? 25,
     page: params.page ?? 1,
     instrument: params.instrument ?? null,
     difficulty: params.difficulty ?? null,

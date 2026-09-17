@@ -27,6 +27,10 @@ vi.mock('../api/enchor', async (importOriginal) => ({
 }))
 
 import Detail from './Detail.svelte'
+// Vite's ?raw hands back the component's own bytes, untransformed. jsdom applies no CSS and
+// computes no layout, so reading the stylesheet as text is the only way a test here can see the
+// column rules; scripts/measure-detail.mjs is where the pixels are read.
+import detailSource from './Detail.svelte?raw'
 
 // U+2014. What Detail renders for "we do not know", in both the stat cards and the ABOUT rows.
 const EM_DASH = '—'
@@ -120,27 +124,43 @@ afterEach(async () => {
 const DIFF_KEYS = ['E', 'M', 'H', 'X'] as const
 
 /**
- * The difficulty matrix as one readable string per instrument, e.g. `Guitar ··HX`.
+ * The difficulty grid as one readable string per instrument, e.g. `Guitar ··HX`.
  *
- * The charted state renders as an SVG check and the uncharted one as an empty `<span>`, so the
- * cell's accessible name is the only version of it a test can read (jsdom draws nothing). Reading
- * every row and every cell means an instrument or a difficulty that renders when it should not
- * fails the comparison, instead of slipping past an assertion on one cell.
+ * Every square is drawn as a number, a dash or a question mark, and jsdom draws none of them, so
+ * the cell's accessible name is the only version a test can read. Reading every row and every
+ * square means an instrument or a difficulty that renders when it should not fails the
+ * comparison, instead of slipping past an assertion on one square.
+ *
+ * The first cell of each row is the song.ini rating rather than a difficulty, so it is sliced
+ * off: the rating has its own assertions below.
  */
 function matrixRows(): string[] {
   const table = screen.getByRole('table')
   return within(table)
     .getAllByRole('row')
-    .slice(1) // the E/M/H/X column headers
+    .slice(1) // the RATING / E / M / H / X column headers
     .map((row) => {
       const label = within(row).getByRole('rowheader').textContent?.trim()
-      const cells = within(row)
+      const squares = within(row)
         .getAllByRole('cell')
+        .slice(1)
         .map((cell, i) =>
-          cell.getAttribute('aria-label')?.endsWith(': charted') ? DIFF_KEYS[i] : '·'
+          / notes$|notes, peak /.test(cell.getAttribute('aria-label') ?? '') ? DIFF_KEYS[i] : '·'
         )
-      return `${label} ${cells.join('')}`
+      return `${label} ${squares.join('')}`
     })
+}
+
+/** The rating column of one row, as its accessible name. */
+function ratingName(label: string): string {
+  const row = screen.getByRole('rowheader', { name: label }).closest('tr') as HTMLElement
+  return within(row).getAllByRole('cell')[0].getAttribute('aria-label') ?? ''
+}
+
+/** The state word beside one entry of the "what is in the chart" list. */
+function featureState(label: string): string {
+  const item = screen.getByText(label).closest('li') as HTMLElement
+  return item.lastElementChild?.textContent?.trim() ?? ''
 }
 
 /**
@@ -179,13 +199,108 @@ describe('Detail: local and remote render the same matrix from their own source'
     })
 
     expect(await screen.findByRole('table')).toBeTruthy()
-    expect(matrixRows()).toEqual(['Guitar ··HX', 'Bass ···X'])
+    // The fixture rates drums 5 and carries no drum notes, which is a row of its own now: see
+    // the mismatch test below. The two instruments that do carry notes read exactly as before.
+    expect(matrixRows()).toEqual(['Guitar ··HX', 'Bass ···X', 'Drums ····'])
+  })
+
+  /**
+   * A rating with no notes behind it is scan-chart's `extraValue`, a Rock Band conversion
+   * artifact that six charts in a hundred carry. The old grid could not show it at all: its rows
+   * came from the note counts alone, so a chart claiming drums it does not have looked identical
+   * to one that never claimed them. The notes still win the verdict; the claim is reported.
+   */
+  it('shows a part song.ini rates that the chart has no notes for, and says so', async () => {
+    renderDetail({
+      kind: 'remote',
+      chart: remoteChart({ notesData: { noteCounts: NOTE_COUNTS } })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(ratingName('Drums')).toBe('Drums: no track in this chart, though song.ini rates it 5')
+    expect(
+      screen.getByText('song.ini rates Drums, but the chart carries no notes for it.')
+    ).toBeTruthy()
+  })
+
+  /**
+   * The ten song.ini ratings the catalog carries, against the five the search API sends. This is
+   * the first thing the chart page knows that the preview rail does not: the rail names one
+   * instrument at a time and never says the chart claims a rhythm part or a GHL bass.
+   */
+  it('reads a rating for every instrument the catalog stores one for', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        noteCounts: [
+          { instrument: 'guitar', difficulty: 'expert', count: 1408 },
+          { instrument: 'rhythm', difficulty: 'expert', count: 700 },
+          { instrument: 'bassghl', difficulty: 'expert', count: 400 }
+        ],
+        diffGuitar: 4,
+        diffRhythm: 2,
+        diffBassGhl: 1
+      })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(ratingName('Guitar')).toBe('Guitar: difficulty 4 of 6')
+    expect(ratingName('Rhythm')).toBe('Rhythm: difficulty 2 of 6')
+    expect(ratingName('Bass (GHL)')).toBe('Bass (GHL): difficulty 1 of 6')
+  })
+
+  /**
+   * song.ini's rating is a free integer and charters use it as one. Measured against
+   * api.enchor.us on 2026-09-16: `{instrument: 'guitar', minIntensity: 7}` answers with 2,419
+   * charts, one page of which carries 7, 8, 9, 10 and on up to 73. The grid draws six pips, so
+   * the number has to survive somewhere the pips cannot carry it.
+   */
+  it('keeps a rating past the top of the scale, rather than clamping it to six', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        noteCounts: [{ instrument: 'guitar', difficulty: 'expert', count: 1408 }],
+        diffGuitar: 73
+      })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(ratingName('Guitar')).toBe('Guitar: difficulty 73, past the top of the scale')
+  })
+
+  /**
+   * The counts and the peaks of every track at once, which is the grid's whole reason to exist
+   * beside a rail that already prints one of each.
+   */
+  it('prints the note count and the peak of every charted square', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        noteCounts: NOTE_COUNTS,
+        maxNps: [{ instrument: 'guitar', difficulty: 'expert', nps: 9.4 }]
+      })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(screen.getByLabelText('Expert: 1,408 notes, peak 9.4 notes per second')).toBeTruthy()
+    expect(screen.getByLabelText('Hard: 902 notes')).toBeTruthy()
   })
 })
 
-describe('Detail: the "run a library scan" hint', () => {
+/**
+ * What the grid says when nobody has counted the notes, and what it says when somebody has and
+ * there were none. Three outcomes, and the old page collapsed two of them: a local chart with a
+ * measured zero got the "run a scan" card, which is false about a chart that was scanned.
+ */
+describe('Detail: a chart nobody has counted', () => {
   // A catalog row written before the note-count columns existed carries an empty noteCounts until
-  // the user rescans. Telling them so is the only way they learn the matrix is empty for a fixable
+  // the user rescans. Telling them so is the only way they learn the grid is empty for a fixable
   // reason rather than because the chart is empty.
   it('tells the user to scan when a local chart has no note data', async () => {
     renderDetail({
@@ -196,62 +311,47 @@ describe('Detail: the "run a library scan" hint', () => {
     expect(await screen.findByText(SCAN_HINT)).toBeTruthy()
   })
 
-  // The same emptiness on the remote side means the API has not processed the chart. Scanning the
-  // library would not change it by one byte, so the instruction is not merely unhelpful there;
-  // it is false. The remote branch gets DiffMatrix's own neutral empty state instead.
-  it('does not tell the user to scan when a remote chart has no note data', async () => {
-    renderDetail({ kind: 'remote', chart: remoteChart({ notesData: null }) })
-
-    expect(await screen.findByText(/NO CHART DATA/i)).toBeTruthy()
-    expect(screen.queryByText(SCAN_HINT)).toBeNull()
-  })
-})
-
-describe('Detail: the INSTRUMENTS stat', () => {
-  it('counts the instruments that carry notes', async () => {
+  /**
+   * The ratings survive the notes being unread, which is the point of showing them at all: a row
+   * scanned before note counts existed still carries what song.ini said, and the old page drew
+   * nothing for it. Every square reads "not counted" rather than "not charted", because those
+   * are different claims and only one of them is true here.
+   */
+  it('still draws the ratings, with every square marked uncounted', async () => {
     renderDetail({
       kind: 'local',
-      record: localRecord({ path: '/library/Rush - YYZ', name: 'YYZ', noteCounts: NOTE_COUNTS })
+      record: localRecord({
+        path: '/library/Rush - Limelight',
+        name: 'Limelight',
+        noteCounts: [],
+        diffGuitar: 4
+      })
     })
 
     expect(await screen.findByRole('table')).toBeTruthy()
-    expect(valueBeside('INSTRUMENTS')).toBe('2')
+    expect(ratingName('Guitar')).toBe('Guitar: difficulty 4 of 6')
+    expect(screen.getByLabelText('Expert: not counted')).toBeTruthy()
+    expect(screen.queryByLabelText('Expert: not charted')).toBeNull()
+    expect(screen.getByText(SCAN_HINT)).toBeTruthy()
   })
 
-  /**
-   * The stat used to be `String(matrixRows.length)`, which renders a literal `0` for a chart whose
-   * notes were never read: a wrong number asserted about a chart that plainly has four
-   * instruments, sitting in a card of its own where it reads as a measurement. The NOTES stat
-   * beside it already dashed out in the same situation, so the pair contradicted each other.
-   */
-  it('dashes out, like NOTES, for a local chart whose notes were never read', async () => {
-    renderDetail({
-      kind: 'local',
-      record: localRecord({ path: '/library/Rush - Limelight', name: 'Limelight', noteCounts: [] })
-    })
-
-    expect(await screen.findByText(SCAN_HINT)).toBeTruthy()
-    expect(valueBeside('INSTRUMENTS')).toBe(EM_DASH)
-    expect(valueBeside('NOTES')).toBe(EM_DASH)
-  })
-
-  // Not a local-only hole: notesData is optional on ChartData and the API omits it for a chart it
-  // has not processed, so gating the dash on `record` would have left the remote side lying.
-  it('dashes out for a remote chart the API has not processed', async () => {
+  // The same emptiness on the remote side means the API has not processed the chart. Scanning the
+  // library would not change it by one byte, so the instruction is not merely unhelpful there;
+  // it is false.
+  it('does not tell the user to scan when a remote chart has no note data', async () => {
     renderDetail({ kind: 'remote', chart: remoteChart({ notesData: null }) })
 
-    expect(await screen.findByText(/NO CHART DATA/i)).toBeTruthy()
-    expect(valueBeside('INSTRUMENTS')).toBe(EM_DASH)
-    expect(valueBeside('NOTES')).toBe(EM_DASH)
+    expect(await screen.findByText(/Chorus Encore has not counted this chart yet/)).toBeTruthy()
+    expect(screen.queryByText(SCAN_HINT)).toBeNull()
   })
 
   /**
-   * The other half of the fix, and the reason the discriminator is the noteCounts array rather
-   * than the matrix row count: a populated array that yields no rows is a measured zero. "We
-   * looked and found nothing" is a true statement and must survive as a number; only "we never
-   * looked" becomes a dash. Reading matrixRows.length collapses the two.
+   * The other half, and the reason the two sentences are separate: a populated array that yields
+   * no instrument is a MEASURED zero. "We looked and found nothing" is a true statement about a
+   * broken chart, and the old page answered it with "run Scan library", which is the one
+   * instruction that cannot help.
    */
-  it('still reports a measured zero when the notes were read and no instrument carried any', async () => {
+  it('reports a measured zero as a measurement, not as a chart nobody has read', async () => {
     renderDetail({
       kind: 'local',
       record: localRecord({
@@ -262,7 +362,189 @@ describe('Detail: the INSTRUMENTS stat', () => {
     })
 
     expect(await screen.findByText('Broken Chart')).toBeTruthy()
-    expect(valueBeside('INSTRUMENTS')).toBe('0')
+    expect(
+      screen.getByText('The notes were read and no instrument in this chart carries any.')
+    ).toBeTruthy()
+    expect(screen.queryByText(SCAN_HINT)).toBeNull()
+  })
+})
+
+/**
+ * What the chart is made of, which is the half of scan-chart's reading the rail turned down: a
+ * flag set on half of Chorus separates nothing when the question is "is this the one", and every
+ * one of them matters once the question is "what am I about to play".
+ */
+describe('Detail: what is in the chart', () => {
+  it('reports the flags a scanned local chart carries', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        noteCounts: NOTE_COUNTS,
+        has2xKick: true,
+        hasTapNotes: false,
+        proDrums: true
+      })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(featureState('2x kick')).toBe('YES')
+    expect(featureState('Tap notes')).toBe('NO')
+    expect(featureState('Pro drums')).toBe('YES')
+  })
+
+  /**
+   * Every one of these columns defaults to false in the schema, so a row nobody has scanned
+   * carries nine noes that were never measured. Reporting them as noes is the misreading this
+   * guard exists to stop; it is the same "we have not looked" the grid above draws.
+   */
+  it('reports every flag as unknown when the chart was never read', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({ path: '/library/Rush - YYZ', name: 'YYZ', noteCounts: [] })
+    })
+
+    expect(await screen.findByText('2x kick')).toBeTruthy()
+    expect(featureState('2x kick')).toBe('UNKNOWN')
+    expect(featureState('Flex lanes')).toBe('UNKNOWN')
+  })
+
+  // Each remote flag is separately optional on notesData, and the API omits the two drum ones
+  // entirely, so those are not drawn at all rather than drawn as a permanent UNKNOWN.
+  it('reads the remote flags off notesData and offers no drum rows', async () => {
+    renderDetail({
+      kind: 'remote',
+      chart: remoteChart({
+        notesData: { noteCounts: NOTE_COUNTS, has2xKick: true, hasSoloSections: false }
+      })
+    })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(featureState('2x kick')).toBe('YES')
+    expect(featureState('Solo sections')).toBe('NO')
+    // Not reported by the search API on any result, so a row for it would be permanently blank.
+    expect(screen.queryByText('Pro drums')).toBeNull()
+  })
+})
+
+/**
+ * Where the chart is, and what identifies it. Charts exist as folders and as .sng archives, and
+ * the page says which rather than leaving the user to read it off the end of the path.
+ */
+describe('Detail: on disk', () => {
+  it('names a folder chart as a folder', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({ path: '/library/Rush - YYZ', name: 'YYZ', chartType: 'folder' })
+    })
+
+    expect(await screen.findByText('FORMAT')).toBeTruthy()
+    expect(valueBeside('FORMAT')).toBe('Folder')
+    expect(valueBeside('PATH')).toBe('/library/Rush - YYZ')
+  })
+
+  it('names an archive chart as an archive, with the same rows beside it', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({ path: '/library/Rush - YYZ.sng', name: 'YYZ', chartType: 'sng' })
+    })
+
+    expect(await screen.findByText('FORMAT')).toBeTruthy()
+    expect(valueBeside('FORMAT')).toBe('Archive (.sng)')
+    expect(valueBeside('PATH')).toBe('/library/Rush - YYZ.sng')
+  })
+
+  /**
+   * The two hashes a user could act on, shortened on screen and whole in the tooltip. The play
+   * key is what joins a recorded play to this chart and the chart hash is what the Chorus check
+   * compares; `folderHash` and `tempoMapHash` are Encore's own bookkeeping and are not drawn.
+   */
+  it('shows the play key and the chart hash, with the full value in the tooltip', async () => {
+    const checksum = 'a'.repeat(32)
+    renderDetail({
+      kind: 'local',
+      record: localRecord({
+        path: '/library/Rush - YYZ',
+        name: 'YYZ',
+        cloneHeroChecksum: checksum,
+        chartHash: 'LOCALHASHVALUE'
+      })
+    })
+
+    expect(await screen.findByText('PLAY KEY')).toBeTruthy()
+    const value = screen.getByText('PLAY KEY').nextElementSibling as HTMLElement
+    expect(value.textContent?.trim()).toBe(`${checksum.slice(0, 12)}\u2026`)
+    expect(value.getAttribute('title')).toBe(checksum)
+    expect(screen.getByText('CHART HASH')).toBeTruthy()
+  })
+
+  // Null for a chart with no readable chart file, which simply never matches a play. A dash, not
+  // a blank: the row is a question with an answer, and the answer is "nothing to join on".
+  it('dashes the play key for a chart with no readable chart file', async () => {
+    renderDetail({
+      kind: 'local',
+      record: localRecord({ path: '/library/Rush - YYZ', name: 'YYZ', cloneHeroChecksum: null })
+    })
+
+    expect(await screen.findByText('PLAY KEY')).toBeTruthy()
+    expect(valueBeside('PLAY KEY')).toBe(EM_DASH)
+  })
+
+  it('identifies a remote chart by its Chorus fields instead', async () => {
+    renderDetail({ kind: 'remote', chart: remoteChart({ chartId: 634733, packName: 'Guitar 3' }) })
+
+    expect(await screen.findByText('CHART ID')).toBeTruthy()
+    expect(valueBeside('CHART ID')).toBe('634733')
+    expect(valueBeside('PACK')).toBe('Guitar 3')
+    expect(screen.queryByText('FORMAT')).toBeNull()
+  })
+})
+
+/**
+ * What scan-chart already found, which arrives on every search result and which nothing but
+ * Explore's one-dot indicator has ever shown. The rail cannot afford it and the dot cannot say
+ * which problem it means.
+ */
+describe('Detail: what Chorus found', () => {
+  it('names each problem, what it means and how many of them there are', async () => {
+    renderDetail({
+      kind: 'remote',
+      chart: remoteChart({
+        folderIssues: [],
+        metadataIssues: [],
+        notesData: {
+          noteCounts: NOTE_COUNTS,
+          chartIssues: [
+            { noteIssue: 'babySustain', description: 'a very short sustain' },
+            { noteIssue: 'babySustain', description: 'another very short sustain' }
+          ]
+        }
+      })
+    })
+
+    expect(await screen.findByText('WHAT CHORUS FOUND')).toBeTruthy()
+    expect(screen.getByText('2\u00d7')).toBeTruthy()
+    // One line per code, not one per occurrence: a chart with 200 of these would otherwise
+    // repeat the same sentence 200 times.
+    expect(screen.getAllByText(/sustain/i).length).toBeGreaterThan(0)
+  })
+
+  // "Nothing wrong" is a claim, and only a result that actually carried the arrays supports it.
+  it('says a chart is clean only when the result carried the checks', async () => {
+    renderDetail({
+      kind: 'remote',
+      chart: remoteChart({ folderIssues: [], metadataIssues: [], notesData: { chartIssues: [] } })
+    })
+
+    expect(await screen.findByText(/found nothing wrong with it/)).toBeTruthy()
+  })
+
+  it('draws no card at all for a result with no checks on it', async () => {
+    renderDetail({ kind: 'remote', chart: remoteChart({ notesData: { noteCounts: NOTE_COUNTS } }) })
+
+    expect(await screen.findByRole('table')).toBeTruthy()
+    expect(screen.queryByText('WHAT CHORUS FOUND')).toBeNull()
   })
 })
 
@@ -748,5 +1030,40 @@ describe('Detail names written in Clone Hero markup', () => {
       if (keys.length === 0) throw new Error('no metadata lookup yet')
     })
     expect(keys[0]).toEqual({ name: '<b>YYZ</b>', artist: 'Rush', charter: TAGGED_CHARTER })
+  })
+})
+
+/**
+ * The page's column is 469px wide at a 1121px window and 842px at a 1120px one, because that is
+ * where the preview rail appears and takes 374px back. A media query cannot express "this column
+ * is narrow" across that jump: the same window width means two different things on either side
+ * of it, and the earlier steps found a title box at 0px and labels ellipsised at 71px exactly
+ * this way. So the page asks its own box.
+ *
+ * Nothing here is a measurement. It pins that the rules are declared and declared somewhere they
+ * can match; `scripts/measure-detail.mjs` reads the widths in a real engine.
+ */
+describe('Detail measures its own column, not the window', () => {
+  const TWO_COLUMN = '700px'
+
+  it('declares the container the layout is measured against', () => {
+    const rule = /^\s*\.detail\s*\{([^}]*)\}/m.exec(detailSource)
+    if (!rule) throw new Error('no `.detail {…}` rule in Detail.svelte')
+    expect(rule[1]).toMatch(/container-type:\s*inline-size\s*;/)
+  })
+
+  it('starts as one column and takes the second only above the threshold', () => {
+    const base = /^\s*\.cols\s*\{([^}]*)\}/m.exec(detailSource)
+    if (!base) throw new Error('no `.cols {…}` rule in Detail.svelte')
+    expect(base[1]).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/)
+    expect(detailSource).toContain(`@container detail (min-width: ${TWO_COLUMN}) {`)
+  })
+
+  /**
+   * Not a media query anywhere in this file. One would answer with the window width, which is
+   * the number that does not describe this column.
+   */
+  it('asks no question of the window', () => {
+    expect(detailSource).not.toMatch(/@media\s*\(/)
   })
 })

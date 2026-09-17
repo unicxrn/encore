@@ -201,7 +201,7 @@ export interface FixBackup {
    *
    * Optional, and it has to be: every manifest written before M17 lacks the field, and a
    * validator that demanded it would strand every undo already sitting in the user's store. The
-   * three states are distinguished deliberately at the call site — a string is a recorded value,
+   * three states are distinguished deliberately at the call site: a string is a recorded value,
    * `null` is "this chart had no chart file", and `undefined` is "written before Encore recorded
    * this", which the restore treats as no second target rather than as a null one.
    */

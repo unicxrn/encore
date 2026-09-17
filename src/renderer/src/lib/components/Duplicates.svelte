@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { toCsv } from '../../../../shared/csv'
   import {
     PLAY_HISTORY_PROMISE,
@@ -12,20 +11,20 @@
     assetsOnlyHere,
     DUPLICATE_TIERS,
     type DuplicateCopy,
-    type DuplicateReport,
     type DuplicateTierId
   } from '../../../../shared/duplicates'
   import { fallbackChartName, formatBytes, stripRichText } from '../../../../shared/format'
   import { encore } from '../stores/bridge'
+  import { dropDuplicateCopy, duplicates, duplicatesError } from '../stores/duplicates'
 
   /**
    * What the library holds more than one copy of.
    *
-   * Lives beside the issue report rather than inside it, and is deliberately not one of its
-   * rows: an issue is something wrong with a chart, and two of these three tiers are not wrong
-   * with anything. It also comes from a different place. The issue scan walks the filesystem and
-   * takes seconds; this is two grouped queries over the catalog and takes tens of milliseconds,
-   * so it loads on mount with no button to press and no progress to report.
+   * A destination of its own rather than a card inside the issue report, and deliberately not one
+   * of its rows: an issue is something wrong with a chart, and two of these three tiers are not
+   * wrong with anything. It also comes from a different place. The issue scan walks the filesystem
+   * on a button press and takes seconds; this is two grouped queries over the catalog, read once
+   * per launch by the store below, so there is no button to press and no progress to report.
    *
    * **Removal is offered on tier 1 and nowhere else.** Tier 1 is the only claim here that
    * survives being acted on: those copies hold the same notes byte for byte. Removing a tier 2
@@ -48,9 +47,10 @@
    */
   const GROUPS_SHOWN = 25
 
-  let report = $state.raw<DuplicateReport | null>(null)
-  let loadError = $state<string | null>(null)
-  let open = $state(false)
+  // Both read from the launch-wide store, so the sidebar's count and this page are the same
+  // report and cannot disagree about what is installed twice.
+  const report = $derived($duplicates)
+  const loadError = $derived($duplicatesError)
   /** Which tiers have been expanded past GROUPS_SHOWN. */
   let expanded = $state<DuplicateTierId[]>([])
   /** Why a reveal failed, against the path that failed. Empty is the normal state. */
@@ -79,17 +79,6 @@
   let csvState = $state<CsvState>(null)
 
   const asMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-
-  onMount(() => {
-    void encore()
-      .catalogDuplicates()
-      .then((result) => {
-        report = result
-      })
-      .catch((err: unknown) => {
-        loadError = asMessage(err)
-      })
-  })
 
   /**
    * Copies that could be removed without losing a chart: every copy past the first in each
@@ -188,42 +177,6 @@
   }
 
   /**
-   * Drop one copy from the report in place, once it is really gone.
-   *
-   * Local rather than a second `catalogDuplicates()` call, and not because of the cost. The
-   * library watcher has just seen the folder disappear and will run a scan of its own; re-asking
-   * for the whole report puts this view in a race with that scan for no gain, when the one thing
-   * that changed is a copy this component itself just removed. A group left holding a single
-   * copy is no longer a duplicate of anything, so it goes with it.
-   */
-  function dropCopy(path: string): void {
-    if (report === null) return
-    report = {
-      ...report,
-      identical: report.identical
-        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
-        .filter((group) => group.copies.length > 1),
-      // The same chart can be listed under tiers 2 and 3 as well, and a path that is gone must
-      // not stay on screen under a heading that offers to open it in a file manager.
-      versions: report.versions
-        .map((group) => ({ ...group, copies: group.copies.filter((c) => c.path !== path) }))
-        .filter((group) => group.copies.length > 1),
-      alternates: report.alternates
-        .map((group) => ({
-          ...group,
-          charters: group.charters
-            .map((charter) => ({
-              ...charter,
-              copies: charter.copies.filter((c) => c.path !== path)
-            }))
-            .filter((charter) => charter.copies.length > 0)
-        }))
-        .filter((group) => group.charters.length > 1),
-      totalCharts: Math.max(0, report.totalCharts - 1)
-    }
-  }
-
-  /**
    * Move one copy to the Trash, after the user has confirmed that copy by name.
    *
    * The failure path is the point: if the trash refuses, nothing about the library has changed,
@@ -237,7 +190,7 @@
     try {
       const result: ChartRemoval = await encore().chartRemove(copy.path)
       removed = removalMessage(result.outcome, copyLabel(copy))
-      dropCopy(copy.path)
+      dropDuplicateCopy(copy.path)
     } catch (err) {
       removeErrors = { ...removeErrors, [copy.path]: asMessage(err) }
     } finally {
@@ -303,31 +256,30 @@
   }
 </script>
 
-<section class="dupes">
+<div class="dupes">
   <div class="d-head">
-    <h2 class="d-title">Duplicate charts</h2>
-    {#if report === null && loadError === null}
-      <span class="d-sum mono">READING THE CATALOGUE…</span>
-    {:else if loadError !== null}
-      <span class="d-sum mono">ERROR: {loadError}</span>
-    {:else}
-      <span class="d-sum">{summary}</span>
-      {#if anything}
-        <button class="hairline" aria-expanded={open} onclick={() => (open = !open)}>
-          {open ? 'Hide' : 'Show'}
-        </button>
+    <h1 class="d-title">Duplicate charts</h1>
+    {#if report !== null && loadError === null && anything}
+      <div class="d-acts">
         <button class="hairline" onclick={() => void exportCsv()}>Export CSV</button>
-      {/if}
+      </div>
     {/if}
   </div>
+  {#if report === null && loadError === null}
+    <p class="d-sum mono">READING THE CATALOGUE…</p>
+  {:else if loadError !== null}
+    <p class="d-sum mono">ERROR: {loadError}</p>
+  {:else}
+    <p class="d-sum">{summary}</p>
+  {/if}
 
   <!-- Said whenever it is not zero, and above the lists rather than under them: without it "no
        identical copies" reads as a finding, when on a catalogue scanned by an older build it
        means the comparison had nothing to work with. -->
   {#if report !== null && report.unidentifiedCharts > 0}
     <p class="d-note">
-      {report.unidentifiedCharts} of your {report.totalCharts} charts carry no chart ID yet, so they cannot
-      be compared to the rest. Scanning your library again fills those in.
+      {report.unidentifiedCharts} of your {report.totalCharts} charts carry no chart ID yet and are not
+      compared here. Scanning your library again fills those in.
     </p>
   {/if}
 
@@ -343,17 +295,20 @@
     </p>
   {/if}
 
-  {#if open && report !== null}
+  <!-- Outside the block below on purpose. Removing the last spare copy empties the lists, and a
+       line reporting that removal that vanished with them would leave the only trace of what just
+       happened being a list that is no longer there. -->
+  {#if removed}
+    <p class="d-progress mono" role="status">{removed}</p>
+  {/if}
+
+  {#if report !== null && anything}
     <p class="d-safety">
       Encore can remove a copy of a chart it found installed twice, and nothing else here. A removal
       goes to your system Trash, so you can put it back from there. Nothing is chosen for you: each
       copy lists what it holds, because two copies of the same chart file can still differ in album
       art, video, background or lyrics.
     </p>
-
-    {#if removed}
-      <p class="d-progress mono" role="status">{removed}</p>
-    {/if}
 
     {#if report.identical.length > 0}
       {@const meta = tierMeta('identical')}
@@ -449,7 +404,7 @@
       </div>
     {/if}
   {/if}
-</section>
+</div>
 
 <!-- `group` is the copies this one sits with when a removal can be offered on it, and null on
      the two tiers where it cannot. Passing the whole group rather than a boolean is what lets
@@ -539,32 +494,46 @@
 {/snippet}
 
 <style>
+  /* A page rather than a card, because it is a destination now. There is no Show button: a whole
+     screen whose only content is one line and a button to reveal the rest is a click spent on
+     nothing. The lists are simply here, and the summary above them is what a reader takes if they
+     take one thing. */
   .dupes {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 16px 12px;
-    border-bottom: 1px solid var(--hairline);
-    flex-shrink: 0;
+    gap: 7px;
+    padding: 14px 16px 24px;
   }
+  /* The title and the export button on one line, the summary under them across the whole width.
+     Measured while this was a card: with the summary sharing the line, the 430px left beside the
+     buttons wrapped three clauses into four lines. Given the full width it is two. */
   .d-head {
     display: flex;
     align-items: baseline;
+    justify-content: space-between;
     gap: 10px;
-    flex-wrap: wrap;
+  }
+  .d-acts {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
   }
   .d-title {
+    flex-shrink: 0;
     margin: 0;
-    font-size: var(--fs-emphasis);
+    font-size: var(--fs-heading);
+    line-height: var(--lh-display);
+    letter-spacing: var(--ls-tight);
     font-weight: 600;
     color: var(--text-1);
   }
   .d-sum {
-    flex: 1;
-    min-width: 0;
+    margin: 0;
     font-size: var(--fs-secondary);
     color: var(--text-2);
-    line-height: var(--lh-prose);
+    line-height: var(--lh-snug);
+    max-width: 78ch;
+    min-width: 0;
   }
   .d-note,
   .d-safety {
@@ -588,9 +557,9 @@
     letter-spacing: var(--ls-caps);
   }
   .hairline {
-    background: var(--surface-1);
+    background: var(--ground-4);
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     font-size: var(--fs-secondary);
     padding: 4px 11px;
@@ -599,17 +568,23 @@
     flex-shrink: 0;
     transition:
       color var(--t-fast) var(--ease),
-      border-color var(--t-fast) var(--ease);
+      border-color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
   }
-  .hairline:hover {
+  .hairline:hover:not(:disabled) {
     color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-2);
+    background: var(--ground-5);
+  }
+  .hairline:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .tier {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 10px;
+    margin-top: 6px;
   }
   .t-head {
     display: flex;
@@ -634,8 +609,9 @@
     color: var(--text-3);
   }
   /* The alternate-charts tier. Nothing about it is a warning, so its heading is the same weight
-     as the others but its rule is the accent rather than the plain hairline: it reads as an
-     aside, which is what it is. */
+     as the others but quieter, and its rule is the accent rather than the plain hairline: it
+     reads as an aside, which is what it is. Every sentence in it says the same thing in words,
+     because colour is not where a claim this important is allowed to live. */
   .calm .t-title {
     color: var(--text-2);
   }
@@ -646,14 +622,17 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 6px 0 6px 10px;
+    padding: 7px 0 7px 10px;
     border-left: 2px solid var(--hairline);
+    background: var(--ground-2);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
   .g-head {
     display: flex;
     align-items: baseline;
     gap: 8px;
     flex-wrap: wrap;
+    padding-right: 10px;
   }
   .g-name {
     font-size: var(--fs-secondary);
@@ -669,6 +648,7 @@
   }
   .g-note {
     margin: 2px 0;
+    padding-right: 10px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
@@ -678,11 +658,15 @@
     font-size: var(--fs-caption);
     color: var(--text-2);
   }
+  /* Wraps rather than crushing. At the 509px the view column narrows to with the preview rail
+     up, a path and two buttons do not fit on one line, and a path is the one thing in this row
+     that has to stay readable: it is how a user tells two copies of one chart apart. */
   .copy {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 2px 0;
+    flex-wrap: wrap;
+    padding: 3px 10px 3px 0;
   }
   .c-type {
     font-size: var(--fs-caption);
@@ -690,7 +674,7 @@
     flex-shrink: 0;
   }
   .c-path {
-    flex: 1;
+    flex: 1 1 200px;
     min-width: 0;
     font-size: var(--fs-caption);
     color: var(--text-2);
@@ -700,6 +684,7 @@
   }
   .c-error {
     margin: 0 0 4px;
+    padding-right: 10px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-2);
@@ -709,7 +694,7 @@
      with" clause is a sentence first and a brighter one second. */
   .c-holds {
     margin: 0 0 2px;
-    padding-left: 62px;
+    padding: 0 10px 0 50px;
     font-size: var(--fs-caption);
     line-height: var(--lh-snug);
     color: var(--text-3);
@@ -721,11 +706,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin: 4px 0 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--surface-1);
+    margin: 4px 10px 8px 0;
+    padding: 9px 11px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm);
+    background: var(--ground-4);
   }
   .cf-text {
     margin: 0;
