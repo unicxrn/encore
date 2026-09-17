@@ -1,4 +1,4 @@
-import { stripRichText } from './format'
+import { chartKey, chartKeyId, namesAChart, type ChartKey } from './chart-key'
 
 /**
  * What a favourite is attached to: the song, the artist and the charter, as a reader sees them.
@@ -19,23 +19,26 @@ import { stripRichText } from './format'
  *
  * The three fields here are what Chorus publishes about a chart and what `song.ini` carries, which
  * is what lets one favourite cover a chart before it is downloaded and the same chart afterwards.
- * They are also exactly the ownership test Explore's Hide owned already makes
- * (`catalog:exists-by-meta`), so "this is in your library" and "you favourited this" can never
- * disagree about which charts they are talking about.
+ *
+ * They are `ChartKey`, and that is the whole of the type rather than a resemblance to it. Explore's
+ * Hide owned, the chart page's IN LIBRARY badge, this heart and a setlist entry all ask the same
+ * question through the same functions, so "this is in your library" and "you favourited this" can
+ * never disagree about which charts they are talking about. `shared/chart-key.ts` is where that
+ * question is answered, and why it is answered over the readable text rather than the raw.
  *
  * What that costs is real and is the reason for the wording above: this identifies a CHART, not a
  * copy of one. Two copies of one charter's chart of one song are one favourite between them, which
  * is the same thing `catalog:duplicates` calls an exact duplicate, and the same song charted by two
- * people is two favourites. And a user who edits a chart's name, artist or charter in the metadata
- * editor has renamed the thing the favourite names: the heart goes out, exactly as Hide owned stops
- * hiding that chart on Chorus and every picker in Installed moves it. Neither is silent, because
- * both follow the value the user typed.
+ * people is two favourites.
+ *
+ * A user who edits a chart's name, artist or charter in the metadata editor has renamed the thing
+ * this names. The heart does NOT come off: `main/catalog/rekey.ts` moves the favourite and every
+ * setlist entry onto the new details inside the same save, and the editor says on screen what it
+ * moved. That module also owns the three cases the move is not a plain rename in, which are a
+ * second copy still answering to the old details, a title cleared to nothing, and a favourite
+ * already sitting on the new ones.
  */
-export interface FavouriteKey {
-  name: string
-  artist: string
-  charter: string
-}
+export type FavouriteKey = ChartKey
 
 /** A stored favourite: its key, and when it was added. */
 export interface Favourite extends FavouriteKey {
@@ -46,60 +49,18 @@ export interface Favourite extends FavouriteKey {
 /**
  * The readable form of the three fields, which is the form a favourite is stored and compared in.
  *
- * Markup out, for the reason `STRIPPED_COLUMN` in main/catalog/db.ts gives: a charter whose
- * `song.ini` name is one colour tag per letter writes eight tags and the screen shows a word, and
- * a favourite is something a user did to the word. Missing fields become '' rather than staying
- * null, because a chart with no charter is a chart whose charter is nobody, and a null in SQL
- * compares equal to nothing at all, including to itself.
+ * `chartKey` under the name this caller knows it by, not a second copy of its rules. Markup out,
+ * missing fields as '' rather than null; shared/chart-key.ts carries both reasons.
  */
-export function favouriteKey(input: {
-  name?: string | null
-  artist?: string | null
-  charter?: string | null
-}): FavouriteKey {
-  return {
-    name: stripRichText(input.name),
-    artist: stripRichText(input.artist),
-    charter: stripRichText(input.charter)
-  }
-}
+export const favouriteKey = chartKey
 
 /**
  * Whether this key names a chart at all.
  *
- * A chart whose `song.ini` sets no name is drawn from its folder name (`fallbackChartName`), and
- * that is a display fallback, not an identity: two unnamed charts in two folders would share this
- * key and become one favourite, and renaming the folder would move it. The heart refuses rather
- * than attaching to something it cannot hold on to, and Encore's metadata editor is the way out.
- *
- * Artist and charter are not required. Plenty of real charts set neither, and "this song, nobody
- * credited" is still one identifiable thing.
+ * `namesAChart`, aliased. A chart with no name is refused a heart because the name it would be
+ * hearted under is its folder's, which is a display fallback and not an identity.
  */
-export function isFavouritable(key: FavouriteKey): boolean {
-  return key.name !== ''
-}
+export const isFavouritable = namesAChart
 
-/**
- * Case folding, matching SQLite's NOCASE exactly: A-Z and nothing else.
- *
- * The catalog compares these three fields case-insensitively (`catalog:exists-by-meta` through
- * LOWER, `catalog:facets` through COLLATE NOCASE), and the favourites table declares its key
- * columns COLLATE NOCASE so one chart cannot be favourited twice over a capital letter. The
- * renderer has to answer the same question about a chart it is drawing, without asking main, and
- * `toLowerCase()` would not be the same answer: it folds `İ` and `ẞ`, which NOCASE leaves alone,
- * so a title carrying either would read as favourited on one side of the boundary and not on the
- * other. This is the narrow rule, written down once.
- */
-function foldNocase(value: string): string {
-  return value.replace(/[A-Z]/g, (ch) => ch.toLowerCase())
-}
-
-/**
- * One string per favourite, for membership tests in the renderer.
- *
- * NUL-joined because it is the one character `song.ini` cannot carry, so no combination of name,
- * artist and charter can spell another combination's id.
- */
-export function favouriteId(key: FavouriteKey): string {
-  return [foldNocase(key.name), foldNocase(key.artist), foldNocase(key.charter)].join('\0')
-}
+/** One string per favourite, for membership tests in the renderer. `chartKeyId`, aliased. */
+export const favouriteId = chartKeyId

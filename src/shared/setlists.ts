@@ -1,4 +1,4 @@
-import { favouriteId, favouriteKey, isFavouritable, type FavouriteKey } from './favourites'
+import { chartKey, chartKeyId, namesAChart, type ChartKey } from './chart-key'
 
 /**
  * What a setlist is, and the one thing it is not.
@@ -34,20 +34,21 @@ export const SETLISTS_ARE_ENCORES =
 /**
  * Which chart a setlist entry names: the song, the artist and the charter, as a reader sees them.
  *
- * The same three fields a favourite is keyed by, computed by the same functions rather than by a
- * second copy of their rules. `shared/favourites.ts` argues that choice in full against the path,
- * `cloneHeroChecksum` and `getChartHash`, and every word of it holds here: a setlist has to survive
- * a folder reorganisation, a re-download of a newer version, and a catalog rebuilt from nothing,
- * and it has to be storable for a chart on Chorus that has not been downloaded yet.
+ * `ChartKey`, under the name this caller knows it by. `shared/chart-key.ts` argues the choice of
+ * the readable text over the raw, and `shared/favourites.ts` argues the three fields against the
+ * path, `cloneHeroChecksum` and `getChartHash`; every word of both holds here. A setlist has to
+ * survive a folder reorganisation, a re-download of a newer version, and a catalog rebuilt from
+ * nothing, and it has to be storable for a chart on Chorus that has not been downloaded yet.
  *
  * Calling the same functions is the part that matters. If a setlist folded case one way and a
  * heart another, one chart could be in a setlist and not in it depending on which screen asked, and
- * `catalog:exists-by-meta` would be a third answer again. There is one rule and these are aliases
- * onto it, named for the caller rather than restated for it.
+ * `catalog:exists-by-meta` would be a third answer again. It was a third answer once, over the raw
+ * `song.ini` text rather than the readable form these store; `shared/chart-key.ts` is the reconcile.
+ * There is one rule and these are aliases onto it, named for the caller rather than restated for it.
  */
-export type SetlistEntryKey = FavouriteKey
-export const setlistEntryKey = favouriteKey
-export const setlistEntryId = favouriteId
+export type SetlistEntryKey = ChartKey
+export const setlistEntryKey = chartKey
+export const setlistEntryId = chartKeyId
 
 /**
  * Whether this key names a chart a setlist can hold.
@@ -57,7 +58,7 @@ export const setlistEntryId = favouriteId
  * folders would be one entry between them and renaming a folder would move it. The metadata editor
  * is the way out, and it is the same way out the heart points at.
  */
-export const canJoinASetlist = isFavouritable
+export const canJoinASetlist = namesAChart
 
 /** A chart in a setlist: which chart, and when it went in. Position is the array's own order. */
 export interface SetlistEntry extends SetlistEntryKey {

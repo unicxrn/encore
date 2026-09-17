@@ -2,6 +2,14 @@
   import { encore } from '../stores/bridge'
   import { fallbackChartName } from '../../../../shared/format'
   import {
+    chartListsPhrase,
+    describeChartListMove,
+    sameChart,
+    chartKey
+  } from '../../../../shared/chart-key'
+  import { favouriteIds, isFavourited, reloadFavourites } from '../stores/favourites'
+  import { setlists, setlistsWith, reloadSetlists } from '../stores/setlists'
+  import {
     GAMEPLAY_KEYS_NOTE,
     METADATA_FIELDS,
     yearRefusal,
@@ -87,6 +95,13 @@
   let saveError = $state<string | null>(null)
   /** What the last successful save changed, for the line that confirms it. Null before any. */
   let savedFields = $state<EditableIniKey[] | null>(null)
+  /**
+   * What the last successful save did to the user's favourites and setlists, or null.
+   *
+   * Kept beside `savedFields` rather than folded into it, because it is the answer to a different
+   * question: that one says what the chart now holds, this one says what moved somewhere else.
+   */
+  let movedLists = $state<string | null>(null)
 
   $effect(() => {
     const target = chosen
@@ -95,6 +110,7 @@
     loadError = null
     saveError = null
     savedFields = null
+    movedLists = null
     let stale = false
     const abandon = (): void => {
       stale = true
@@ -132,6 +148,33 @@
   /** The one field with a shape the catalog cannot hold anything else in. See `yearRefusal`. */
   const yearProblem = $derived(draft === null ? null : yearRefusal(draft.year))
 
+  /**
+   * The lists this chart is on, named, while what is typed would rename it out from under them.
+   *
+   * Three of the six boxes above are the three fields a favourite and a setlist entry are keyed by
+   * (shared/chart-key.ts), so editing any of them renames the thing those rows name. Main moves
+   * them with the chart and the line under the button says what it moved, but a warning BEFORE the
+   * press is what stops the user having to undo an edit to find out. Null when nothing would move:
+   * when the three fields are untouched, when the edit is a change of case only, which every one of
+   * these comparisons ignores anyway, and when the chart is on no list.
+   *
+   * Read off the FILE rather than off the catalog row, because the file is what the boxes hold and
+   * a row can lag it by a scan.
+   */
+  const listsAtStake = $derived.by(() => {
+    const onDisk = read
+    const typed = draft
+    if (onDisk === null || typed === null) return null
+    const from = chartKey(onDisk.fields)
+    if (sameChart(from, chartKey(typed))) return null
+    return chartListsPhrase(
+      isFavourited($favouriteIds, from),
+      [...setlistsWith($setlists, from)].map(
+        (id) => $setlists.find((list) => list.id === id)?.name ?? ''
+      )
+    )
+  })
+
   const canSave = $derived(
     read !== null && read.refusal === null && dirty.length > 0 && yearProblem === null && !saving
   )
@@ -143,6 +186,7 @@
     saving = true
     saveError = null
     savedFields = null
+    movedLists = null
     try {
       const result = await encore().chartWriteMetadata({
         path: chosen.path,
@@ -150,6 +194,14 @@
         fields
       })
       savedFields = result.changed
+      movedLists = describeChartListMove(result.listMove)
+      // The two stores hold what main had BEFORE this save, and a save that renamed the chart has
+      // just moved rows in both. Re-read them, or the heart on the rail would keep drawing the old
+      // title as the favourited one until the next launch. Only when something actually moved:
+      // most saves touch no list at all, and two IPC calls per album correction is noise.
+      if (result.listMove !== null && result.listMove !== undefined) {
+        await Promise.all([reloadFavourites(), reloadSetlists()])
+      }
       // Re-read rather than assuming: the file is the authority, and the values it now holds are
       // what the next save has to diff against. An assumed state would let a second save send a
       // field the first one had already written.
@@ -179,6 +231,7 @@
     draft = { ...read.fields }
     saveError = null
     savedFields = null
+    movedLists = null
   }
 
   // ── the finder ─────────────────────────────────────────────────────────────
@@ -393,6 +446,15 @@
             <p class="tool-error" role="alert">{yearProblem}</p>
           {/if}
 
+          {#if listsAtStake}
+            <!-- Before the press, not after it. Main carries the rows across either way; this is
+                 so the user is not told about it for the first time by a heart that has moved. -->
+            <p class="at-stake prose" role="status">
+              This chart is in {listsAtStake}. A favourite and a setlist entry name a chart by its
+              title, artist and charter, so saving carries this one over to the new details.
+            </p>
+          {/if}
+
           <div class="block-actions">
             <button class="btn-primary" disabled={!canSave} onclick={() => void save()}>
               {saving ? 'Saving…' : 'Save to the chart'}
@@ -416,7 +478,14 @@
           {#if saveError}
             <p class="tool-error" role="alert">{saveError}</p>
           {:else if savedLine}
-            <p class="saved" role="status">{savedLine}</p>
+            <!-- One live region holding both lines rather than two: what was saved and what moved
+                 with it are one announcement, and two would be read as two events. -->
+            <div role="status">
+              <p class="saved">{savedLine}</p>
+              {#if movedLists}
+                <p class="saved prose">{movedLists}</p>
+              {/if}
+            </div>
           {/if}
         </div>
       {/if}
@@ -659,6 +728,18 @@
     font-size: var(--fs-caption);
     line-height: var(--lh-prose);
     color: var(--success);
+  }
+  /* The move line is a continuation of the line above it, not a second announcement, so it sits
+     closer to that than the first sits to the button. */
+  .saved + .saved {
+    margin-top: 4px;
+  }
+  /* --warning, not --error: nothing here is wrong and nothing is being refused. It is the colour
+     the app already uses for a consequence the user should see before they choose it. */
+  .at-stake {
+    margin-top: 10px;
+    font-size: var(--fs-caption);
+    color: var(--warning);
   }
   /* The results list is a well: the one place in this view holding the user's content rather
      than controls, which is what --ground-0 is the token scale's recessed step for. */
