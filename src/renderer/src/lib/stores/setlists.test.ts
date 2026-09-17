@@ -1,4 +1,4 @@
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Setlist } from '../../../../shared/setlists'
 import {
@@ -92,4 +92,42 @@ describe('the setlists store', () => {
     await expect(setSetlistEntry('a', EVERLONG, true)).rejects.toThrow('The catalog is closed')
     expect(get(setlists)).toEqual([list('a')])
   })
+})
+
+/**
+ * An answer that is not a list of setlists.
+ *
+ * `setlistCount` reads `.length` off whatever this store holds, and the sidebar holds that
+ * subscription for the life of the launch, so the read runs inside a store notification.
+ * svelte/store's notification queue is module-global, so an exception escaping one leaves it
+ * non-empty and every `set` in the renderer afterwards notifies nobody: the app keeps running and
+ * stops redrawing. The canary at the end is the whole point.
+ */
+describe('a setlists call answered with something that is not a list', () => {
+  const badAnswers: [string, unknown][] = [
+    ['nothing at all', undefined],
+    ['null', null],
+    ['an object', { 0: 'x' }]
+  ]
+  for (const [what, answer] of badAnswers) {
+    it(`refuses ${what} and leaves the list alone`, async () => {
+      setlists.set([list('a'), list('b')])
+      // The sidebar holds this for the life of the launch, which is what makes the count run
+      // inside the notification rather than on the next read.
+      const stop = setlistCount.subscribe(() => {})
+      vi.stubGlobal('window', { encore: { setlistsCreate: () => Promise.resolve(answer) } })
+
+      await expect(createSetlist('c')).rejects.toThrow('invalid answer')
+      expect(get(setlistCount)).toBe(2)
+      stop()
+
+      // One throw inside a notification stops every store in the renderer, this one included.
+      const canary = writable(0)
+      let heard = 0
+      const stopCanary = canary.subscribe((v) => (heard = v))
+      canary.set(7)
+      stopCanary()
+      expect(heard).toBe(7)
+    })
+  }
 })

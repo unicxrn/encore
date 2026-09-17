@@ -37,9 +37,41 @@ export const spareCopies = derived(duplicates, (report) =>
     : report.identical.reduce((total, group) => total + group.copies.length - 1, 0)
 )
 
+/**
+ * Enough of the shape for `spareCopies` to count it without throwing.
+ *
+ * Only the three lists and the copies inside the identical ones, because those are what is read
+ * inside a store notification. The rest of the report is read by the view, from runes, where a
+ * throw is one component failing rather than the whole renderer.
+ */
+function isReport(value: unknown): value is DuplicateReport {
+  if (typeof value !== 'object' || value === null) return false
+  const report = value as Partial<DuplicateReport>
+  return (
+    Array.isArray(report.identical) &&
+    Array.isArray(report.versions) &&
+    Array.isArray(report.alternates) &&
+    report.identical.every((group) => Array.isArray(group?.copies))
+  )
+}
+
 export async function loadDuplicates(): Promise<void> {
   try {
     const report = await encore().catalogDuplicates()
+    // The rule stores/search.ts states about a search body, for the same reason and earlier in
+    // the launch. This answer is handed straight to `spareCopies`, which reads three fields off
+    // it, and that read runs inside a store notification. svelte/store's notification queue is
+    // module-global and an exception escaping one leaves it non-empty, so every `set` in the
+    // renderer afterwards updates its value and tells nobody: the app keeps running, stops
+    // redrawing, and reports nothing, while `get` goes on answering correctly. This one is read
+    // once at launch before the user has touched anything, so a bad answer here freezes the whole
+    // window from its first paint, and the catch below would swallow the only sign of it.
+    //
+    // Measured in a real engine: with this read answering undefined, pressing the player bar's
+    // Repeat leaves `aria-pressed` false, Installed's Favourites filter does not light, Explore's
+    // advanced panel does not open and its grid stays empty holding 25 rows. With it answering a
+    // report, all four work in the same window.
+    if (!isReport(report)) throw new Error('Duplicate report: invalid answer')
     duplicates.set(report)
     duplicatesError.set(null)
   } catch (err) {

@@ -37,6 +37,26 @@ export function isFavourited(
   return ids.has(favouriteId(favouriteKey(chart)))
 }
 
+/**
+ * The list main answered with, or a throw.
+ *
+ * `favouriteIds` reads three fields off every entry, and it reads them inside a store
+ * notification: the rail and the metadata editor hold that subscription while they are mounted.
+ * svelte/store's notification queue is module-global and an exception escaping one leaves it
+ * non-empty, so every `set` in the renderer afterwards updates its value and tells nobody: the
+ * app keeps running, stops redrawing, and reports nothing while `get` goes on answering
+ * correctly. Measured in a real engine against the same shape on another store: the window is
+ * frozen from that moment with nothing on screen saying so.
+ *
+ * All four calls below go through this. A toggle already rejects with main's own sentence when
+ * main refuses, and an answer that is not a list of favourites is the same kind of failure.
+ */
+function accept(list: unknown): Favourite[] {
+  if (!Array.isArray(list) || list.some((fav) => typeof fav !== 'object' || fav === null))
+    throw new Error('Favourites: invalid answer')
+  return list as Favourite[]
+}
+
 let loaded = false
 
 /**
@@ -52,7 +72,7 @@ export async function loadFavourites(): Promise<void> {
   if (loaded) return
   loaded = true
   try {
-    favourites.set(await encore().favouritesList())
+    favourites.set(accept(await encore().favouritesList()))
   } catch {
     loaded = false
   }
@@ -67,7 +87,7 @@ export async function loadFavourites(): Promise<void> {
  * `reloadSetlists` is the same call for the same reason.
  */
 export async function reloadFavourites(): Promise<void> {
-  favourites.set(await encore().favouritesList())
+  favourites.set(accept(await encore().favouritesList()))
   loaded = true
 }
 
@@ -88,5 +108,5 @@ export async function toggleFavourite(
     charter: chart.charter ?? null,
     favourite
   })
-  favourites.set(list)
+  favourites.set(accept(list))
 }
